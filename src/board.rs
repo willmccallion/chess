@@ -1,5 +1,6 @@
 use crate::fen;
 use crate::magics;
+use crate::nnue;
 use crate::types::*;
 use crate::zobrist;
 
@@ -17,6 +18,7 @@ pub struct Board {
     pub fullmove_number: i32,
     pub history: Vec<ZKey>,
     pub zobrist: ZKey,
+    pub accumulator: Accumulator,
 }
 
 impl Board {
@@ -34,6 +36,7 @@ impl Board {
             fullmove_number: 1,
             history: Vec::with_capacity(128),
             zobrist: 0,
+            accumulator: Accumulator::default(),
         }
     }
 
@@ -45,7 +48,9 @@ impl Board {
 
     #[inline]
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
-        fen::parse_fen(fen_str)
+        let mut b = fen::parse_fen(fen_str)?;
+        b.accumulator = nnue::refresh_accumulator(&b);
+        Ok(b)
     }
 
     #[inline]
@@ -70,31 +75,25 @@ impl Board {
                 }
             }
         }
-
         self.all_pieces = self.w_pieces | self.b_pieces;
     }
 
     #[inline]
     pub fn recompute_zobrist(&mut self) {
         let mut h = 0u64;
-
         for sq in 0..64 {
             let p = self.piece_on[sq];
             if !p.is_empty() {
                 h ^= zobrist::ZOB.piece_key(p, sq);
             }
         }
-
         h ^= zobrist::ZOB.castle[(self.castle & 0xF) as usize];
-
         if self.en_passant_sq != NO_SQ {
             h ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
         }
-
         if self.turn == Color::Black {
             h ^= zobrist::ZOB.side;
         }
-
         self.zobrist = h;
     }
 
@@ -102,7 +101,6 @@ impl Board {
     pub fn count_repetitions(&self) -> usize {
         let current_key = self.zobrist;
         let mut count = 0;
-
         for &key in self
             .history
             .iter()
@@ -114,7 +112,6 @@ impl Board {
                 count += 1;
             }
         }
-
         count
     }
 
@@ -165,7 +162,6 @@ impl Board {
         if (magics::get_rook_attacks(sq, self.all_pieces) & rook_like) != 0 {
             return true;
         }
-
         false
     }
 
@@ -181,24 +177,19 @@ impl Board {
     pub fn generate_legal_moves(&mut self, out: &mut Vec<Move>) {
         let mut pseudo = Vec::with_capacity(128);
         self.generate_pseudo_legal_moves(&mut pseudo);
-
         out.clear();
-
         for m in pseudo {
             let u = self.make_move(m);
             let us = self.turn.other();
-
             let our_king_bb = self.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
             if our_king_bb == 0 {
                 self.unmake_move(m, u);
                 continue;
             }
             let king_sq = our_king_bb.trailing_zeros() as i32;
-
             if !self.is_square_attacked(king_sq, self.turn) {
                 out.push(m);
             }
-
             self.unmake_move(m, u);
         }
     }
@@ -542,14 +533,86 @@ impl Board {
             old_halfmove_clock: self.halfmove_clock,
         };
 
-        if self.en_passant_sq != NO_SQ {
-            self.zobrist ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
-        }
-        self.en_passant_sq = NO_SQ;
+        let mut updates = [UpdateBody {
+            piece: Piece::Empty,
+            sq: 0,
+            add: false,
+        }; 5];
+        let mut update_count = 0;
 
         let from = m.from as usize;
         let to = m.to as usize;
         let moving = self.piece_on[from];
+        let is_king_move = moving.kind() == Some(PieceKind::King);
+
+        updates[update_count] = UpdateBody {
+            piece: moving,
+            sq: from,
+            add: false,
+        };
+        update_count += 1;
+
+        if m.capture {
+            let cap_sq = if m.en_passant {
+                if self.turn == Color::White {
+                    to - 8
+                } else {
+                    to + 8
+                }
+            } else {
+                to
+            };
+            let captured = self.piece_on[cap_sq];
+            undo.captured_piece = captured;
+
+            if !captured.is_empty() {
+                updates[update_count] = UpdateBody {
+                    piece: captured,
+                    sq: cap_sq,
+                    add: false,
+                };
+                update_count += 1;
+            }
+        }
+
+        let piece_to_add = if let Some(pk) = m.promotion {
+            Piece::from_kind(pk, self.turn)
+        } else {
+            moving
+        };
+        updates[update_count] = UpdateBody {
+            piece: piece_to_add,
+            sq: to,
+            add: true,
+        };
+        update_count += 1;
+
+        if m.castle {
+            let (rook_from, rook_to) = if to > from {
+                (to + 1, to - 1)
+            } else {
+                (to - 2, to + 1)
+            };
+            let rook_piece = self.piece_on[rook_from];
+
+            updates[update_count] = UpdateBody {
+                piece: rook_piece,
+                sq: rook_from,
+                add: false,
+            };
+            update_count += 1;
+            updates[update_count] = UpdateBody {
+                piece: rook_piece,
+                sq: rook_to,
+                add: true,
+            };
+            update_count += 1;
+        }
+
+        if self.en_passant_sq != NO_SQ {
+            self.zobrist ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
+        }
+        self.en_passant_sq = NO_SQ;
 
         self.zobrist ^= zobrist::ZOB.piece_key(moving, from);
         self.piece_on[from] = Piece::Empty;
@@ -572,9 +635,7 @@ impl Board {
                 to
             };
 
-            let captured = self.piece_on[cap_sq];
-            undo.captured_piece = captured;
-
+            let captured = undo.captured_piece;
             if !captured.is_empty() {
                 self.zobrist ^= zobrist::ZOB.piece_key(captured, cap_sq);
                 self.piece_on[cap_sq] = Piece::Empty;
@@ -610,7 +671,6 @@ impl Board {
             } else {
                 (to - 2, to + 1)
             };
-
             let rook_piece = self.piece_on[rook_from];
             self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_from);
             self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_to);
@@ -648,7 +708,6 @@ impl Board {
             Piece::BK => self.castle &= !(BK_CASTLE | BQ_CASTLE),
             _ => {}
         }
-
         match from {
             0 => self.castle &= !WQ_CASTLE,
             7 => self.castle &= !WK_CASTLE,
@@ -656,7 +715,6 @@ impl Board {
             63 => self.castle &= !BK_CASTLE,
             _ => {}
         }
-
         if m.capture {
             match to {
                 0 => self.castle &= !WQ_CASTLE,
@@ -677,13 +735,101 @@ impl Board {
         self.turn = self.turn.other();
         self.history.push(self.zobrist);
 
+        if is_king_move {
+            self.accumulator = nnue::refresh_accumulator(self);
+        } else {
+            let wk = self.king_square(Color::White) as usize;
+            let bk = self.king_square(Color::Black) as usize;
+            nnue::update_accumulator(&mut self.accumulator, wk, bk, &updates[..update_count]);
+        }
+
         undo
     }
 
     #[inline]
     pub fn unmake_move(&mut self, m: Move, u: Undo) {
+        let mut updates = [UpdateBody {
+            piece: Piece::Empty,
+            sq: 0,
+            add: false,
+        }; 5];
+        let mut update_count = 0;
+
+        let from = m.from as usize;
+        let to = m.to as usize;
+
+        let piece_on_to = self.piece_on[to];
+        let moving_piece = if m.promotion.is_some() {
+            Piece::from_kind(PieceKind::Pawn, self.turn.other())
+        } else {
+            piece_on_to
+        };
+        let is_king_move = moving_piece.kind() == Some(PieceKind::King);
+
+        updates[update_count] = UpdateBody {
+            piece: piece_on_to,
+            sq: to,
+            add: false,
+        };
+        update_count += 1;
+
+        updates[update_count] = UpdateBody {
+            piece: moving_piece,
+            sq: from,
+            add: true,
+        };
+        update_count += 1;
+
+        if m.capture {
+            let cap_sq = if m.en_passant {
+                if self.turn == Color::White {
+                    to + 8
+                } else {
+                    to - 8
+                }
+            } else {
+                to
+            };
+            let captured = u.captured_piece;
+            if !captured.is_empty() {
+                updates[update_count] = UpdateBody {
+                    piece: captured,
+                    sq: cap_sq,
+                    add: true,
+                };
+                update_count += 1;
+            }
+        }
+
+        if m.castle {
+            let (rook_from, rook_to) = if to > from {
+                (to + 1, to - 1)
+            } else {
+                (to - 2, to + 1)
+            };
+            let rook_piece = self.piece_on[rook_to];
+
+            updates[update_count] = UpdateBody {
+                piece: rook_piece,
+                sq: rook_to,
+                add: false,
+            };
+            update_count += 1;
+            updates[update_count] = UpdateBody {
+                piece: rook_piece,
+                sq: rook_from,
+                add: true,
+            };
+            update_count += 1;
+        }
+
+        if !is_king_move {
+            let wk = self.king_square(Color::White) as usize;
+            let bk = self.king_square(Color::Black) as usize;
+            nnue::update_accumulator(&mut self.accumulator, wk, bk, &updates[..update_count]);
+        }
+
         self.history.pop();
-        // If history is empty, zobrist should be 0, otherwise pop successfully.
         self.zobrist = *self.history.last().unwrap_or(&0);
 
         self.turn = self.turn.other();
@@ -695,16 +841,6 @@ impl Board {
         self.en_passant_sq = u.old_en_passant_sq;
         self.halfmove_clock = u.old_halfmove_clock;
 
-        let from = m.from as usize;
-        let to = m.to as usize;
-
-        let piece_that_arrived = self.piece_on[to];
-        let moving_piece = if m.promotion.is_some() {
-            Piece::from_kind(PieceKind::Pawn, self.turn)
-        } else {
-            piece_that_arrived
-        };
-
         self.piece_on[from] = moving_piece;
         self.piece_bb[moving_piece.index()] |= 1u64 << from;
         if let Some(c) = moving_piece.color() {
@@ -715,8 +851,8 @@ impl Board {
             }
         }
 
-        self.piece_bb[piece_that_arrived.index()] &= !(1u64 << to);
-        if let Some(c) = piece_that_arrived.color() {
+        self.piece_bb[piece_on_to.index()] &= !(1u64 << to);
+        if let Some(c) = piece_on_to.color() {
             if c == Color::White {
                 self.w_pieces &= !(1u64 << to);
             } else {
@@ -727,7 +863,6 @@ impl Board {
         if m.capture {
             let captured = u.captured_piece;
             let cap_sq;
-
             if m.en_passant {
                 self.piece_on[to] = Piece::Empty;
                 cap_sq = if self.turn == Color::White {
@@ -760,7 +895,6 @@ impl Board {
             } else {
                 (to - 2, to + 1)
             };
-
             let rook = self.piece_on[rook_to];
             self.piece_on[rook_from] = rook;
             self.piece_on[rook_to] = Piece::Empty;
@@ -774,6 +908,10 @@ impl Board {
         }
 
         self.all_pieces = self.w_pieces | self.b_pieces;
+
+        if is_king_move {
+            self.accumulator = nnue::refresh_accumulator(self);
+        }
     }
 
     #[inline]

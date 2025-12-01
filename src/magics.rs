@@ -396,7 +396,6 @@ const ROOK_MAGICS: [Magic; 64] = [
         offset: 98304,
     },
 ];
-
 const BISHOP_MAGICS: [Magic; 64] = [
     Magic {
         mask: 0x40201008040200,

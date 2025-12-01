@@ -2,6 +2,9 @@ use crate::types::{Move, ZKey};
 use num_cpus;
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Bound {
@@ -29,7 +32,7 @@ pub struct TTEntry {
     data: u64,
 }
 
-// Bitfield layout for the 64-bit data field
+// Bitfield layout for the 64-bit data field:
 const SCORE_SHIFT: u64 = 0;
 const MOVE_SHIFT: u64 = 16;
 const DEPTH_SHIFT: u64 = 32;
@@ -143,7 +146,16 @@ impl TransTable {
 
     #[inline]
     fn probe(&self, key: ZKey) -> Option<TTEntry> {
-        let cluster = &self.slots[self.idx(key)];
+        let idx = self.idx(key);
+
+        // Prefetch the cluster into cache
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let ptr = self.slots.as_ptr().add(idx);
+            _mm_prefetch(ptr as *const i8, _MM_HINT_T0);
+        }
+
+        let cluster = &self.slots[idx];
         for entry in &cluster.entries {
             if entry.key == key {
                 return Some(*entry);

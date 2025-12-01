@@ -6,7 +6,7 @@ use crate::types::{Move, Piece, PieceKind};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub const MATE_SCORE: i32 = 30_000;
 const MATE_THRESHOLD: i32 = MATE_SCORE - 512;
@@ -17,6 +17,8 @@ const FUTILITY_MARGIN: [i32; 8] = [0, 125, 250, 450, 700, 950, 1200, 1500];
 const LMP_LIMITS: [i32; 4] = [0, 3, 5, 8];
 const HISTORY_PRUNE_THRESHOLD: i32 = 4000;
 const IID_MIN_DEPTH: i32 = 5;
+const RAZORING_MARGIN: i32 = 400;
+const DELTA_MARGIN: i32 = 200;
 
 const TT_MOVE_SCORE: i32 = 2_000_000_000;
 const GOOD_CAPTURE_SCORE: i32 = 1_900_000_000;
@@ -26,46 +28,116 @@ const COUNTERMOVE_SCORE: i32 = 1_650_000_000;
 const QUIET_MOVE_SCORE: i32 = 1_600_000_000;
 const BAD_CAPTURE_SCORE: i32 = -1_900_000_000;
 const HISTORY_MAX: i32 = 16_384;
+const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
 
-struct SearchController {
+struct TimeManager {
     start_time: Instant,
-    time_budget: Duration,
+    soft_limit: u64,
+    hard_limit: u64,
     stop_signal: Arc<AtomicBool>,
     is_main_thread: bool,
     nodes: u64,
+    best_move_changes: usize,
+    best_move_stability: usize,
+    previous_best_move: Option<Move>,
 }
 
-impl SearchController {
-    fn time_is_up(&mut self) -> bool {
-        if self.is_main_thread
-            && (self.nodes & 4095) == 0
-            && self.start_time.elapsed() >= self.time_budget
-        {
+impl TimeManager {
+    fn new(time_ms: u64, stop_signal: Arc<AtomicBool>, is_main_thread: bool) -> Self {
+        let (soft, hard) = if time_ms > 300_000 {
+            (time_ms, time_ms)
+        } else {
+            (time_ms, time_ms)
+        };
+
+        Self {
+            start_time: Instant::now(),
+            soft_limit: soft,
+            hard_limit: hard,
+            stop_signal,
+            is_main_thread,
+            nodes: 0,
+            best_move_changes: 0,
+            best_move_stability: 0,
+            previous_best_move: None,
+        }
+    }
+
+    #[inline(always)]
+    fn check_hard_limit(&mut self) -> bool {
+        if self.stop_signal.load(Ordering::Relaxed) {
+            return true;
+        }
+        if self.is_main_thread && (self.nodes & 4095) == 0 {
+            let elapsed = self.start_time.elapsed().as_millis() as u64;
+            if elapsed >= self.hard_limit {
+                self.stop_signal.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn check_soft_limit(&mut self, depth: usize, best_move: Option<Move>) -> bool {
+        if self.stop_signal.load(Ordering::Relaxed) {
+            return true;
+        }
+        if !self.is_main_thread {
+            return false;
+        }
+
+        let elapsed = self.start_time.elapsed().as_millis() as u64;
+
+        if best_move != self.previous_best_move {
+            self.best_move_changes += 1;
+            self.best_move_stability = 0;
+        } else {
+            self.best_move_stability += 1;
+        }
+        self.previous_best_move = best_move;
+
+        if elapsed >= self.hard_limit {
             self.stop_signal.store(true, Ordering::Relaxed);
             return true;
         }
-        self.stop_signal.load(Ordering::Relaxed)
+
+        if elapsed >= self.soft_limit {
+            let extension_limit = (self.soft_limit as f64 * 1.5) as u64;
+
+            if self.best_move_stability == 0 && elapsed < extension_limit.min(self.hard_limit) {
+                // Extend! Don't stop yet.
+                return false;
+            }
+
+            self.stop_signal.store(true, Ordering::Relaxed);
+            return true;
+        }
+
+        if depth > 8 && self.best_move_stability >= 4 && elapsed > (self.soft_limit / 2) {
+            self.stop_signal.store(true, Ordering::Relaxed);
+            return true;
+        }
+
+        false
     }
 }
 
 pub struct Search<'a> {
     board: Board,
     tt: &'a SharedTransTable,
-    controller: SearchController,
+    tm: TimeManager,
     killers: [[Option<Move>; 2]; MAX_PLY],
-    history: [[i32; 64]; 13],                     // [piece][to_square]
-    counter_moves: [[[Option<Move>; 64]; 13]; 2], // [is_capture][piece][to_square]
+    history: [[i32; 64]; 13],
+    counter_moves: [[[Option<Move>; 64]; 13]; 2],
     ply: usize,
     seldepth: usize,
     prev_move: [Option<Move>; MAX_PLY],
 }
 
-/// Assigns a score to a move to guide the search algorithm.
 fn score_move(s: &Search, m: Move, tt_move: Option<Move>) -> i32 {
     if Some(m) == tt_move {
         return TT_MOVE_SCORE;
     }
-
     if m.capture {
         let see_val = see(&s.board, m);
         return if see_val >= 0 {
@@ -74,32 +146,27 @@ fn score_move(s: &Search, m: Move, tt_move: Option<Move>) -> i32 {
             BAD_CAPTURE_SCORE + see_val
         };
     }
-
     if Some(m) == s.killers[s.ply][0] {
         return KILLER_1_SCORE;
     }
-
     if Some(m) == s.killers[s.ply][1] {
         return KILLER_2_SCORE;
     }
-
     if let Some(prev_m) = s.prev_move[s.ply.saturating_sub(1)] {
         let piece_idx = s.board.piece_on[prev_m.from as usize].index();
         if Some(m) == s.counter_moves[prev_m.capture as usize][piece_idx][prev_m.to as usize] {
             return COUNTERMOVE_SCORE;
         }
     }
-
     let piece_idx = s.board.piece_on[m.from as usize].index();
     QUIET_MOVE_SCORE + s.history[piece_idx][m.to as usize]
 }
 
-/// A specialized search that only considers tactical moves
 fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     s.seldepth = s.seldepth.max(s.ply);
-    s.controller.nodes += 1;
+    s.tm.nodes += 1;
 
-    if s.controller.time_is_up() {
+    if s.tm.check_hard_limit() {
         return 0;
     }
 
@@ -107,15 +174,18 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         .trailing_zeros() as i32;
     let in_check = s.board.is_square_attacked(king_sq, s.board.turn.other());
 
-    if !in_check {
-        let stand_pat = evaluate(&s.board);
-        if stand_pat >= beta {
+    let stand_pat = if !in_check {
+        let val = evaluate(&s.board);
+        if val >= beta {
             return beta;
         }
-        if stand_pat > alpha {
-            alpha = stand_pat;
+        if val > alpha {
+            alpha = val;
         }
-    }
+        val
+    } else {
+        -MATE_SCORE
+    };
 
     let mut pseudo_moves = Vec::with_capacity(64);
     s.board.generate_pseudo_legal_moves(&mut pseudo_moves);
@@ -130,6 +200,15 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
 
     let mut legal_moves_found = false;
     for (m, _) in &scored_moves {
+        if !in_check && m.capture && m.promotion.is_none() {
+            let captured = s.board.piece_on[m.to as usize];
+            if !captured.is_empty() {
+                let piece_val = PIECE_VALUES[captured.kind().unwrap() as usize];
+                if stand_pat + piece_val + DELTA_MARGIN < alpha {
+                    continue;
+                }
+            }
+        }
         if !in_check && m.capture && see(&s.board, *m) < 0 {
             continue;
         }
@@ -168,14 +247,13 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
 
 fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
     s.seldepth = s.seldepth.max(s.ply);
-    if s.controller.time_is_up() {
+    if s.tm.check_hard_limit() {
         return 0;
     }
 
     if s.ply > 0 && (s.board.is_draw_by_repetition() || s.board.halfmove_clock >= 100) {
         return DRAW_SCORE;
     }
-
     if s.ply >= MAX_PLY - 1 {
         return evaluate(&s.board);
     }
@@ -195,7 +273,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                     score += s.ply as i32;
                 }
             }
-
             match entry.bound() {
                 Bound::Exact => return score,
                 Bound::Lower if score >= beta => return score,
@@ -217,19 +294,26 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         return quiesce(s, alpha, beta);
     }
 
-    s.controller.nodes += 1;
+    s.tm.nodes += 1;
 
-    if is_pv && depth >= IID_MIN_DEPTH && tt_move.is_none() && !s.controller.time_is_up() {
+    let mut static_eval = MATE_SCORE;
+    if !is_pv && !in_check {
+        static_eval = evaluate(&s.board);
+    }
+
+    if !is_pv && !in_check && depth <= 3 && static_eval + RAZORING_MARGIN + 100 * depth < alpha {
+        let q_score = quiesce(s, alpha, beta);
+        if q_score < alpha {
+            return alpha;
+        }
+    }
+    if !is_pv && !in_check && depth < 8 && static_eval - FUTILITY_MARGIN[depth as usize] >= beta {
+        return beta;
+    }
+    if is_pv && depth >= IID_MIN_DEPTH && tt_move.is_none() && !s.tm.check_hard_limit() {
         let _ = negamax(s, alpha, beta, depth - 2);
         if let Some(entry) = s.tt.probe(key) {
             tt_move = entry.best_move();
-        }
-    }
-
-    if !is_pv && !in_check && depth < 8 {
-        let eval = evaluate(&s.board);
-        if eval - FUTILITY_MARGIN[depth as usize] >= beta {
-            return beta;
         }
     }
 
@@ -245,7 +329,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             | s.board.piece_bb[Piece::BK.index()]);
 
     if !is_pv && !in_check && depth >= 3 && non_pawn_king_material != 0 {
-        let r = 3 + depth / 6; // Adaptive reduction
+        let r = 3 + depth / 6;
         let undo = s.board.make_null_move();
         s.ply += 1;
         let null_score = -negamax(s, -beta, -beta + 1, depth - r);
@@ -283,7 +367,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                 continue;
             }
         }
-
         if depth <= 2 && !in_check && !m.capture && m.promotion.is_none() {
             let piece_idx = s.board.piece_on[m.from as usize].index();
             let hist_score = s.history[piece_idx][m.to as usize];
@@ -325,7 +408,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                 if !is_pv {
                     reduction += 1;
                 }
-
                 let history_score =
                     s.history[s.board.piece_on[m.from as usize].index()][m.to as usize];
                 reduction -= history_score / 4096;
@@ -333,7 +415,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             }
 
             let mut search_score = -negamax(s, -alpha - 1, -alpha, depth - 1 - reduction);
-
             if search_score > alpha && reduction > 0 {
                 search_score = -negamax(s, -alpha - 1, -alpha, depth - 1);
             }
@@ -346,7 +427,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         s.ply -= 1;
         s.board.unmake_move(*m, undo);
 
-        if s.controller.time_is_up() {
+        if s.tm.check_hard_limit() {
             return 0;
         }
 
@@ -361,17 +442,14 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                             s.killers[s.ply][1] = s.killers[s.ply][0];
                             s.killers[s.ply][0] = Some(*m);
                         }
-
                         if let Some(prev_m) = s.prev_move[s.ply.saturating_sub(1)] {
                             let piece_idx = s.board.piece_on[prev_m.from as usize].index();
                             s.counter_moves[prev_m.capture as usize][piece_idx]
                                 [prev_m.to as usize] = Some(*m);
                         }
-
                         let piece_idx = s.board.piece_on[m.from as usize].index();
                         let bonus = (depth * depth).min(1000);
                         s.history[piece_idx][m.to as usize] += bonus;
-
                         if s.history[piece_idx][m.to as usize] > HISTORY_MAX {
                             for p in 1..13 {
                                 for sq in 0..64 {
@@ -379,7 +457,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                                 }
                             }
                         }
-
                         for (failed_move, _) in scored_moves.iter().take(moves_searched - 1) {
                             if !failed_move.capture {
                                 let p_idx = s.board.piece_on[failed_move.from as usize].index();
@@ -387,7 +464,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                             }
                         }
                     }
-                    break; // Beta cutoff
+                    break;
                 }
             }
         }
@@ -408,7 +485,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
     } else {
         Bound::Exact
     };
-
     let mut score_to_store = best_score;
     if score_to_store.abs() > MATE_THRESHOLD {
         if score_to_store > 0 {
@@ -417,12 +493,10 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             score_to_store -= s.ply as i32;
         }
     }
-
     s.tt.store(key, depth as i16, score_to_store, bound, best_move);
     best_score
 }
 
-#[inline]
 pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> Vec<Move> {
     let mut pv = Vec::with_capacity(max_len);
     for _ in 0..max_len {
@@ -436,7 +510,6 @@ pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> 
     pv
 }
 
-/// The main entry point for starting a search.
 pub fn best_move_timed(
     b: &Board,
     tt: &mut SharedTransTable,
@@ -449,16 +522,26 @@ pub fn best_move_timed(
         tt.tick_age();
     }
 
+    if is_main_thread && time_ms < u64::MAX / 2 {
+        let mut legal_moves = Vec::with_capacity(64);
+        let mut temp_board = b.clone();
+        temp_board.generate_legal_moves(&mut legal_moves);
+        if legal_moves.len() == 1 {
+            return (Some(legal_moves[0]), 1, 0);
+        }
+    }
+
+    let soft_limit = time_ms;
+    let hard_limit = if time_ms > 300_000 {
+        time_ms
+    } else {
+        time_ms * 4
+    };
+
     let mut search = Search {
         board: b.clone(),
         tt,
-        controller: SearchController {
-            start_time: Instant::now(),
-            time_budget: Duration::from_millis(time_ms),
-            stop_signal,
-            is_main_thread,
-            nodes: 0,
-        },
+        tm: TimeManager::new(soft_limit, stop_signal, is_main_thread),
         killers: [[None; 2]; MAX_PLY],
         history: [[0; 64]; 13],
         counter_moves: [[[None; 64]; 13]; 2],
@@ -466,6 +549,9 @@ pub fn best_move_timed(
         seldepth: 0,
         prev_move: [None; MAX_PLY],
     };
+
+    search.tm.soft_limit = soft_limit;
+    search.tm.hard_limit = hard_limit;
 
     let mut best_move: Option<Move> = None;
     let mut score = 0;
@@ -480,7 +566,8 @@ pub fn best_move_timed(
 
         loop {
             score = negamax(&mut search, alpha, beta, d as i32);
-            if search.controller.time_is_up() {
+
+            if search.tm.check_hard_limit() {
                 break;
             }
 
@@ -489,12 +576,8 @@ pub fn best_move_timed(
             } else if score >= beta {
                 beta = MATE_SCORE;
             } else {
-                break; // Search was successful
+                break;
             }
-        }
-
-        if search.controller.time_is_up() {
-            break;
         }
 
         if let Some(entry) = search.tt.probe(search.board.zobrist) {
@@ -502,13 +585,12 @@ pub fn best_move_timed(
         }
 
         if is_main_thread {
-            let elapsed_ms = search.controller.start_time.elapsed().as_millis();
+            let elapsed_ms = search.tm.start_time.elapsed().as_millis();
             let nps = if elapsed_ms > 0 {
-                (search.controller.nodes * 1000) / elapsed_ms as u64
+                (search.tm.nodes * 1000) / elapsed_ms as u64
             } else {
                 0
             };
-
             let hashfull = search.tt.hashfull_permill();
             let pv = get_pv_from_tt(search.board.clone(), search.tt, d);
             let pv_str = pv
@@ -524,21 +606,18 @@ pub fn best_move_timed(
             };
             println!(
                 "info depth {} seldepth {} score {} hashfull {} nodes {} nps {} time {} pv {}",
-                d,
-                search.seldepth,
-                score_str,
-                hashfull,
-                search.controller.nodes,
-                nps,
-                elapsed_ms,
-                pv_str
+                d, search.seldepth, score_str, hashfull, search.tm.nodes, nps, elapsed_ms, pv_str
             );
         }
 
+        if search.tm.check_soft_limit(d, best_move) {
+            break;
+        }
+
         if score.abs() > MATE_THRESHOLD {
-            break; // Mate found, no need to search deeper.
+            break;
         }
     }
 
-    (best_move, max_depth, search.controller.nodes)
+    (best_move, max_depth, search.tm.nodes)
 }

@@ -21,6 +21,9 @@ fn get_attackers(
 ) -> (u64, Option<(Piece, usize)>) {
     let mut attackers = 0u64;
 
+    // Check for attackers in increasing order of value (P, N, B, R, Q, K)
+    // to find the least valuable attacker (LVA).
+
     let pawn_kind = Piece::from_kind(PieceKind::Pawn, side);
     let pawn_attacks = if side == crate::types::Color::White {
         magics::BLACK_PAWN_ATTACKS[sq]

@@ -22,6 +22,7 @@ impl Rng {
     }
 }
 
+// Use a thread-safe Mutex for the global RNG
 static BOOK_RNG: OnceLock<Mutex<Rng>> = OnceLock::new();
 fn get_rng() -> &'static Mutex<Rng> {
     BOOK_RNG.get_or_init(|| Mutex::new(Rng::new()))
@@ -37,6 +38,7 @@ pub struct BookEntry {
 }
 
 impl BookEntry {
+    // Polyglot move encoding is different from the engine's.
     fn to_move(self) -> Option<Move> {
         use crate::types::{Move, PieceKind};
 

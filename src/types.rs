@@ -7,6 +7,33 @@ pub const NO_SQ: i32 = -1;
 
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+// NNUE Constants
+pub const NNUE_FEATURE_SIZE: usize = 256;
+
+#[derive(Copy, Clone)]
+#[repr(C, align(64))]
+pub struct Accumulator {
+    pub white: [i16; NNUE_FEATURE_SIZE],
+    pub black: [i16; NNUE_FEATURE_SIZE],
+}
+
+impl Default for Accumulator {
+    fn default() -> Self {
+        Self {
+            white: [0; NNUE_FEATURE_SIZE],
+            black: [0; NNUE_FEATURE_SIZE],
+        }
+    }
+}
+
+// Helper struct for incremental updates
+#[derive(Copy, Clone, Debug)]
+pub struct UpdateBody {
+    pub piece: Piece,
+    pub sq: usize,
+    pub add: bool, // true = add, false = remove
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Color {
     White = 0,
@@ -161,11 +188,6 @@ impl fmt::Display for Piece {
     }
 }
 
-// A move is packed into a u16 for performance.
-// [ 0- 5]: From Square (6 bits)
-// [ 6-11]: To Square   (6 bits)
-// [12-15]: Flags       (4 bits)
-// const MOVE_FLAG_QUIET: u16 = 0b0000;
 const MOVE_FLAG_DOUBLE_PUSH: u16 = 0b0001;
 const MOVE_FLAG_KING_CASTLE: u16 = 0b0010;
 const MOVE_FLAG_QUEEN_CASTLE: u16 = 0b0011;
@@ -243,7 +265,7 @@ impl From<u16> for Move {
     fn from(m: u16) -> Self {
         if m == 0 {
             return Move::default();
-        } // Null move
+        }
 
         let from = (m & 0x3F) as u8;
         let to = ((m >> 6) & 0x3F) as u8;

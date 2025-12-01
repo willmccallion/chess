@@ -1,3 +1,5 @@
+use crate::types::Color;
+
 #[derive(Copy, Clone, Default)]
 pub struct TimeControl {
     pub wtime: i64,
@@ -9,30 +11,31 @@ pub struct TimeControl {
 }
 
 impl TimeControl {
-    /// Calculates the optimal and maximum time to think for the current move in milliseconds.
-    pub fn allocation_ms(&self, side_white: bool) -> (i64, i64) {
-        let (time, inc) = if side_white {
+    pub fn allocation_ms(&self, turn: Color) -> (u64, u64) {
+        let (time, inc) = if turn == Color::White {
             (self.wtime, self.winc)
         } else {
             (self.btime, self.binc)
         };
 
-        if self.movestogo > 0 {
-            let divisor = (self.movestogo as i64).min(30);
-            let ideal_time = (time / divisor) + (inc * 3 / 4);
-            let safe_time = time - self.move_overhead_ms.max(50);
-            return (ideal_time.min(safe_time), safe_time);
+        if time <= 0 {
+            return (10, 50);
         }
 
-        let moves_remaining = 40;
-        let ideal_time = (time / moves_remaining) + (inc * 3 / 4);
+        let overhead = self.move_overhead_ms.max(10);
+        let time_left = (time - overhead).max(10);
 
-        let max_time = time / 5;
+        if self.movestogo > 0 {
+            let moves = self.movestogo as i64;
+            let time_slice = time_left / (moves + 2);
+            let soft = time_slice + inc;
+            let hard = time_left.min(soft * 4);
+            return (soft as u64, hard as u64);
+        }
 
-        let hard_limit = time - self.move_overhead_ms.max(50);
+        let soft = (time_left / 20) + (inc / 2);
+        let hard = (time_left / 4).min(soft * 5);
 
-        let soft_limit = ideal_time.min(max_time).min(hard_limit).max(5); // Think for at least 5ms
-
-        (soft_limit, hard_limit)
+        (soft as u64, hard as u64)
     }
 }

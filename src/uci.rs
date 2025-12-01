@@ -3,7 +3,7 @@ use crate::opening_book::get_book_move;
 use crate::search::best_move_timed;
 use crate::time::TimeControl;
 use crate::tt::SharedTransTable;
-use crate::types::{Color, START_FEN};
+use crate::types::START_FEN;
 use crate::uci_io::{format_uci, parse_uci_move};
 use num_cpus;
 use std::io::{self, Write};
@@ -87,7 +87,6 @@ fn search_and_output(
         let mut temp_board = b.clone();
         temp_board.make_move(m);
         if let Some(ponder_move) = tt.probe(temp_board.zobrist).and_then(|e| e.best_move()) {
-            // Fast check: is the ponder move for a piece that can actually move from that square?
             if temp_board.piece_on[ponder_move.from as usize].color() == Some(temp_board.turn) {
                 ponder_str = format!(" ponder {}", format_uci(ponder_move));
             }
@@ -251,11 +250,10 @@ pub fn run_uci() {
             } else if let Some(movetime) = extract_i64(rest, "movetime") {
                 movetime.max(0) as u64
             } else {
-                tc.allocation_ms(b.turn == Color::White).0.max(0) as u64
+                tc.allocation_ms(b.turn).0
             };
 
             if is_ponder {
-                // If pondering isn’t enabled, fall through to normal search.
                 if ponder.enabled {
                     let board_clone = b.clone();
                     let mut tt_for_thread = tt.clone();
