@@ -26,12 +26,11 @@ impl Default for Accumulator {
     }
 }
 
-// Helper struct for incremental updates
 #[derive(Copy, Clone, Debug)]
 pub struct UpdateBody {
     pub piece: Piece,
     pub sq: usize,
-    pub add: bool, // true = add, false = remove
+    pub add: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -294,6 +293,70 @@ impl From<u16> for Move {
             mov.double_push = true;
         }
         mov
+    }
+}
+
+const MAX_MOVES: usize = 300;
+
+#[derive(Clone, Copy)]
+pub struct MoveList {
+    pub moves: [Move; MAX_MOVES],
+    pub len: usize,
+}
+
+impl Default for MoveList {
+    fn default() -> Self {
+        Self {
+            moves: [Move::default(); MAX_MOVES],
+            len: 0,
+        }
+    }
+}
+
+impl MoveList {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, m: Move) {
+        self.moves[self.len] = m;
+        self.len += 1;
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[Move] {
+        &self.moves[..self.len]
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline(always)]
+    pub fn swap(&mut self, a: usize, b: usize) {
+        self.moves.swap(a, b);
+    }
+}
+
+impl<'a> IntoIterator for &'a MoveList {
+    type Item = &'a Move;
+    type IntoIter = std::slice::Iter<'a, Move>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
     }
 }
 

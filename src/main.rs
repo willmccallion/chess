@@ -3,7 +3,7 @@ use chess::nnue;
 use chess::perft::{divide, perft};
 use chess::search::{best_move_timed, get_pv_from_tt};
 use chess::tt::SharedTransTable;
-use chess::types::{Color, Move, Piece, PieceKind, START_FEN};
+use chess::types::{Color, Move, MoveList, Piece, PieceKind, START_FEN};
 use chess::uci;
 use chess::uci_io::{format_uci, parse_uci_move};
 use clap::{Parser, Subcommand};
@@ -145,7 +145,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
             print_board_ascii(&b);
             println!("Turn: {:?}, Move: {}", b.turn, b.fullmove_number);
 
-            let mut legal_moves = Vec::new();
+            let mut legal_moves = MoveList::new();
             b.generate_legal_moves(&mut legal_moves);
 
             if legal_moves.is_empty() {
@@ -223,7 +223,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
 
             println!(
                 "Engine plays: {} ({})",
-                b.to_san(engine_move, &legal_moves),
+                b.to_san(engine_move, legal_moves.as_slice()),
                 format_uci(engine_move)
             );
             let _u = b.make_move(engine_move);
@@ -241,7 +241,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
 
 fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize) {
     {
-        let mut _moves = Vec::new();
+        let mut _moves = MoveList::new();
         b.generate_legal_moves(&mut _moves);
     }
 
@@ -267,7 +267,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
             println!("(Engine is pondering your move: {})", format_uci(pm));
         }
 
-        let mut legal_moves = Vec::new();
+        let mut legal_moves = MoveList::new();
         b.generate_legal_moves(&mut legal_moves);
 
         if legal_moves.is_empty() {
@@ -297,9 +297,11 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
             let mut user_move_opt = parse_uci_move(b, input_str);
 
             if user_move_opt.is_none() {
-                for &legal_move in &legal_moves {
+                for &legal_move in legal_moves.as_slice() {
                     // remove check/mate suffix to accept "Nf3" style inputs
-                    let san_str = b.to_san(legal_move, &legal_moves).replace(['+', '#'], "");
+                    let san_str = b
+                        .to_san(legal_move, legal_moves.as_slice())
+                        .replace(['+', '#'], "");
                     if san_str == input_str {
                         user_move_opt = Some(legal_move);
                         break;
@@ -308,7 +310,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
             }
 
             if let Some(user_move) = user_move_opt {
-                if legal_moves.contains(&user_move) {
+                if legal_moves.as_slice().contains(&user_move) {
                     if Some(user_move) == ponder_move_opt {
                         println!("(Ponder hit!)");
                     }
@@ -392,9 +394,9 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
         thread::sleep(std::time::Duration::from_millis(500));
 
         if let Some(ponder_move) = ponder_move_opt {
-            let mut legal_moves = Vec::new();
+            let mut legal_moves = MoveList::new();
             b.generate_legal_moves(&mut legal_moves);
-            if legal_moves.contains(&ponder_move) {
+            if legal_moves.as_slice().contains(&ponder_move) {
                 let mut ponder_board = b.clone();
                 let _ = ponder_board.make_move(ponder_move);
                 let tt_clone = tt.clone();

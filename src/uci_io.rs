@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::types::{Move, PieceKind};
+use crate::types::{Move, MoveList, PieceKind};
 
 pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
     let bytes = s.as_bytes();
@@ -30,11 +30,13 @@ pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
         None
     };
 
-    let mut moves = Vec::new();
+    let mut moves = MoveList::new();
     b.generate_legal_moves(&mut moves);
     moves
-        .into_iter()
+        .as_slice()
+        .iter()
         .find(|m| m.from == from && m.to == to && m.promotion == promo)
+        .copied()
 }
 
 pub fn format_uci(m: Move) -> String {

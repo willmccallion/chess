@@ -2,7 +2,7 @@ use crate::board::Board;
 use crate::nnue::evaluate;
 use crate::see::see;
 use crate::tt::{Bound, SharedTransTable};
-use crate::types::{Move, Piece, PieceKind};
+use crate::types::{Move, MoveList, Piece, PieceKind};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,11 +44,7 @@ struct TimeManager {
 
 impl TimeManager {
     fn new(time_ms: u64, stop_signal: Arc<AtomicBool>, is_main_thread: bool) -> Self {
-        let (soft, hard) = if time_ms > 300_000 {
-            (time_ms, time_ms)
-        } else {
-            (time_ms, time_ms)
-        };
+        let (soft, hard) = (time_ms, time_ms);
 
         Self {
             start_time: Instant::now(),
@@ -105,7 +101,6 @@ impl TimeManager {
             let extension_limit = (self.soft_limit as f64 * 1.5) as u64;
 
             if self.best_move_stability == 0 && elapsed < extension_limit.min(self.hard_limit) {
-                // Extend! Don't stop yet.
                 return false;
             }
 
@@ -140,11 +135,11 @@ fn score_move(s: &Search, m: Move, tt_move: Option<Move>) -> i32 {
     }
     if m.capture {
         let see_val = see(&s.board, m);
-        return if see_val >= 0 {
-            GOOD_CAPTURE_SCORE + see_val
+        if see_val >= 0 {
+            return GOOD_CAPTURE_SCORE + see_val;
         } else {
-            BAD_CAPTURE_SCORE + see_val
-        };
+            return BAD_CAPTURE_SCORE + see_val;
+        }
     }
     if Some(m) == s.killers[s.ply][0] {
         return KILLER_1_SCORE;
@@ -187,19 +182,40 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         -MATE_SCORE
     };
 
-    let mut pseudo_moves = Vec::with_capacity(64);
-    s.board.generate_pseudo_legal_moves(&mut pseudo_moves);
+    let mut move_list = MoveList::new();
+    s.board.generate_pseudo_legal_moves(&mut move_list);
 
-    let mut scored_moves: Vec<(Move, i32)> = pseudo_moves
-        .into_iter()
-        .filter(|&m| m.capture || m.promotion.is_some() || in_check)
-        .map(|m| (m, score_move(s, m, None)))
-        .collect();
-
-    scored_moves.sort_unstable_by_key(|&(_, score)| -score);
+    let mut scores = [0i32; 256];
+    for i in 0..move_list.len() {
+        let m = move_list.moves[i];
+        if m.capture || m.promotion.is_some() || in_check {
+            scores[i] = score_move(s, m, None);
+        } else {
+            scores[i] = -2_000_000_000;
+        }
+    }
 
     let mut legal_moves_found = false;
-    for (m, _) in &scored_moves {
+
+    for i in 0..move_list.len() {
+        let mut best_idx = i;
+        let mut best_score = scores[i];
+        for j in (i + 1)..move_list.len() {
+            if scores[j] > best_score {
+                best_score = scores[j];
+                best_idx = j;
+            }
+        }
+
+        if best_score == -2_000_000_000 {
+            break;
+        }
+
+        move_list.swap(i, best_idx);
+        scores.swap(i, best_idx);
+
+        let m = move_list.moves[i];
+
         if !in_check && m.capture && m.promotion.is_none() {
             let captured = s.board.piece_on[m.to as usize];
             if !captured.is_empty() {
@@ -209,27 +225,27 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 }
             }
         }
-        if !in_check && m.capture && see(&s.board, *m) < 0 {
+        if !in_check && m.capture && see(&s.board, m) < 0 {
             continue;
         }
 
-        let undo = s.board.make_move(*m);
+        let undo = s.board.make_move(m);
         let us = s.board.turn.other();
         let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
         if king_bb != 0
             && s.board
                 .is_square_attacked(king_bb.trailing_zeros() as i32, s.board.turn)
         {
-            s.board.unmake_move(*m, undo);
+            s.board.unmake_move(m, undo);
             continue;
         }
         legal_moves_found = true;
 
         s.ply += 1;
-        s.prev_move[s.ply] = Some(*m);
+        s.prev_move[s.ply] = Some(m);
         let score = -quiesce(s, -beta, -alpha);
         s.ply -= 1;
-        s.board.unmake_move(*m, undo);
+        s.board.unmake_move(m, undo);
 
         if score >= beta {
             return beta;
@@ -346,21 +362,32 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         }
     }
 
-    let mut pseudo_moves = Vec::with_capacity(128);
-    s.board.generate_pseudo_legal_moves(&mut pseudo_moves);
+    let mut move_list = MoveList::new();
+    s.board.generate_pseudo_legal_moves(&mut move_list);
 
-    let mut scored_moves: Vec<(Move, i32)> = pseudo_moves
-        .into_iter()
-        .map(|m| (m, score_move(s, m, tt_move)))
-        .collect();
-
-    scored_moves.sort_unstable_by_key(|&(_, score)| -score);
+    let mut scores = [0i32; 256];
+    for i in 0..move_list.len() {
+        scores[i] = score_move(s, move_list.moves[i], tt_move);
+    }
 
     let mut best_score = -MATE_SCORE;
     let mut best_move: Option<Move> = None;
     let mut moves_searched = 0;
 
-    for (m, _) in &scored_moves {
+    for i in 0..move_list.len() {
+        let mut best_idx = i;
+        let mut best_score_val = scores[i];
+        for j in (i + 1)..move_list.len() {
+            if scores[j] > best_score_val {
+                best_score_val = scores[j];
+                best_idx = j;
+            }
+        }
+        move_list.swap(i, best_idx);
+        scores.swap(i, best_idx);
+
+        let m = move_list.moves[i];
+
         if !is_pv && !in_check && depth <= 3 && !m.capture && m.promotion.is_none() {
             let lmp_limit = LMP_LIMITS[depth as usize];
             if moves_searched as i32 >= lmp_limit {
@@ -375,28 +402,28 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             }
         }
 
-        let undo = s.board.make_move(*m);
+        let undo = s.board.make_move(m);
         let us = s.board.turn.other();
         let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
         if king_bb != 0
             && s.board
                 .is_square_attacked(king_bb.trailing_zeros() as i32, s.board.turn)
         {
-            s.board.unmake_move(*m, undo);
+            s.board.unmake_move(m, undo);
             continue;
         }
 
         s.ply += 1;
-        s.prev_move[s.ply] = Some(*m);
+        s.prev_move[s.ply] = Some(m);
         moves_searched += 1;
 
         let score;
         if moves_searched == 1 {
             score = -negamax(s, -beta, -alpha, depth - 1);
         } else {
-            if depth < 8 && !in_check && m.capture && see(&s.board, *m) < 0 {
+            if depth < 8 && !in_check && m.capture && see(&s.board, m) < 0 {
                 s.ply -= 1;
-                s.board.unmake_move(*m, undo);
+                s.board.unmake_move(m, undo);
                 continue;
             }
 
@@ -425,7 +452,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         };
 
         s.ply -= 1;
-        s.board.unmake_move(*m, undo);
+        s.board.unmake_move(m, undo);
 
         if s.tm.check_hard_limit() {
             return 0;
@@ -433,23 +460,26 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
 
         if score > best_score {
             best_score = score;
-            best_move = Some(*m);
+            best_move = Some(m);
             if score > alpha {
                 alpha = score;
                 if alpha >= beta {
                     if !m.capture {
-                        if Some(*m) != s.killers[s.ply][0] {
+                        if Some(m) != s.killers[s.ply][0] {
                             s.killers[s.ply][1] = s.killers[s.ply][0];
-                            s.killers[s.ply][0] = Some(*m);
+                            s.killers[s.ply][0] = Some(m);
                         }
+
                         if let Some(prev_m) = s.prev_move[s.ply.saturating_sub(1)] {
                             let piece_idx = s.board.piece_on[prev_m.from as usize].index();
                             s.counter_moves[prev_m.capture as usize][piece_idx]
-                                [prev_m.to as usize] = Some(*m);
+                                [prev_m.to as usize] = Some(m);
                         }
+
                         let piece_idx = s.board.piece_on[m.from as usize].index();
                         let bonus = (depth * depth).min(1000);
                         s.history[piece_idx][m.to as usize] += bonus;
+
                         if s.history[piece_idx][m.to as usize] > HISTORY_MAX {
                             for p in 1..13 {
                                 for sq in 0..64 {
@@ -457,7 +487,9 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                                 }
                             }
                         }
-                        for (failed_move, _) in scored_moves.iter().take(moves_searched - 1) {
+
+                        for k in 0..(moves_searched - 1) {
+                            let failed_move = move_list.moves[k];
                             if !failed_move.capture {
                                 let p_idx = s.board.piece_on[failed_move.from as usize].index();
                                 s.history[p_idx][failed_move.to as usize] -= bonus;
@@ -523,11 +555,11 @@ pub fn best_move_timed(
     }
 
     if is_main_thread && time_ms < u64::MAX / 2 {
-        let mut legal_moves = Vec::with_capacity(64);
+        let mut legal_moves = MoveList::new();
         let mut temp_board = b.clone();
         temp_board.generate_legal_moves(&mut legal_moves);
         if legal_moves.len() == 1 {
-            return (Some(legal_moves[0]), 1, 0);
+            return (Some(legal_moves.moves[0]), 1, 0);
         }
     }
 

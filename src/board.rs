@@ -166,7 +166,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn generate_pseudo_legal_moves(&self, out: &mut Vec<Move>) {
+    pub fn generate_pseudo_legal_moves(&self, out: &mut MoveList) {
         out.clear();
         self.gen_pawns(out);
         self.gen_leapers(out);
@@ -174,11 +174,11 @@ impl Board {
     }
 
     #[inline]
-    pub fn generate_legal_moves(&mut self, out: &mut Vec<Move>) {
-        let mut pseudo = Vec::with_capacity(128);
+    pub fn generate_legal_moves(&mut self, out: &mut MoveList) {
+        let mut pseudo = MoveList::new();
         self.generate_pseudo_legal_moves(&mut pseudo);
         out.clear();
-        for m in pseudo {
+        for &m in pseudo.as_slice() {
             let u = self.make_move(m);
             let us = self.turn.other();
             let our_king_bb = self.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
@@ -194,7 +194,7 @@ impl Board {
         }
     }
 
-    fn gen_pawns(&self, out: &mut Vec<Move>) {
+    fn gen_pawns(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
         let pawn = if white { Piece::WP } else { Piece::BP };
         let pawns = self.piece_bb[pawn.index()];
@@ -315,7 +315,7 @@ impl Board {
     }
 
     #[inline]
-    fn gen_leapers(&self, out: &mut Vec<Move>) {
+    fn gen_leapers(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
         let friendly = if white { self.w_pieces } else { self.b_pieces };
 
@@ -441,7 +441,7 @@ impl Board {
     }
 
     #[inline]
-    fn gen_sliders(&self, out: &mut Vec<Move>) {
+    fn gen_sliders(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
         let friendly = if white { self.w_pieces } else { self.b_pieces };
         let enemy = if white { self.b_pieces } else { self.w_pieces };
@@ -1025,7 +1025,7 @@ impl Board {
 
         if temp_board.is_square_attacked(opp_king_sq, self.turn) {
             let mut has_legal_move = false;
-            let mut next_moves = Vec::new();
+            let mut next_moves = MoveList::new();
             temp_board.generate_legal_moves(&mut next_moves);
 
             if !next_moves.is_empty() {

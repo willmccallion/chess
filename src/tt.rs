@@ -155,7 +155,9 @@ impl TransTable {
             _mm_prefetch(ptr as *const i8, _MM_HINT_T0);
         }
 
-        let cluster = &self.slots[idx];
+        // Use unchecked access for speed
+        let cluster = unsafe { self.slots.get_unchecked(idx) };
+
         for entry in &cluster.entries {
             if entry.key == key {
                 return Some(*entry);
@@ -167,7 +169,8 @@ impl TransTable {
     #[inline]
     fn store(&mut self, key: ZKey, depth: i16, score: i32, bound: Bound, best_move: Option<Move>) {
         let i = self.idx(key);
-        let cluster = &mut self.slots[i];
+        // Use unchecked access for speed
+        let cluster = unsafe { self.slots.get_unchecked_mut(i) };
         let new_entry = TTEntry::new(key, depth, score, bound, best_move, self.age);
 
         for entry in &mut cluster.entries {

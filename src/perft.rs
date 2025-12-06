@@ -1,19 +1,19 @@
 use crate::board::Board;
-use crate::types::Move;
+use crate::types::{Move, MoveList};
 
 fn perft_inner(b: &mut Board, depth: usize) -> u64 {
     if depth == 0 {
         return 1;
     }
 
-    let mut moves = Vec::<Move>::with_capacity(128);
+    let mut moves = MoveList::new();
     b.generate_legal_moves(&mut moves);
     if depth == 1 {
         return moves.len() as u64;
     }
 
     let mut nodes = 0u64;
-    for m in moves {
+    for &m in moves.as_slice() {
         let u = b.make_move(m);
         nodes += perft_inner(b, depth - 1);
         b.unmake_move(m, u);
@@ -26,11 +26,11 @@ pub fn perft(b: &mut Board, depth: usize) -> u64 {
 }
 
 pub fn divide(b: &mut Board, depth: usize) {
-    let mut moves = Vec::with_capacity(128);
+    let mut moves = MoveList::new();
     b.generate_legal_moves(&mut moves);
     let mut total = 0u64;
 
-    for m in moves {
+    for &m in moves.as_slice() {
         let u = b.make_move(m);
         let n = perft_inner(b, depth - 1);
         b.unmake_move(m, u);

@@ -9,6 +9,9 @@ use std::io::{BufReader, Cursor, Read, Seek};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+
 const SQUARE_NB: usize = 64;
 const FT_INPUT_DIM: usize = 41024;
 const HL1_INPUT_DIM: usize = 512;
@@ -140,11 +143,15 @@ pub fn refresh_accumulator(board: &Board) -> Accumulator {
     let wk_sq = board.king_square(Color::White) as usize;
     let bk_sq = board.king_square(Color::Black) as usize;
 
-    for sq in 0..64 {
+    let mut occupied = board.all_pieces;
+    occupied &= !board.piece_bb[Piece::WK.index()];
+    occupied &= !board.piece_bb[Piece::BK.index()];
+
+    while occupied != 0 {
+        let sq = occupied.trailing_zeros() as usize;
+        occupied &= occupied - 1;
+
         let piece = board.piece_on[sq];
-        if piece.is_empty() || piece.kind() == Some(PieceKind::King) {
-            continue;
-        }
         let color = piece.color().unwrap();
 
         let idx_w = make_halfkp_index(true, wk_sq, sq, piece, color);
@@ -258,7 +265,64 @@ fn make_halfkp_index(
     oriented_sq + piece_idx + 641 * king_oriented
 }
 
-// SIMD helpers for updating accumulator
+#[inline(always)]
+fn add_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        add_weight_avx2(acc, weights, idx)
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        add_weight_neon(acc, weights, idx)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let offset = idx * NNUE_FEATURE_SIZE;
+        for i in 0..NNUE_FEATURE_SIZE {
+            acc[i] = acc[i].wrapping_add(weights[offset + i]);
+        }
+    }
+}
+
+#[inline(always)]
+fn sub_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        sub_weight_avx2(acc, weights, idx)
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        sub_weight_neon(acc, weights, idx)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let offset = idx * NNUE_FEATURE_SIZE;
+        for i in 0..NNUE_FEATURE_SIZE {
+            acc[i] = acc[i].wrapping_sub(weights[offset + i]);
+        }
+    }
+}
+
+#[inline(always)]
+fn dot_product(input: &[i32], weights: &[i8]) -> i32 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        dot_product_avx2(input, weights)
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        dot_product_neon(input, weights)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        input
+            .iter()
+            .zip(weights.iter())
+            .map(|(&x, &w)| x * (w as i32))
+            .sum()
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn add_weight_avx2(acc: &mut [i16], weights: &[i16], idx: usize) {
@@ -295,37 +359,6 @@ unsafe fn sub_weight_avx2(acc: &mut [i16], weights: &[i16], idx: usize) {
     }
 }
 
-#[inline(always)]
-fn add_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        add_weight_avx2(acc, weights, idx)
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let offset = idx * NNUE_FEATURE_SIZE;
-        for i in 0..NNUE_FEATURE_SIZE {
-            acc[i] = acc[i].wrapping_add(weights[offset + i]);
-        }
-    }
-}
-
-#[inline(always)]
-fn sub_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        sub_weight_avx2(acc, weights, idx)
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let offset = idx * NNUE_FEATURE_SIZE;
-        for i in 0..NNUE_FEATURE_SIZE {
-            acc[i] = acc[i].wrapping_sub(weights[offset + i]);
-        }
-    }
-}
-
-// Dense Layer helpers
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn dot_product_avx2(input: &[i32], weights: &[i8]) -> i32 {
@@ -360,13 +393,80 @@ unsafe fn dot_product_avx2(input: &[i32], weights: &[i8]) -> i32 {
     sum
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-unsafe fn dot_product_avx2(input: &[i32], weights: &[i8]) -> i32 {
-    input
-        .iter()
-        .zip(weights.iter())
-        .map(|(&x, &w)| x * (w as i32))
-        .sum()
+#[cfg(target_arch = "aarch64")]
+unsafe fn add_weight_neon(acc: &mut [i16], weights: &[i16], idx: usize) {
+    let offset = idx * NNUE_FEATURE_SIZE;
+    let mut i = 0;
+    while i < NNUE_FEATURE_SIZE {
+        let acc_ptr = acc.as_mut_ptr().add(i);
+        let wt_ptr = weights.as_ptr().add(offset + i);
+
+        let a0 = vld1q_s16(acc_ptr);
+        let a1 = vld1q_s16(acc_ptr.add(8));
+        let w0 = vld1q_s16(wt_ptr);
+        let w1 = vld1q_s16(wt_ptr.add(8));
+
+        vst1q_s16(acc_ptr, vaddq_s16(a0, w0));
+        vst1q_s16(acc_ptr.add(8), vaddq_s16(a1, w1));
+
+        i += 16;
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn sub_weight_neon(acc: &mut [i16], weights: &[i16], idx: usize) {
+    let offset = idx * NNUE_FEATURE_SIZE;
+    let mut i = 0;
+    while i < NNUE_FEATURE_SIZE {
+        let acc_ptr = acc.as_mut_ptr().add(i);
+        let wt_ptr = weights.as_ptr().add(offset + i);
+
+        let a0 = vld1q_s16(acc_ptr);
+        let a1 = vld1q_s16(acc_ptr.add(8));
+        let w0 = vld1q_s16(wt_ptr);
+        let w1 = vld1q_s16(wt_ptr.add(8));
+
+        vst1q_s16(acc_ptr, vsubq_s16(a0, w0));
+        vst1q_s16(acc_ptr.add(8), vsubq_s16(a1, w1));
+
+        i += 16;
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn dot_product_neon(input: &[i32], weights: &[i8]) -> i32 {
+    let len = input.len();
+    let mut i = 0;
+    let mut sum0 = vdupq_n_s32(0);
+    let mut sum1 = vdupq_n_s32(0);
+
+    while i + 8 <= len {
+        let w_ptr = weights.as_ptr().add(i);
+        let w_8 = vld1_s8(w_ptr);
+
+        let w_16 = vmovl_s8(w_8);
+
+        let w_32_low = vmovl_s16(vget_low_s16(w_16));
+        let w_32_high = vmovl_s16(vget_high_s16(w_16));
+
+        let in_ptr = input.as_ptr().add(i);
+        let in_0 = vld1q_s32(in_ptr);
+        let in_1 = vld1q_s32(in_ptr.add(4));
+
+        sum0 = vmlaq_s32(sum0, in_0, w_32_low);
+        sum1 = vmlaq_s32(sum1, in_1, w_32_high);
+
+        i += 8;
+    }
+
+    let sum = vaddq_s32(sum0, sum1);
+    let mut result = vaddvq_s32(sum);
+
+    while i < len {
+        result += input[i] * (weights[i] as i32);
+        i += 1;
+    }
+    result
 }
 
 #[inline]
@@ -380,7 +480,7 @@ fn dense_layer(
     let mut out = [0i32; HL1_OUTPUT_DIM];
     for j in 0..out_dim {
         let weight_slice = &weights[j * in_dim..(j + 1) * in_dim];
-        let sum = biases[j] + unsafe { dot_product_avx2(input, weight_slice) };
+        let sum = biases[j] + dot_product(input, weight_slice);
         out[j] = nnue_relu(sum);
     }
     out
@@ -388,11 +488,7 @@ fn dense_layer(
 
 #[inline]
 fn dense_output(input: &[i32], weights: &[i8], bias: i32) -> i32 {
-    bias + input
-        .iter()
-        .zip(weights.iter())
-        .map(|(&x, &w)| x * (w as i32))
-        .sum::<i32>()
+    bias + dot_product(input, weights)
 }
 
 #[inline]
