@@ -2,6 +2,7 @@ use chess::board::Board;
 use chess::nnue;
 use chess::perft::{divide, perft};
 use chess::search::{best_move_timed, get_pv_from_tt};
+use chess::tournament::{self, TournamentConfig};
 use chess::tt::SharedTransTable;
 use chess::types::{Color, Move, MoveList, Piece, PieceKind, START_FEN};
 use chess::uci;
@@ -58,6 +59,33 @@ enum Cmd {
     },
     Eval {
         fen: String,
+    },
+    Challenge {
+        /// Path to engine 1 binary
+        engine1: String,
+        /// Path to engine 2 binary
+        engine2: String,
+        /// UCI options for engine 1 (e.g. "Threads=4")
+        #[arg(long = "e1-option")]
+        e1_options: Vec<String>,
+        /// UCI options for engine 2 (e.g. "Hash=256")
+        #[arg(long = "e2-option")]
+        e2_options: Vec<String>,
+        /// Base time in milliseconds per side
+        #[arg(long, default_value_t = 5000)]
+        time: u64,
+        /// Increment in milliseconds per move
+        #[arg(long, default_value_t = 50)]
+        inc: u64,
+        /// Number of games to play
+        #[arg(long, default_value_t = 10)]
+        rounds: usize,
+        /// Maximum concurrent games
+        #[arg(long, default_value_t = 1)]
+        concurrency: usize,
+        /// Starting FEN (default: standard start position)
+        #[arg(long)]
+        fen: Option<String>,
     },
     Uci,
 }
@@ -122,6 +150,43 @@ fn main() {
             let side = if b.turn == Color::White { "white" } else { "black" };
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
+        }
+        Cmd::Challenge {
+            engine1,
+            engine2,
+            e1_options,
+            e2_options,
+            time,
+            inc,
+            rounds,
+            concurrency,
+            fen,
+        } => {
+            let e1_opts: Vec<_> = e1_options
+                .iter()
+                .map(|s| tournament::parse_option(s).unwrap_or_else(|e| {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }))
+                .collect();
+            let e2_opts: Vec<_> = e2_options
+                .iter()
+                .map(|s| tournament::parse_option(s).unwrap_or_else(|e| {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }))
+                .collect();
+            tournament::run_tournament(TournamentConfig {
+                engine1_path: engine1,
+                engine2_path: engine2,
+                e1_options: e1_opts,
+                e2_options: e2_opts,
+                base_time_ms: time,
+                increment_ms: inc,
+                rounds,
+                concurrency,
+                start_fen: fen,
+            });
         }
         Cmd::Uci => uci::run_uci(),
     }
