@@ -1,4 +1,5 @@
 use crate::board::Board;
+use crate::nnue;
 use crate::opening_book::get_book_move;
 use crate::search::best_move_timed;
 use crate::time::TimeControl;
@@ -205,6 +206,16 @@ pub fn run_uci() {
         }
 
         if cmd.eq_ignore_ascii_case("ponderhit") {
+            continue;
+        }
+
+        if cmd.eq_ignore_ascii_case("eval") {
+            let score = nnue::evaluate(&b);
+            let side = if b.turn == crate::types::Color::White { "white" } else { "black" };
+            let sign = if score >= 0 { "+" } else { "" };
+            println!("info string eval: {sign}{score} cp ({side} to move)");
+            println!("info string fen: {}", b.to_fen());
+            let _ = io::stdout().flush();
             continue;
         }
 
