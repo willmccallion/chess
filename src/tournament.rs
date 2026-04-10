@@ -57,6 +57,10 @@ fn spawn_and_init(
 ) -> Result<UciEngine, String> {
     let mut engine = UciEngine::spawn(path)?;
     engine.init_uci()?;
+    // Default to 1 thread unless the user explicitly set Threads
+    if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("Threads")) {
+        engine.set_options(&[("Threads".to_string(), "1".to_string())])?;
+    }
     engine.set_options(options)?;
     engine.is_ready()?;
     Ok(engine)
