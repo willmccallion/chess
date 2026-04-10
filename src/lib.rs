@@ -4,6 +4,7 @@ pub mod board;
 pub mod fen;
 pub mod game_runner;
 pub mod magics;
+pub mod movepicker;
 pub mod nnue;
 pub mod opening_book;
 pub mod pawn_hash;

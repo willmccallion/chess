@@ -50,7 +50,7 @@ impl Color {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub enum PieceKind {
     Pawn,
     Knight,

@@ -20,13 +20,6 @@ const IID_MIN_DEPTH: i32 = 5;
 const RAZORING_MARGIN: i32 = 400;
 const DELTA_MARGIN: i32 = 200;
 
-const TT_MOVE_SCORE: i32 = 2_000_000_000;
-const GOOD_CAPTURE_SCORE: i32 = 1_900_000_000;
-const KILLER_1_SCORE: i32 = 1_800_000_000;
-const KILLER_2_SCORE: i32 = 1_700_000_000;
-const COUNTERMOVE_SCORE: i32 = 1_650_000_000;
-const QUIET_MOVE_SCORE: i32 = 1_600_000_000;
-const BAD_CAPTURE_SCORE: i32 = -1_900_000_000;
 const HISTORY_MAX: i32 = 16_384;
 const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
 
@@ -129,35 +122,9 @@ pub struct Search<'a> {
     prev_move: [Option<Move>; MAX_PLY],
 }
 
-fn score_move(s: &Search, m: Move, tt_move: Option<Move>) -> i32 {
-    if Some(m) == tt_move {
-        return TT_MOVE_SCORE;
-    }
-    if m.capture {
-        let see_val = see(&s.board, m);
-        if see_val >= 0 {
-            return GOOD_CAPTURE_SCORE + see_val;
-        } else {
-            return BAD_CAPTURE_SCORE + see_val;
-        }
-    }
-    if Some(m) == s.killers[s.ply][0] {
-        return KILLER_1_SCORE;
-    }
-    if Some(m) == s.killers[s.ply][1] {
-        return KILLER_2_SCORE;
-    }
-    if let Some(prev_m) = s.prev_move[s.ply.saturating_sub(1)] {
-        let piece_idx = s.board.piece_on[prev_m.from as usize].index();
-        if Some(m) == s.counter_moves[prev_m.capture as usize][piece_idx][prev_m.to as usize] {
-            return COUNTERMOVE_SCORE;
-        }
-    }
-    let piece_idx = s.board.piece_on[m.from as usize].index();
-    QUIET_MOVE_SCORE + s.history[piece_idx][m.to as usize]
-}
-
 fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
+    use crate::movepicker::QMovePicker;
+
     s.seldepth = s.seldepth.max(s.ply);
     s.tm.nodes += 1;
 
@@ -182,41 +149,75 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         -MATE_SCORE
     };
 
-    let mut move_list = MoveList::new();
-    s.board.generate_pseudo_legal_moves(&mut move_list);
+    if in_check {
+        // In check: need all moves (including quiet evasions) for checkmate detection.
+        // Use the old approach — this path is rare.
+        let mut move_list = MoveList::new();
+        s.board.generate_pseudo_legal_moves(&mut move_list);
 
-    let mut scores = [0i32; 256];
-    for i in 0..move_list.len() {
-        let m = move_list.moves[i];
-        if m.capture || m.promotion.is_some() || in_check {
-            scores[i] = score_move(s, m, None);
-        } else {
-            scores[i] = -2_000_000_000;
-        }
-    }
-
-    let mut legal_moves_found = false;
-
-    for i in 0..move_list.len() {
-        let mut best_idx = i;
-        let mut best_score = scores[i];
-        for j in (i + 1)..move_list.len() {
-            if scores[j] > best_score {
-                best_score = scores[j];
-                best_idx = j;
+        let mut scores = [0i32; 300];
+        for i in 0..move_list.len() {
+            let m = move_list.moves[i];
+            if m.capture {
+                scores[i] = see(&s.board, m);
+            } else {
+                scores[i] = 0;
             }
         }
 
-        if best_score == -2_000_000_000 {
-            break;
+        let mut legal_moves_found = false;
+
+        for i in 0..move_list.len() {
+            let mut best_idx = i;
+            let mut best_score = scores[i];
+            for j in (i + 1)..move_list.len() {
+                if scores[j] > best_score {
+                    best_score = scores[j];
+                    best_idx = j;
+                }
+            }
+            move_list.swap(i, best_idx);
+            scores.swap(i, best_idx);
+
+            let m = move_list.moves[i];
+
+            let undo = s.board.make_move(m);
+            let us = s.board.turn.other();
+            let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
+            if king_bb != 0
+                && s.board
+                    .is_square_attacked(king_bb.trailing_zeros() as i32, s.board.turn)
+            {
+                s.board.unmake_move(m, undo);
+                continue;
+            }
+            legal_moves_found = true;
+
+            s.ply += 1;
+            s.prev_move[s.ply] = Some(m);
+            let score = -quiesce(s, -beta, -alpha);
+            s.ply -= 1;
+            s.board.unmake_move(m, undo);
+
+            if score >= beta {
+                return beta;
+            }
+            if score > alpha {
+                alpha = score;
+            }
         }
 
-        move_list.swap(i, best_idx);
-        scores.swap(i, best_idx);
+        if !legal_moves_found {
+            return -MATE_SCORE + s.ply as i32;
+        }
+        return alpha;
+    }
 
-        let m = move_list.moves[i];
-
-        if !in_check && m.capture && m.promotion.is_none() {
+    // Not in check: only search captures + promotions via QMovePicker.
+    let mut picker = QMovePicker::new();
+    while let Some(m) = picker.next(&s.board) {
+        // Delta pruning
+        if m.capture && m.promotion.is_none() {
             let captured = s.board.piece_on[m.to as usize];
             if !captured.is_empty() {
                 let piece_val = PIECE_VALUES[captured.kind().unwrap() as usize];
@@ -225,7 +226,8 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 }
             }
         }
-        if !in_check && m.capture && see(&s.board, m) < 0 {
+        // SEE pruning
+        if m.capture && see(&s.board, m) < 0 {
             continue;
         }
 
@@ -239,7 +241,6 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
             s.board.unmake_move(m, undo);
             continue;
         }
-        legal_moves_found = true;
 
         s.ply += 1;
         s.prev_move[s.ply] = Some(m);
@@ -255,9 +256,6 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         }
     }
 
-    if in_check && !legal_moves_found {
-        return -MATE_SCORE + s.ply as i32;
-    }
     alpha
 }
 
@@ -362,38 +360,31 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         }
     }
 
-    let mut move_list = MoveList::new();
-    s.board.generate_pseudo_legal_moves(&mut move_list);
+    // Determine killer and counter move for this ply
+    let killer1 = s.killers[s.ply][0];
+    let killer2 = s.killers[s.ply][1];
+    let counter_move = s.prev_move[s.ply.saturating_sub(1)].and_then(|prev_m| {
+        let piece_idx = s.board.piece_on[prev_m.from as usize].index();
+        s.counter_moves[prev_m.capture as usize][piece_idx][prev_m.to as usize]
+    });
 
-    let mut scores = [0i32; 256];
-    for i in 0..move_list.len() {
-        scores[i] = score_move(s, move_list.moves[i], tt_move);
-    }
-
+    let mut picker =
+        crate::movepicker::MovePicker::new(tt_move, killer1, killer2, counter_move);
     let mut best_score = -MATE_SCORE;
     let mut best_move: Option<Move> = None;
     let mut moves_searched = 0;
+    let mut searched_quiets = [Move::default(); 128];
+    let mut num_searched_quiets: usize = 0;
 
-    for i in 0..move_list.len() {
-        let mut best_idx = i;
-        let mut best_score_val = scores[i];
-        for j in (i + 1)..move_list.len() {
-            if scores[j] > best_score_val {
-                best_score_val = scores[j];
-                best_idx = j;
-            }
-        }
-        move_list.swap(i, best_idx);
-        scores.swap(i, best_idx);
-
-        let m = move_list.moves[i];
-
+    while let Some(m) = picker.next(&s.board, &s.history) {
+        // LMP: skip quiet moves after threshold
         if !is_pv && !in_check && depth <= 3 && !m.capture && m.promotion.is_none() {
             let lmp_limit = LMP_LIMITS[depth as usize];
             if moves_searched as i32 >= lmp_limit {
                 continue;
             }
         }
+        // History pruning
         if depth <= 2 && !in_check && !m.capture && m.promotion.is_none() {
             let piece_idx = s.board.piece_on[m.from as usize].index();
             let hist_score = s.history[piece_idx][m.to as usize];
@@ -402,6 +393,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             }
         }
 
+        // Make move + legality check
         let undo = s.board.make_move(m);
         let us = s.board.turn.other();
         let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
@@ -421,12 +413,14 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         if moves_searched == 1 {
             score = -negamax(s, -beta, -alpha, depth - 1);
         } else {
+            // Bad capture pruning
             if depth < 8 && !in_check && m.capture && see(&s.board, m) < 0 {
                 s.ply -= 1;
                 s.board.unmake_move(m, undo);
                 continue;
             }
 
+            // LMR
             let mut reduction = 0;
             if depth >= 3 && !m.capture && !in_check {
                 let d = depth as f32;
@@ -464,6 +458,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             if score > alpha {
                 alpha = score;
                 if alpha >= beta {
+                    // Beta cutoff — update killer, counter, history
                     if !m.capture {
                         if Some(m) != s.killers[s.ply][0] {
                             s.killers[s.ply][1] = s.killers[s.ply][0];
@@ -488,17 +483,22 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                             }
                         }
 
-                        for k in 0..(moves_searched - 1) {
-                            let failed_move = move_list.moves[k];
-                            if !failed_move.capture {
-                                let p_idx = s.board.piece_on[failed_move.from as usize].index();
-                                s.history[p_idx][failed_move.to as usize] -= bonus;
-                            }
+                        // History malus for previously searched quiet moves
+                        for k in 0..num_searched_quiets {
+                            let failed_move = searched_quiets[k];
+                            let p_idx = s.board.piece_on[failed_move.from as usize].index();
+                            s.history[p_idx][failed_move.to as usize] -= bonus;
                         }
                     }
                     break;
                 }
             }
+        }
+
+        // Track searched quiets for history malus (only non-cutoff moves reach here)
+        if !m.capture && m.promotion.is_none() && num_searched_quiets < 128 {
+            searched_quiets[num_searched_quiets] = m;
+            num_searched_quiets += 1;
         }
     }
 
