@@ -27,22 +27,34 @@ You can interact with the engine in several ways:
 - **UCI Protocol Support**  
   Speaks the Universal Chess Interface (UCI) protocol, so it works with most modern chess GUIs.
 
-- **Optional NNUE Evaluation**  
-  Supports loading an NNUE network file for more sophisticated evaluation (see **NNUE Support** below).
+- **NNUE Evaluation**  
+  Evaluates positions with an embedded Stockfish HalfKP network (see **NNUE** below).
 
 ---
 
 ## Building
 
-You’ll need the Rust toolchain installed (e.g. via [`rustup`](https://rustup.rs/)). It requires the nightly build for the SIMD functions.
+The repository ships a Nix flake. With [direnv](https://direnv.net/) and nix-direnv, run `direnv allow` once; otherwise use `nix develop`. The dev shell provides:
 
-From the project root, build in release mode:
+- the stable Rust toolchain pinned in `rust-toolchain.toml` (with clippy, rustfmt, rust-analyzer),
+- `pkg-config` and OpenSSL (the build script downloads the NNUE network),
+- Stockfish 18 (`$STOCKFISH`) for matches and comparisons,
+- opening suites: `$CHESS_BOOK_UHO` (UHO Lichess, for engine-vs-engine testing) and `$CHESS_BOOK_BALANCED` (noob 3-moves),
+- the Baron Polyglot book, linked to `moves/book.bin`,
+- `perf` and Python with `python-chess` for the scripts in `tools/`.
+
+Build in release mode:
 
 ```bash
 cargo build --release
-````
+```
 
-The compiled executable will be located in the `target/release/` directory.
+The executable is `target/release/chess`. A `profiling` profile (release plus debug info) is available for `perf`:
+
+```bash
+cargo build --profile profiling
+perf record -g target/profiling/chess bench 16
+```
 
 ---
 
@@ -110,17 +122,57 @@ cargo run --release -- perft 4 --fen "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/P
 
 ---
 
-## NNUE Support
+### Benchmarking
 
-This engine can optionally use an NNUE (Efficiently Updatable Neural Network) file for evaluation.
+`bench` searches 30 fixed positions to a fixed depth and prints the total node count and speed. The node count is a signature of the search: a refactor that should not change behavior must leave it unchanged.
 
-* The default network file can be downloaded from:
-  `https://tests.stockfishchess.org/api/nn/nn-9931db908a9b.nnue`
+```bash
+cargo run --release -- bench          # depth 13, 16 MB hash
+cargo run --release -- bench 16 --hash 64
+```
 
-* Place the downloaded `.nnue` file where your configuration/evaluation code expects it (for example, alongside the engine binary or in the configured directory), and ensure the file name in the code matches the downloaded file name.
+### Matches and SPRT testing
 
-The NNUE parsing and evaluation code is largely adapted from:
-[https://github.com/github-jimjim/NNUE-Parser.git](https://github.com/github-jimjim/NNUE-Parser.git)
+`challenge` plays two UCI engines against each other. With `--openings`, each sampled opening is played twice with colors swapped, results are reported as pentanomial pair statistics, and `--sprt` stops as soon as the test is decided.
+
+```bash
+# New build vs a saved older build, stop when +0..+5 Elo is decided
+target/release/chess challenge target/release/chess versions/old \
+  --e1-option OwnBook=false --e2-option OwnBook=false \
+  --time 10000 --inc 100 --rounds 20000 --concurrency 8 \
+  --openings "$CHESS_BOOK_UHO" --sprt 0,5
+
+# Against Stockfish at a limited strength
+target/release/chess challenge target/release/chess "$STOCKFISH" \
+  --e1-option OwnBook=false --e2-option UCI_LimitStrength=true --e2-option UCI_Elo=3000 \
+  --time 60000 --inc 600 --rounds 100 --concurrency 8 --openings "$CHESS_BOOK_BALANCED"
+```
+
+### Comparing analysis with Stockfish
+
+`compare` analyses positions with this engine and a reference engine (Stockfish by default) and reports both scores, best moves, the score gap and static evaluations, plus a summary over all positions.
+
+```bash
+cargo run --release -- compare --fen "r1bq1rk1/ppp1nppp/4n3/3p3Q/3P4/1BP1B3/PP1N2PP/R4RK1 w - - 1 16"
+cargo run --release -- compare --epd "$CHESS_BOOK_BALANCED" --count 50 --depth 14
+```
+
+### Perft against Stockfish
+
+`tools/perft_test.py` compares `perft --divide` with Stockfish's `go perft` on a suite of tricky positions:
+
+```bash
+python3 tools/perft_test.py --stockfish "$STOCKFISH"
+```
+
+---
+
+## NNUE
+
+The evaluation is Stockfish's HalfKP network `nn-9931db908a9b.nnue` (41024 → 2×256 → 32 → 32 → 1), downloaded by `build.rs` and embedded in the binary. Accumulators are updated lazily and incrementally; the dense layers use AVX2 (and AVX-VNNI when available).
+
+The NNUE parsing code was originally adapted from
+[https://github.com/github-jimjim/NNUE-Parser.git](https://github.com/github-jimjim/NNUE-Parser.git).
 
 ---
 
