@@ -299,6 +299,8 @@ struct StackEntry {
     /// Beta cutoffs at this ply since the node two plies up started (counting double
     /// when there was no TT move).
     cutoff_count: u8,
+    /// The node is or was on a principal variation (from the TT).
+    tt_pv: bool,
 }
 
 impl Default for StackEntry {
@@ -310,6 +312,7 @@ impl Default for StackEntry {
             excluded_move: None,
             double_extensions: 0,
             cutoff_count: 0,
+            tt_pv: false,
         }
     }
 }
@@ -641,6 +644,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     let alpha_orig = alpha;
     let key = s.board.zobrist;
     let tt_entry = s.tt.probe(key);
+    let tt_pv = tt_entry.is_some_and(|e| e.is_pv());
     if let Some(entry) = tt_entry {
         let tt_score = score_from_tt(entry.score(), s.ply);
         if !is_pv && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
@@ -672,7 +676,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     };
     if stand_pat >= beta {
         if tt_entry.is_none() {
-            s.tt.store(key, 0, score_to_tt(stand_pat, s.ply), Some(raw_eval), Bound::Lower, None);
+            s.tt.store(key, 0, score_to_tt(stand_pat, s.ply), Some(raw_eval), Bound::Lower, None, tt_pv);
         }
         return stand_pat;
     }
@@ -717,7 +721,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
-    s.tt.store(key, 0, score_to_tt(best_score, s.ply), Some(raw_eval), bound, best_move);
+    s.tt.store(key, 0, score_to_tt(best_score, s.ply), Some(raw_eval), bound, best_move, tt_pv);
     best_score
 }
 
@@ -810,6 +814,7 @@ fn probcut(
                 None,
                 Bound::Lower,
                 Some(m),
+                s.stack[s.ply].tt_pv,
             );
             return ProbCut::Cutoff(score);
         }
@@ -907,6 +912,10 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     let tt_entry = s.tt.probe(key);
     let tt_move = tt_entry.and_then(|e| e.best_move());
     let tt_capture = tt_move.is_some_and(|m| m.capture);
+    if excluded_move.is_none() {
+        s.stack[s.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
+    }
+    let tt_pv = s.stack[s.ply].tt_pv;
     if let Some(entry) = tt_entry {
         let tt_score = score_from_tt(entry.score(), s.ply);
         if !is_pv
@@ -1129,6 +1138,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 r_1024 -= if is_killer_or_counter { p.lmr_killer_or_counter_x1024 } else { 0 };
                 r_1024 -= if gives_check { p.lmr_gives_check_x1024 } else { 0 };
                 r_1024 += if tt_capture { p.lmr_tt_capture_x1024 } else { 0 };
+                r_1024 -= if tt_pv { p.lmr_tt_pv_x1024 } else { 0 };
                 let child_cutoffs = i32::from(s.stack[node_ply + 1].cutoff_count);
                 r_1024 += if child_cutoffs > p.child_cutoff_threshold { p.lmr_child_cutoffs_x1024 } else { 0 };
                 let r = r_1024 / 1024 - quiet_history / p.lmr_history_divisor;
@@ -1223,6 +1233,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         raw_eval,
         bound,
         best_move,
+        tt_pv,
     );
     best_score
 }

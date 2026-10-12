@@ -35,13 +35,14 @@ const MOVE_SHIFT: u64 = 32;
 const DEPTH_SHIFT: u64 = 48;
 const BOUND_SHIFT: u64 = 56;
 const AGE_SHIFT: u64 = 58;
+const PV_SHIFT: u64 = 63;
 
 const SCORE_MASK: u64 = 0xFFFF;
 const EVAL_MASK: u64 = 0xFFFF;
 const MOVE_MASK: u64 = 0xFFFF;
 const DEPTH_MASK: u64 = 0xFF;
 const BOUND_MASK: u64 = 0x3;
-const AGE_MASK: u64 = 0x3F;
+const AGE_MASK: u64 = 0x1F;
 
 const NO_EVAL: i16 = i16::MIN;
 const HASHFULL_SAMPLE_CLUSTERS: usize = 1000;
@@ -59,6 +60,7 @@ impl TTEntry {
         eval: Option<i32>,
         bound: Bound,
         best_move: Option<Move>,
+        is_pv: bool,
         age: u8,
     ) -> Self {
         let packed_score = u64::from(score as i16 as u16);
@@ -70,7 +72,8 @@ impl TTEntry {
             | (packed_move << MOVE_SHIFT)
             | (packed_depth << DEPTH_SHIFT)
             | ((bound as u64) << BOUND_SHIFT)
-            | ((u64::from(age) & AGE_MASK) << AGE_SHIFT);
+            | ((u64::from(age) & AGE_MASK) << AGE_SHIFT)
+            | (u64::from(is_pv) << PV_SHIFT);
         Self { data }
     }
 
@@ -99,6 +102,12 @@ impl TTEntry {
     #[inline(always)]
     pub fn bound(&self) -> Bound {
         Bound::from_bits((self.data >> BOUND_SHIFT) & BOUND_MASK)
+    }
+
+    /// Whether the position was on a principal variation when stored.
+    #[inline(always)]
+    pub fn is_pv(&self) -> bool {
+        (self.data >> PV_SHIFT) & 1 == 1
     }
 
     #[inline(always)]
@@ -151,7 +160,7 @@ struct TransTable {
     age: AtomicU8,
 }
 
-/// Age distance in the 6-bit wrapping generation counter.
+/// Age distance in the 5-bit wrapping generation counter.
 #[inline(always)]
 fn age_distance(current: u8, entry: u8) -> i32 {
     i32::from(current.wrapping_sub(entry) & AGE_MASK as u8)
@@ -226,9 +235,10 @@ impl SharedTransTable {
         eval: Option<i32>,
         bound: Bound,
         best_move: Option<Move>,
+        is_pv: bool,
     ) {
         let age = self.table.current_age();
-        let new_entry = TTEntry::pack(depth, score, eval, bound, best_move, age);
+        let new_entry = TTEntry::pack(depth, score, eval, bound, best_move, is_pv, age);
         let slots = &self.table.cluster(key).slots;
 
         for slot in slots {
@@ -236,7 +246,9 @@ impl SharedTransTable {
             if slot_key == key {
                 let existing = TTEntry { data };
                 if existing.age() == age || new_entry.depth() >= existing.depth() {
-                    slot.store(key, new_entry.data);
+                    let kept_move = best_move.or(existing.best_move());
+                    let entry = TTEntry::pack(depth, score, eval, bound, kept_move, is_pv, age);
+                    slot.store(key, entry.data);
                 }
                 return;
             }
@@ -316,6 +328,7 @@ mod tests {
             Some(56),
             Bound::Lower,
             Some(mv),
+            true,
         );
         let entry = tt.probe(0xDEAD_BEEF_1234_5678).unwrap();
 
@@ -324,12 +337,26 @@ mod tests {
         assert_eq!(entry.eval(), Some(56));
         assert_eq!(entry.bound(), Bound::Lower);
         assert_eq!(entry.best_move(), Some(mv));
+        assert!(entry.is_pv());
+    }
+
+    #[test]
+    fn storing_without_a_move_keeps_the_previous_move() {
+        let tt = SharedTransTable::new(1);
+        let mv = Move::quiet(12, 28);
+
+        tt.store(5, 6, 10, None, Bound::Lower, Some(mv), false);
+        tt.store(5, 7, -3, None, Bound::Upper, None, false);
+
+        let entry = tt.probe(5).unwrap();
+        assert_eq!(entry.best_move(), Some(mv));
+        assert_eq!(entry.bound(), Bound::Upper);
     }
 
     #[test]
     fn missing_eval_and_move_are_none() {
         let tt = SharedTransTable::new(1);
-        tt.store(42, 3, 0, None, Bound::Upper, None);
+        tt.store(42, 3, 0, None, Bound::Upper, None, false);
         let entry = tt.probe(42).unwrap();
         assert_eq!(entry.eval(), None);
         assert_eq!(entry.best_move(), None);
@@ -338,7 +365,7 @@ mod tests {
     #[test]
     fn probe_misses_unknown_key_and_clear_empties_table() {
         let tt = SharedTransTable::new(1);
-        tt.store(7, 1, 10, None, Bound::Exact, None);
+        tt.store(7, 1, 10, None, Bound::Exact, None, false);
         assert!(tt.probe(8).is_none());
         tt.clear();
         assert!(tt.probe(7).is_none());
@@ -347,9 +374,9 @@ mod tests {
     #[test]
     fn shallower_store_of_same_key_from_older_search_is_ignored() {
         let tt = SharedTransTable::new(1);
-        tt.store(99, 10, 1, None, Bound::Exact, None);
+        tt.store(99, 10, 1, None, Bound::Exact, None, false);
         tt.tick_age();
-        tt.store(99, 4, 2, None, Bound::Exact, None);
+        tt.store(99, 4, 2, None, Bound::Exact, None, false);
         assert_eq!(tt.probe(99).unwrap().depth(), 10);
     }
 
@@ -359,9 +386,9 @@ mod tests {
         // Small keys all map to cluster 0: the index uses the key's high bits.
         let keys: Vec<u64> = (1..=5).collect();
         for (depth, &key) in [9, 3, 7, 8].iter().zip(&keys) {
-            tt.store(key, *depth, 0, None, Bound::Exact, None);
+            tt.store(key, *depth, 0, None, Bound::Exact, None, false);
         }
-        tt.store(keys[4], 5, 0, None, Bound::Exact, None);
+        tt.store(keys[4], 5, 0, None, Bound::Exact, None, false);
         assert!(
             tt.probe(keys[1]).is_none(),
             "depth-3 entry should be evicted"

@@ -96,6 +96,7 @@ search_params! {
     lmr_tt_capture_x1024: "LmrTtCapture" = 1024, 0..=2048, step 64;
     lmr_child_cutoffs_x1024: "LmrChildCutoffs" = 1024, 0..=2048, step 64;
     child_cutoff_threshold: "ChildCutoffThreshold" = 3, 1..=8, step 1;
+    lmr_tt_pv_x1024: "LmrTtPv" = 1024, 0..=2048, step 64;
 }
 
 impl ParamSpec {
