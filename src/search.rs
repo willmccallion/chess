@@ -57,6 +57,19 @@ const LMR_HISTORY_DIVISOR: i32 = 8192;
 const DEEPER_MARGIN: i32 = 70;
 const SHALLOWER_MARGIN: i32 = 8;
 
+/// The search measures scores in units of 3/4 centipawn: its margins were set for an
+/// evaluation about 4/3 the size of Stockfish 18's centipawns.
+const SEARCH_UNITS_PER_CP_NUM: i32 = 4;
+const SEARCH_UNITS_PER_CP_DEN: i32 = 3;
+
+const fn cp_to_search_units(cp: i32) -> i32 {
+    cp * SEARCH_UNITS_PER_CP_NUM / SEARCH_UNITS_PER_CP_DEN
+}
+
+const fn search_units_to_cp(score: i32) -> i32 {
+    score * SEARCH_UNITS_PER_CP_DEN / SEARCH_UNITS_PER_CP_NUM
+}
+
 const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
 const NO_DEADLINE: u64 = u64::MAX;
 const TIME_CHECK_INTERVAL: u64 = 2048;
@@ -492,7 +505,7 @@ impl Search<'_> {
 
     /// Static eval for the current node, reusing the TT's copy when it has one.
     fn static_eval(&mut self, tt_eval: Option<i32>) -> i32 {
-        tt_eval.unwrap_or_else(|| evaluate(&mut self.board))
+        tt_eval.unwrap_or_else(|| cp_to_search_units(evaluate(&mut self.board)))
     }
 
     /// Static eval adjusted by what searches have learned about this pawn structure.
@@ -644,7 +657,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         return 0;
     }
     if s.ply >= MAX_PLY - 1 {
-        return evaluate(&mut s.board);
+        return cp_to_search_units(evaluate(&mut s.board));
     }
 
     let is_pv = beta - alpha > 1;
@@ -893,7 +906,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             return DRAW_SCORE;
         }
         if s.ply >= MAX_PLY - 1 {
-            return evaluate(&mut s.board);
+            return cp_to_search_units(evaluate(&mut s.board));
         }
         alpha = alpha.max(-MATE_SCORE + s.ply as i32);
         beta = beta.min(MATE_SCORE - s.ply as i32 - 1);
@@ -1247,7 +1260,7 @@ fn format_score(score: i32) -> String {
         let mate_in = (MATE_SCORE - score.abs() + 1) / 2;
         format!("mate {}", if score > 0 { mate_in } else { -mate_in })
     } else {
-        format!("cp {}", score)
+        format!("cp {}", search_units_to_cp(score))
     }
 }
 
