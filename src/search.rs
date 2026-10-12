@@ -1,6 +1,6 @@
 use crate::board::Board;
 use crate::nnue::evaluate;
-use crate::see::see;
+use crate::see::{see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
 use crate::types::{MAX_MOVES, Move, MoveList, Piece, PieceKind};
@@ -16,12 +16,18 @@ const INFINITY: i32 = MATE_SCORE + 1;
 const MAX_PLY: usize = 128;
 const DRAW_SCORE: i32 = 0;
 
-const FUTILITY_MARGIN: [i32; 8] = [0, 62, 125, 225, 350, 475, 600, 750];
-const LMP_LIMITS: [i32; 4] = [0, 3, 5, 8];
-const HISTORY_PRUNE_THRESHOLD: i32 = 4000;
-const IID_MIN_DEPTH: i32 = 5;
-const RAZORING_MARGIN: i32 = 200;
-const RAZORING_DEPTH_MARGIN: i32 = 50;
+const RFP_MAX_DEPTH: i32 = 8;
+const RFP_MARGIN: i32 = 80;
+const RAZORING_MARGIN: i32 = 400;
+const RAZORING_DEPTH_SQ_MARGIN: i32 = 250;
+const NMP_MIN_DEPTH: i32 = 3;
+const NMP_EVAL_DIVISOR: i32 = 200;
+const IIR_MIN_DEPTH: i32 = 4;
+const MOVE_PRUNING_MAX_DEPTH: i32 = 8;
+const FUTILITY_BASE: i32 = 100;
+const FUTILITY_PER_DEPTH: i32 = 100;
+const SEE_QUIET_MARGIN: i32 = -50;
+const SEE_CAPTURE_MARGIN: i32 = -90;
 const DELTA_MARGIN: i32 = 200;
 const ASPIRATION_WINDOW: i32 = 20;
 
@@ -316,6 +322,26 @@ fn has_non_pawn_material(board: &Board) -> bool {
 }
 
 impl Search<'_> {
+    /// Static eval is better than two plies ago (four if that node was in check).
+    fn is_improving(&self, static_eval: Option<i32>) -> bool {
+        let Some(eval) = static_eval else {
+            return false;
+        };
+        let earlier = |back: usize| {
+            self.ply
+                .checked_sub(back)
+                .map(|ply| self.stack[ply].static_eval)
+        };
+        match earlier(2) {
+            Some(Some(previous)) => eval > previous,
+            Some(None) => match earlier(4) {
+                Some(Some(previous)) => eval > previous,
+                _ => true,
+            },
+            None => true,
+        }
+    }
+
     fn previous_move(&self) -> Option<Move> {
         if self.ply == 0 {
             None
@@ -435,7 +461,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 continue;
             }
         }
-        if m.capture && see(&s.board, m) < 0 {
+        if m.capture && !see_ge(&s.board, m, 0) {
             continue;
         }
 
@@ -537,7 +563,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
     let key = s.board.zobrist;
 
     let tt_entry = s.tt.probe(key);
-    let mut tt_move = tt_entry.and_then(|e| e.best_move());
+    let tt_move = tt_entry.and_then(|e| e.best_move());
     if let Some(entry) = tt_entry {
         let tt_score = score_from_tt(entry.score(), s.ply);
         if !is_pv
@@ -574,19 +600,27 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
         _ => raw_eval,
     };
 
+    let improving = s.is_improving(raw_eval);
+
     if !is_pv && let Some(eval) = eval {
-        if depth <= 3 && eval + RAZORING_MARGIN + RAZORING_DEPTH_MARGIN * depth < alpha {
+        if eval < alpha - RAZORING_MARGIN - RAZORING_DEPTH_SQ_MARGIN * depth * depth {
             let q_score = quiesce(s, alpha, beta);
             if q_score < alpha {
                 return q_score;
             }
         }
-        if depth < 8 && eval - FUTILITY_MARGIN[depth as usize] >= beta {
+
+        if depth <= RFP_MAX_DEPTH && eval - RFP_MARGIN * (depth - i32::from(improving)) >= beta {
             return eval;
         }
 
-        if depth >= 3 && has_non_pawn_material(&s.board) {
-            let r = 3 + depth / 6;
+        let previous_was_null = !is_root && s.stack[s.ply - 1].current_move.is_none();
+        if depth >= NMP_MIN_DEPTH
+            && eval >= beta
+            && !previous_was_null
+            && has_non_pawn_material(&s.board)
+        {
+            let r = 4 + depth / 3 + ((eval - beta) / NMP_EVAL_DIVISOR).min(3);
             let undo = s.board.make_null_move();
             s.stack[s.ply].current_move = None;
             s.ply += 1;
@@ -597,24 +631,13 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
                 return 0;
             }
             if null_score >= beta {
-                let safe_score = if null_score > MATE_THRESHOLD { beta } else { null_score };
-                if depth < 10 {
-                    return safe_score;
-                }
-                let verification_score = negamax(s, beta - 1, beta, depth - 6);
-                if verification_score >= beta {
-                    return safe_score;
-                }
+                return if null_score > MATE_THRESHOLD { beta } else { null_score };
             }
         }
     }
 
-    if is_pv && depth >= IID_MIN_DEPTH && tt_move.is_none() {
-        let _ = negamax(s, alpha, beta, depth - 2);
-        if s.tm.check_hard_limit() {
-            return 0;
-        }
-        tt_move = s.tt.probe(key).and_then(|e| e.best_move());
+    if depth >= IIR_MIN_DEPTH && tt_move.is_none() {
+        depth -= 1;
     }
 
     let killer1 = s.killers[s.ply][0];
@@ -633,21 +656,38 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
     let mut searched_quiets = [Move::default(); 128];
     let mut num_searched_quiets: usize = 0;
 
+    let lmp_limit = (3 + depth * depth) / (2 - i32::from(improving));
+    let mut quiets_seen = 0;
+
     while let Some(m) = picker.next(&s.board, &s.td.history) {
         let is_quiet = !m.capture && m.promotion.is_none();
-        if moves_searched > 0 && !in_check && is_quiet {
-            if !is_pv && depth <= 3 && moves_searched >= LMP_LIMITS[depth as usize] {
-                continue;
-            }
-            if depth <= 2 {
-                let piece_idx = s.board.piece_on[m.from as usize].index();
-                if s.td.history[piece_idx][m.to as usize] < -HISTORY_PRUNE_THRESHOLD {
+        if is_quiet {
+            quiets_seen += 1;
+        }
+
+        let can_prune = !is_root && !in_check && moves_searched > 0 && best_score > -MATE_THRESHOLD;
+        if can_prune && let Some(eval) = eval {
+            if is_quiet {
+                if quiets_seen > lmp_limit {
+                    picker.skip_quiets();
                     continue;
                 }
+                if depth <= MOVE_PRUNING_MAX_DEPTH
+                    && eval + FUTILITY_BASE + FUTILITY_PER_DEPTH * depth <= alpha
+                {
+                    picker.skip_quiets();
+                    continue;
+                }
+                if depth <= MOVE_PRUNING_MAX_DEPTH
+                    && !see_ge(&s.board, m, SEE_QUIET_MARGIN * depth * depth)
+                {
+                    continue;
+                }
+            } else if depth <= MOVE_PRUNING_MAX_DEPTH
+                && !see_ge(&s.board, m, SEE_CAPTURE_MARGIN * depth)
+            {
+                continue;
             }
-        }
-        if moves_searched > 0 && depth < 8 && !in_check && m.capture && see(&s.board, m) < 0 {
-            continue;
         }
 
         let moved_piece = s.board.piece_on[m.from as usize];

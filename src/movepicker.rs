@@ -34,9 +34,24 @@ pub struct MovePicker {
 
     bad_captures: StackVec<Move, MAX_BAD_CAPTURES>,
     bad_idx: usize,
+    skip_quiets: bool,
+}
+
+impl Stage {
+    fn is_quiet_stage(self) -> bool {
+        matches!(
+            self,
+            Stage::Killer1 | Stage::Killer2 | Stage::CounterMove | Stage::GenQuiets | Stage::Quiets
+        )
+    }
 }
 
 impl MovePicker {
+    /// Stops yielding quiet moves (killers and counter-move included); captures continue.
+    pub fn skip_quiets(&mut self) {
+        self.skip_quiets = true;
+    }
+
     pub fn new(
         tt_move: Option<Move>,
         killer1: Option<Move>,
@@ -58,11 +73,15 @@ impl MovePicker {
             idx: 0,
             bad_captures: StackVec::default(),
             bad_idx: 0,
+            skip_quiets: false,
         }
     }
 
     pub fn next(&mut self, board: &Board, history: &[[i32; 64]; 13]) -> Option<Move> {
         loop {
+            if self.skip_quiets && self.stage.is_quiet_stage() {
+                self.stage = Stage::BadCaptures;
+            }
             match self.stage {
                 Stage::TtMove => {
                     self.stage = Stage::GenCaptures;
