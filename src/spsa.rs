@@ -7,7 +7,7 @@
 
 use crate::game_runner::{GameConfig, GameEndReason, GameResult, play_game};
 use crate::search_params::{PARAM_SPECS, ParamSpec};
-use crate::tournament::spawn_and_init;
+use crate::tournament::spawn_and_init_pinned;
 use crate::uci_client::UciEngine;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -27,6 +27,35 @@ const R_END: f64 = 0.002;
 const REPORT_EVERY: usize = 20;
 const MAX_MOVES: usize = 300;
 
+/// Workers whose engines all run on one set of CPUs, so both sides of a pair run at the
+/// same speed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerGroup {
+    /// CPU list in taskset syntax; `None` leaves the engines unpinned.
+    pub cpus: Option<String>,
+    pub count: usize,
+}
+
+/// Parses `cpus:count[,cpus:count...]`, e.g. `0-15:8,16-27:10`.
+pub fn parse_worker_groups(spec: &str) -> Result<Vec<WorkerGroup>, String> {
+    spec.split(',')
+        .map(|group| {
+            let (cpus, count) = group
+                .rsplit_once(':')
+                .ok_or_else(|| format!("expected cpus:count, got '{group}'"))?;
+            let valid_cpus = !cpus.is_empty() && cpus.chars().all(|c| c.is_ascii_digit() || c == '-');
+            if !valid_cpus {
+                return Err(format!("invalid CPU list '{cpus}'"));
+            }
+            let count = count.parse::<usize>().map_err(|e| format!("'{count}': {e}"))?;
+            Ok(WorkerGroup {
+                cpus: Some(cpus.to_string()),
+                count,
+            })
+        })
+        .collect()
+}
+
 pub struct SpsaConfig {
     pub engine: String,
     pub engine_options: Vec<(String, String)>,
@@ -35,7 +64,7 @@ pub struct SpsaConfig {
     pub pairs: usize,
     pub base_time_ms: u64,
     pub increment_ms: u64,
-    pub concurrency: usize,
+    pub workers: Vec<WorkerGroup>,
     pub seed: u64,
     /// Where the current estimate is written; also accepted by `resume`.
     pub output: PathBuf,
@@ -213,9 +242,15 @@ fn report(estimate: &Estimate, config: &SpsaConfig, started: Instant) {
     }
 }
 
-fn worker(config: &SpsaConfig, estimate: &Mutex<Estimate>, started: Instant) -> Result<(), String> {
-    let mut plus = spawn_and_init(&config.engine, &config.engine_options)?;
-    let mut minus = spawn_and_init(&config.engine, &config.engine_options)?;
+fn worker(
+    config: &SpsaConfig,
+    cpus: Option<&str>,
+    estimate: &Mutex<Estimate>,
+    started: Instant,
+) -> Result<(), String> {
+    let spawn = || spawn_and_init_pinned(&config.engine, &config.engine_options, cpus);
+    let mut plus = spawn()?;
+    let mut minus = spawn()?;
     loop {
         let job = {
             let mut state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
@@ -236,8 +271,8 @@ fn worker(config: &SpsaConfig, estimate: &Mutex<Estimate>, started: Instant) -> 
             }
             None => {
                 eprintln!("engine crashed; restarting both and discarding the pair");
-                plus = spawn_and_init(&config.engine, &config.engine_options)?;
-                minus = spawn_and_init(&config.engine, &config.engine_options)?;
+                plus = spawn()?;
+                minus = spawn()?;
             }
         }
     }
@@ -265,19 +300,26 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
     let estimate = Arc::new(estimate);
     let started = Instant::now();
 
+    let total_workers: usize = config.workers.iter().map(|group| group.count).sum();
+    if total_workers == 0 {
+        return Err("no workers".to_string());
+    }
     println!(
         "SPSA: {} parameters, {} pairs at {}+{}ms, {} workers, writing {}",
         PARAM_SPECS.len(),
         config.pairs,
         config.base_time_ms,
         config.increment_ms,
-        config.concurrency,
+        total_workers,
         config.output.display()
     );
-    let handles: Vec<_> = (0..config.concurrency.max(1))
-        .map(|_| {
+    let handles: Vec<_> = config
+        .workers
+        .iter()
+        .flat_map(|group| std::iter::repeat_n(group.cpus.clone(), group.count))
+        .map(|cpus| {
             let (config, estimate) = (Arc::clone(&config), Arc::clone(&estimate));
-            thread::spawn(move || worker(&config, &estimate, started))
+            thread::spawn(move || worker(&config, cpus.as_deref(), &estimate, started))
         })
         .collect();
     for handle in handles {
@@ -296,6 +338,17 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_groups_parse_cpu_lists_and_counts() {
+        let groups = parse_worker_groups("0-15:8,16-27:10").unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0], WorkerGroup { cpus: Some("0-15".into()), count: 8 });
+        assert_eq!(groups[1].count, 10);
+        assert!(parse_worker_groups("0-15").is_err());
+        assert!(parse_worker_groups("a-b:3").is_err());
+    }
 
     #[test]
     fn schedule_ends_at_one_step_and_the_final_rate() {
@@ -330,7 +383,7 @@ mod tests {
             pairs: 100,
             base_time_ms: 0,
             increment_ms: 0,
-            concurrency: 1,
+            workers: Vec::new(),
             seed: 3,
             output: PathBuf::new(),
             start: Vec::new(),

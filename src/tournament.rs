@@ -167,8 +167,17 @@ fn format_pct(n: usize, total: usize) -> String {
     }
 }
 
-pub(crate) fn spawn_and_init(path: &str, options: &[(String, String)]) -> Result<UciEngine, String> {
-    let mut engine = UciEngine::spawn(path)?;
+fn spawn_and_init(path: &str, options: &[(String, String)]) -> Result<UciEngine, String> {
+    spawn_and_init_pinned(path, options, None)
+}
+
+/// Starts and configures an engine, restricted to the CPU list `cpus` if given.
+pub(crate) fn spawn_and_init_pinned(
+    path: &str,
+    options: &[(String, String)],
+    cpus: Option<&str>,
+) -> Result<UciEngine, String> {
+    let mut engine = UciEngine::spawn_pinned(path, cpus)?;
     engine.init_uci()?;
     if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("Threads")) {
         engine.set_options(&[("Threads".to_string(), "1".to_string())])?;

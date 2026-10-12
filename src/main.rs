@@ -174,8 +174,13 @@ enum Cmd {
         /// Increment per move in milliseconds
         #[arg(long, default_value_t = 50)]
         inc: u64,
+        /// Unpinned workers, used when --workers is not given
         #[arg(long, default_value_t = 8)]
         concurrency: usize,
+        /// Pinned worker groups as cpus:count, e.g. "0-15:8,16-27:10"; both engines of a
+        /// pair run on the same group
+        #[arg(long)]
+        workers: Option<String>,
         #[arg(long, default_value_t = 1)]
         seed: u64,
         /// File the current estimate is written to
@@ -407,11 +412,16 @@ fn main() {
             time,
             inc,
             concurrency,
+            workers,
             seed,
             output,
             resume,
             options,
         } => {
+            let workers = match workers {
+                Some(spec) => spsa::parse_worker_groups(&spec).unwrap_or_else(|e| exit_with_error(&e)),
+                None => vec![spsa::WorkerGroup { cpus: None, count: concurrency }],
+            };
             let engine = engine
                 .or_else(|| std::env::current_exe().ok().map(|p| p.display().to_string()))
                 .unwrap_or_else(|| exit_with_error("cannot locate the engine binary; pass --engine"));
@@ -436,7 +446,7 @@ fn main() {
                 pairs,
                 base_time_ms: time,
                 increment_ms: inc,
-                concurrency,
+                workers,
                 seed,
                 output: output.into(),
                 start,

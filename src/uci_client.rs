@@ -86,15 +86,28 @@ pub struct UciEngine {
 
 impl UciEngine {
     pub fn spawn(path: &str) -> Result<Self, String> {
-        let mut child = Command::new(path)
+        Self::spawn_pinned(path, None)
+    }
+
+    /// Starts the engine, restricted to the CPU list `cpus` (taskset syntax) if given.
+    pub fn spawn_pinned(path: &str, cpus: Option<&str>) -> Result<Self, String> {
+        let mut command = match cpus {
+            Some(cpus) => {
+                let mut taskset = Command::new("taskset");
+                taskset.args(["-c", cpus, path]);
+                taskset
+            }
+            None => Command::new(path),
+        };
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to spawn '{}': {}", path, e))?;
 
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().ok_or_else(|| format!("{path}: no stdin pipe"))?;
+        let stdout = child.stdout.take().ok_or_else(|| format!("{path}: no stdout pipe"))?;
 
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
