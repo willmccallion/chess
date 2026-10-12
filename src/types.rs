@@ -366,6 +366,7 @@ pub struct Undo {
     pub old_castle: u8,
     pub old_en_passant_sq: i32,
     pub old_halfmove_clock: i32,
+    pub old_plies_from_null: u32,
 }
 
 pub const WK_CASTLE: u8 = 1 << 0;

@@ -16,6 +16,8 @@ pub struct Board {
     pub en_passant_sq: i32,
     pub halfmove_clock: i32,
     pub fullmove_number: i32,
+    /// Plies since the last null move; positions before it cannot repeat.
+    pub plies_from_null: u32,
     pub history: Vec<ZKey>,
     pub zobrist: ZKey,
     pub accumulator: Accumulator,
@@ -34,6 +36,7 @@ impl Board {
             en_passant_sq: NO_SQ,
             halfmove_clock: 0,
             fullmove_number: 1,
+            plies_from_null: 0,
             history: Vec::with_capacity(128),
             zobrist: 0,
             accumulator: Accumulator::default(),
@@ -97,27 +100,49 @@ impl Board {
         self.zobrist = h;
     }
 
+    /// Number of earlier occurrences of the current position since the last irreversible move.
     #[inline]
     pub fn count_repetitions(&self) -> usize {
         let current_key = self.zobrist;
-        let mut count = 0;
-        for &key in self
-            .history
+        self.history
             .iter()
             .rev()
-            .take(self.halfmove_clock as usize)
+            .take(self.halfmove_clock as usize + 1)
             .skip(1)
-        {
-            if key == current_key {
-                count += 1;
-            }
-        }
-        count
+            .filter(|&&key| key == current_key)
+            .count()
     }
 
+    /// Threefold repetition, for adjudicating games.
     #[inline]
     pub fn is_draw_by_repetition(&self) -> bool {
         self.count_repetitions() >= 2
+    }
+
+    /// Repetition draw inside search: any repeat of a position reached after the root,
+    /// or a threefold repetition involving positions before the root.
+    #[inline]
+    pub fn is_repetition(&self, plies_from_root: usize) -> bool {
+        let reachable = (self.halfmove_clock.max(0) as usize)
+            .min(self.plies_from_null as usize)
+            .min(self.history.len().saturating_sub(1));
+        let current_key = self.zobrist;
+        let last = self.history.len() - 1;
+        let mut occurrences_before_root = 0;
+        let mut distance = 4;
+        while distance <= reachable {
+            if self.history[last - distance] == current_key {
+                if distance < plies_from_root {
+                    return true;
+                }
+                occurrences_before_root += 1;
+                if occurrences_before_root == 2 {
+                    return true;
+                }
+            }
+            distance += 2;
+        }
+        false
     }
 
     #[inline]
@@ -1130,7 +1155,9 @@ impl Board {
             old_castle: self.castle,
             old_en_passant_sq: self.en_passant_sq,
             old_halfmove_clock: self.halfmove_clock,
+            old_plies_from_null: self.plies_from_null,
         };
+        self.plies_from_null += 1;
 
         let mut updates = [UpdateBody {
             piece: Piece::Empty,
@@ -1439,6 +1466,7 @@ impl Board {
         self.castle = u.old_castle;
         self.en_passant_sq = u.old_en_passant_sq;
         self.halfmove_clock = u.old_halfmove_clock;
+        self.plies_from_null = u.old_plies_from_null;
 
         self.piece_on[from] = moving_piece;
         self.piece_bb[moving_piece.index()] |= 1u64 << from;
@@ -1520,7 +1548,9 @@ impl Board {
             old_castle: self.castle,
             old_en_passant_sq: self.en_passant_sq,
             old_halfmove_clock: self.halfmove_clock,
+            old_plies_from_null: self.plies_from_null,
         };
+        self.plies_from_null = 0;
 
         if self.en_passant_sq != NO_SQ {
             self.zobrist ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
@@ -1542,6 +1572,7 @@ impl Board {
         self.turn = self.turn.other();
         self.en_passant_sq = u.old_en_passant_sq;
         self.halfmove_clock = u.old_halfmove_clock;
+        self.plies_from_null = u.old_plies_from_null;
     }
 
     #[inline]
@@ -1712,6 +1743,65 @@ mod tests {
     #[test]
     fn test_split_generators_position5() {
         assert_split_equals_all("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8");
+    }
+
+    fn play(board: &mut Board, moves: &[&str]) {
+        for mv in moves {
+            let m = crate::uci_io::parse_uci_move(board, mv).unwrap();
+            board.make_move(m);
+        }
+    }
+
+    const KNIGHT_SHUFFLE: [&str; 4] = ["g1f3", "g8f6", "f3g1", "f6g8"];
+
+    #[test]
+    fn single_repeat_before_root_is_not_a_search_draw() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        play(&mut board, &KNIGHT_SHUFFLE);
+        assert!(!board.is_repetition(0));
+    }
+
+    #[test]
+    fn single_repeat_inside_search_tree_is_a_draw() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        play(&mut board, &KNIGHT_SHUFFLE);
+        assert!(board.is_repetition(KNIGHT_SHUFFLE.len() + 1));
+    }
+
+    #[test]
+    fn threefold_before_root_is_a_draw() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        play(&mut board, &KNIGHT_SHUFFLE);
+        play(&mut board, &KNIGHT_SHUFFLE);
+        assert!(board.is_repetition(0));
+        assert!(board.is_draw_by_repetition());
+    }
+
+    #[test]
+    fn null_move_resets_and_restores_plies_from_null() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        play(&mut board, &KNIGHT_SHUFFLE[..2]);
+        let undo = board.make_null_move();
+        assert_eq!(board.plies_from_null, 0);
+        board.unmake_null_move(undo);
+        assert_eq!(board.plies_from_null, 2);
+    }
+
+    #[test]
+    fn repetition_does_not_look_past_a_null_move() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        play(&mut board, &KNIGHT_SHUFFLE);
+        board.plies_from_null = 3;
+        assert!(!board.is_repetition(KNIGHT_SHUFFLE.len() + 1));
+    }
+
+    #[test]
+    fn game_level_repetition_counts_position_after_last_irreversible_move() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        play(&mut board, &["e2e3"]);
+        play(&mut board, &["g8f6", "g1f3", "f6g8", "f3g1"]);
+        play(&mut board, &["g8f6", "g1f3", "f6g8", "f3g1"]);
+        assert!(board.is_draw_by_repetition());
     }
 
     #[test]
