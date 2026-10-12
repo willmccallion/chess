@@ -146,6 +146,7 @@ fn parse_position(rest: &str) -> Board {
             };
             board.make_move(mv);
         }
+        board.forget_accumulator_history();
     }
     board
 }

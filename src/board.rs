@@ -1361,6 +1361,11 @@ impl Board {
         }
     }
 
+    /// Drops the accumulators of earlier positions; the current one is recomputed on demand.
+    pub fn forget_accumulator_history(&mut self) {
+        self.accumulators.reset();
+    }
+
     /// The NNUE accumulators and the position they describe, borrowed together.
     pub fn accumulators_and_view(&mut self) -> (&mut AccumulatorStack, PositionView<'_>) {
         let position = PositionView {
