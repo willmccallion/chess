@@ -4,7 +4,7 @@ use chess::compare::{CompareConfig, run_compare};
 use chess::nnue;
 use chess::openings;
 use chess::perft::{divide, perft};
-use chess::search::{SearchControl, SearchLimits, search};
+use chess::search::{SearchControl, SearchLimits, SearchThreads, search};
 use chess::sprt::SprtConfig;
 use chess::tournament::{self, TournamentConfig};
 use chess::time::TimeBudget;
@@ -354,6 +354,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
 
         let tt_size_mb = 1024;
         let tt = SharedTransTable::new(tt_size_mb);
+        let mut search_threads = SearchThreads::new(threads_count);
 
         println!("\nGame {}/{}", i, rounds);
         println!("Starting FEN: {}", b.to_fen());
@@ -398,7 +399,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
                 max_depth,
                 wait_for_stop: false,
             };
-            let engine_move_opt = search(&b, &tt, limits, threads_count, &control).best_move;
+            let engine_move_opt = search(&b, &tt, limits, &mut search_threads, &control).best_move;
 
             let engine_move = if let Some(m) = engine_move_opt {
                 m
@@ -434,6 +435,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
 
     let tt_size_mb = 1024;
     let tt = SharedTransTable::new(tt_size_mb);
+    let mut search_threads = SearchThreads::new(threads_count);
 
     struct PonderState {
         handle: Option<thread::JoinHandle<()>>,
@@ -535,7 +537,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
             max_depth,
             wait_for_stop: false,
         };
-        let result = search(b, &tt, limits, threads_count, &control);
+        let result = search(b, &tt, limits, &mut search_threads, &control);
         let engine_move_opt = result.best_move;
 
         let engine_move = if let Some(m) = engine_move_opt {
@@ -568,7 +570,8 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
                 let _ = thread::Builder::new()
                     .name("ponder-cli".to_string())
                     .spawn(move || {
-                        search(&ponder_board, &tt_clone, ponder_limits, threads_count, &thread_control);
+                        let mut ponder_threads = SearchThreads::new(threads_count);
+                        search(&ponder_board, &tt_clone, ponder_limits, &mut ponder_threads, &thread_control);
                     })
                     .map(|h| {
                         ponder_state.handle = Some(h);

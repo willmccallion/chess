@@ -1,7 +1,7 @@
 use crate::board::Board;
 use crate::nnue;
 use crate::opening_book::get_book_move;
-use crate::search::{SearchControl, SearchLimits, search};
+use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
 use crate::types::START_FEN;
@@ -58,18 +58,23 @@ fn send(line: &str) {
     let _ = io::stdout().flush();
 }
 
-/// A `go` running on a worker thread; the worker prints `bestmove` when it finishes.
+/// A `go` running on a worker thread; the worker prints `bestmove` when it finishes
+/// and hands the per-thread search state back.
 struct ActiveSearch {
-    handle: JoinHandle<()>,
+    handle: JoinHandle<SearchThreads>,
     control: Arc<SearchControl>,
     /// Budget to start when `ponderhit` arrives.
     ponder_budget: Option<TimeBudget>,
 }
 
-fn stop_search(active: &mut Option<ActiveSearch>) {
+/// Stops any running search and returns its thread state to `threads`.
+fn stop_search(active: &mut Option<ActiveSearch>, threads: &mut Option<SearchThreads>, count: usize) {
     if let Some(search) = active.take() {
         search.control.stop();
-        let _ = search.handle.join();
+        *threads = search.handle.join().ok();
+    }
+    if threads.as_ref().is_none_or(|t| t.count() != count) {
+        *threads = Some(SearchThreads::new(count));
     }
 }
 
@@ -123,6 +128,7 @@ fn start_search(
     board: &Board,
     tt: &SharedTransTable,
     options: &Options,
+    mut threads: SearchThreads,
     go_args: &str,
 ) -> ActiveSearch {
     let is_ponder = has_token(go_args, "ponder");
@@ -163,11 +169,10 @@ fn start_search(
     };
     let board = board.clone();
     let tt = tt.clone();
-    let threads = options.threads;
     let worker_control = Arc::clone(&control);
 
     let handle = thread::spawn(move || {
-        let result = search(&board, &tt, limits, threads, &worker_control);
+        let result = search(&board, &tt, limits, &mut threads, &worker_control);
         match (result.best_move, result.ponder_move) {
             (Some(best), Some(ponder)) => send(&format!(
                 "bestmove {} ponder {}",
@@ -177,6 +182,7 @@ fn start_search(
             (Some(best), None) => send(&format!("bestmove {}", format_uci(best))),
             (None, _) => send("bestmove 0000"),
         }
+        threads
     });
 
     ActiveSearch {
@@ -232,6 +238,7 @@ pub fn run_uci() {
     };
     let mut tt = SharedTransTable::new(options.hash_mb);
     let mut active: Option<ActiveSearch> = None;
+    let mut threads = Some(SearchThreads::new(options.threads));
 
     let stdin = io::stdin();
     let mut line = String::new();
@@ -253,21 +260,24 @@ pub fn run_uci() {
             }
             "isready" => send("readyok"),
             "ucinewgame" => {
-                stop_search(&mut active);
+                stop_search(&mut active, &mut threads, options.threads);
                 tt.clear();
+                if let Some(t) = threads.as_mut() {
+                    t.clear();
+                }
             }
             "setoption" => {
-                stop_search(&mut active);
+                stop_search(&mut active, &mut threads, options.threads);
                 if let Some((name, value)) = parse_setoption(rest) {
                     apply_option(&name, &value, &mut options, &mut tt);
                 }
             }
             "position" => {
-                stop_search(&mut active);
+                stop_search(&mut active, &mut threads, options.threads);
                 board = parse_position(rest);
             }
             "go" => {
-                stop_search(&mut active);
+                stop_search(&mut active, &mut threads, options.threads);
                 if options.own_book
                     && !has_token(rest, "infinite")
                     && let Some(book_uci) = get_book_move(&board)
@@ -275,7 +285,10 @@ pub fn run_uci() {
                     send(&format!("bestmove {book_uci}"));
                     continue;
                 }
-                active = Some(start_search(&board, &tt, &options, rest));
+                let search_threads = threads
+                    .take()
+                    .unwrap_or_else(|| SearchThreads::new(options.threads));
+                active = Some(start_search(&board, &tt, &options, search_threads, rest));
             }
             "ponderhit" => {
                 if let Some(search) = &active {
@@ -285,11 +298,11 @@ pub fn run_uci() {
                     }
                 }
             }
-            "stop" => stop_search(&mut active),
+            "stop" => stop_search(&mut active, &mut threads, options.threads),
             "eval" => print_eval(&board),
             "quit" => break,
             _ => {}
         }
     }
-    stop_search(&mut active);
+    stop_search(&mut active, &mut threads, options.threads);
 }

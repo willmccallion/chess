@@ -469,9 +469,12 @@ unsafe fn sub_weight_neon(acc: &mut [i16], weights: &[i16], idx: usize) {
 }
 
 #[inline]
+/// Network output to centipawns: Stockfish 12 divides by `FV_SCALE` (16) to get internal
+/// units, in which an endgame pawn is worth 208.
 fn nn_value_to_centipawn(nn_value: i32) -> i32 {
-    let v = nn_value / 8;
-    (v * 100) / 208
+    const FV_SCALE: i32 = 16;
+    const PAWN_VALUE_EG: i32 = 208;
+    nn_value / FV_SCALE * 100 / PAWN_VALUE_EG
 }
 
 #[cfg(test)]

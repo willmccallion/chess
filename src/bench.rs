@@ -1,7 +1,7 @@
 //! Fixed-depth search over a set of positions; the node total is a search signature.
 
 use crate::board::Board;
-use crate::search::{SearchControl, SearchLimits, search};
+use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
 use crate::tt::SharedTransTable;
 use std::time::Instant;
 
@@ -68,7 +68,8 @@ pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
         let board = Board::from_fen(fen)?;
         tt.clear();
         let control = SearchControl::new(None);
-        nodes += search(&board, &tt, limits, 1, &control).nodes;
+        let mut threads = SearchThreads::new(1);
+        nodes += search(&board, &tt, limits, &mut threads, &control).nodes;
     }
 
     Ok(BenchResult {
