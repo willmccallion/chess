@@ -32,6 +32,11 @@ const FUTILITY_PER_DEPTH: i32 = 100;
 const SEE_QUIET_MARGIN: i32 = -50;
 const SEE_CAPTURE_MARGIN: i32 = -90;
 const DELTA_MARGIN: i32 = 200;
+const PROBCUT_MIN_DEPTH: i32 = 5;
+const PROBCUT_MARGIN: i32 = 200;
+const PROBCUT_DEPTH_REDUCTION: i32 = 4;
+const HISTORY_PRUNING_MAX_DEPTH: i32 = 4;
+const HISTORY_PRUNING_PER_DEPTH: i32 = -2048;
 const ASPIRATION_DELTA: i32 = 25;
 const ASPIRATION_MIN_DEPTH: usize = 4;
 const SINGULAR_MIN_DEPTH: i32 = 8;
@@ -733,6 +738,57 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &Legali
     best_score
 }
 
+enum ProbCut {
+    Cutoff(i32),
+    NoCutoff,
+    Aborted,
+}
+
+/// Looks for a capture that beats `probcut_beta` in quiescence and then in a reduced
+/// search; if one exists the node almost certainly fails high at full depth too.
+fn probcut(
+    s: &mut Search,
+    legality: &LegalityInfo,
+    depth: i32,
+    probcut_beta: i32,
+    static_eval: i32,
+    cut_node: bool,
+) -> ProbCut {
+    use crate::movepicker::QMovePicker;
+
+    let probe_depth = depth - PROBCUT_DEPTH_REDUCTION;
+    let mut picker = QMovePicker::new();
+    while let Some(m) = picker.next(&s.board) {
+        if !see_ge(&s.board, m, probcut_beta - static_eval) {
+            continue;
+        }
+        let Some(undo) = s.make_move(m, legality) else {
+            continue;
+        };
+        let mut score = -quiesce(s, -probcut_beta, -probcut_beta + 1);
+        if score >= probcut_beta {
+            score = -negamax(s, -probcut_beta, -probcut_beta + 1, probe_depth, !cut_node);
+        }
+        s.unmake_move(m, undo);
+
+        if s.tm.check_hard_limit() {
+            return ProbCut::Aborted;
+        }
+        if score >= probcut_beta {
+            s.tt.store(
+                s.board.zobrist,
+                (probe_depth + 1) as i16,
+                score_to_tt(score, s.ply),
+                None,
+                Bound::Lower,
+                Some(m),
+            );
+            return ProbCut::Cutoff(score);
+        }
+    }
+    ProbCut::NoCutoff
+}
+
 enum Singularity {
     /// Search the move this many plies deeper (negative: shallower).
     Extend(i32),
@@ -898,6 +954,27 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
     }
 
+    if !is_pv
+        && !in_check
+        && excluded_move.is_none()
+        && depth >= PROBCUT_MIN_DEPTH
+        && beta.abs() < MATE_THRESHOLD
+        && let Some(static_eval) = corrected_eval
+    {
+        let probcut_beta = beta + PROBCUT_MARGIN;
+        let tt_rules_out_probcut = tt_entry.is_some_and(|entry| {
+            i32::from(entry.depth()) >= depth - 3
+                && score_from_tt(entry.score(), s.ply) < probcut_beta
+        });
+        if !tt_rules_out_probcut {
+            match probcut(s, &legality, depth, probcut_beta, static_eval, cut_node) {
+                ProbCut::Cutoff(score) => return score,
+                ProbCut::Aborted => return 0,
+                ProbCut::NoCutoff => {}
+            }
+        }
+    }
+
     if depth >= IIR_MIN_DEPTH && tt_move.is_none() && excluded_move.is_none() {
         depth -= 1;
     }
@@ -937,11 +1014,28 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             quiets_seen += 1;
         }
 
+        let quiet_history = if is_quiet {
+            let piece = s.board.piece_on[m.from as usize];
+            s.td.histories.butterfly(s.board.turn, m)
+                + continuations
+                    .iter()
+                    .flatten()
+                    .map(|&key| s.td.histories.continuation(key, piece, m.to))
+                    .sum::<i32>()
+        } else {
+            0
+        };
+
         let can_prune = !is_root && !in_check && moves_searched > 0 && best_score > -MATE_THRESHOLD;
         if can_prune && let Some(eval) = eval {
             if is_quiet {
                 if quiets_seen > lmp_limit {
                     picker.skip_quiets();
+                    continue;
+                }
+                if depth <= HISTORY_PRUNING_MAX_DEPTH
+                    && quiet_history < HISTORY_PRUNING_PER_DEPTH * depth
+                {
                     continue;
                 }
                 if depth <= MOVE_PRUNING_MAX_DEPTH
@@ -962,17 +1056,6 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             }
         }
 
-        let quiet_history = if is_quiet {
-            let piece = s.board.piece_on[m.from as usize];
-            s.td.histories.butterfly(s.board.turn, m)
-                + continuations
-                    .iter()
-                    .flatten()
-                    .map(|&key| s.td.histories.continuation(key, piece, m.to))
-                    .sum::<i32>()
-        } else {
-            0
-        };
         let is_killer_or_counter =
             Some(m) == killer1 || Some(m) == killer2 || Some(m) == counter_move;
 
