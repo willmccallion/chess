@@ -45,6 +45,11 @@ fn line_tables() -> &'static LineTables {
     })
 }
 
+/// The full rank, file or diagonal through two squares; empty when they are not aligned.
+pub fn line_through(a: usize, b: usize) -> Bitboard {
+    line_tables().line[a][b]
+}
+
 /// Pins and checks against the side to move, computed once per position.
 #[derive(Copy, Clone, Debug)]
 pub struct LegalityInfo {

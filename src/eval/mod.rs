@@ -4,6 +4,7 @@ mod arch;
 pub mod features;
 pub mod net_file;
 pub mod network;
+pub mod threat_delta;
 pub mod trace;
 
 use net_file::NetKind;
