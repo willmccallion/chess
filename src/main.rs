@@ -1,6 +1,7 @@
 use chess::bench;
 use chess::board::Board;
 use chess::compare::{CompareConfig, run_compare};
+use chess::eval::{self, net_file::NetKind};
 use chess::nnue;
 use chess::openings;
 use chess::perft::{divide, perft};
@@ -14,6 +15,7 @@ use chess::uci;
 use chess::uci_io::{format_uci, parse_uci_move};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
@@ -61,6 +63,14 @@ enum Cmd {
     },
     Eval {
         fen: String,
+    },
+    /// Print the Stockfish 18 network's per-bucket contributions, as Stockfish's `eval` does
+    EvalTrace {
+        /// Position to trace; reads one FEN per line from stdin when omitted
+        fen: Option<String>,
+        /// Big network file (defaults to the path baked in at build time)
+        #[arg(long)]
+        big: Option<String>,
     },
     /// Fixed-depth search over the bench positions; prints total nodes and NPS
     Bench {
@@ -205,6 +215,22 @@ fn main() {
             let side = if b.turn == Color::White { "white" } else { "black" };
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
+        }
+        Cmd::EvalTrace { fen, big } => {
+            let Some(path) = big.as_deref().or(eval::default_net_path(NetKind::Big)) else {
+                exit_with_error("no big network: pass --big or build inside the dev shell");
+            };
+            let net = eval::net_file::load_network(Path::new(path), NetKind::Big)
+                .unwrap_or_else(|e| exit_with_error(&format!("{path}: {e}")));
+            let fens: Vec<String> = match fen {
+                Some(fen) => vec![fen],
+                None => io::stdin().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect(),
+            };
+            for fen in fens {
+                let board = Board::from_fen(&fen)
+                    .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error in {fen}: {e}")));
+                print!("{}", eval::trace::format_trace(&net, &board));
+            }
         }
         Cmd::Bench { depth, hash } => match bench::run(depth, hash) {
             Ok(result) => {
