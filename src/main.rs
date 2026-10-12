@@ -1,8 +1,7 @@
 use chess::bench;
 use chess::board::Board;
 use chess::compare::{CompareConfig, run_compare};
-use chess::eval::{self, net_file::NetKind};
-use chess::nnue;
+use chess::eval;
 use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search::{SearchControl, SearchLimits, SearchThreads, search};
@@ -15,7 +14,6 @@ use chess::uci;
 use chess::uci_io::{format_uci, parse_uci_move};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
@@ -71,6 +69,9 @@ enum Cmd {
         /// Big network file (defaults to the path baked in at build time)
         #[arg(long)]
         big: Option<String>,
+        /// Small network file (defaults to the path baked in at build time)
+        #[arg(long)]
+        small: Option<String>,
     },
     /// Fixed-depth search over the bench positions; prints total nodes and NPS
     Bench {
@@ -155,14 +156,14 @@ enum Cmd {
     Uci,
 }
 
-fn main() {
-    // Initialize the NNUE network.
-    if let Err(e) = nnue::init() {
-        panic!("Failed to load embedded NNUE data: {}", e);
+/// Loads the networks baked in at build time, or exits: nothing can be evaluated without them.
+fn require_networks() {
+    if let Err(e) = eval::ensure_built_in_loaded() {
+        exit_with_error(&format!("failed to load NNUE: {e}"));
     }
+}
 
-    println!("NNUE loaded successfully.");
-
+fn main() {
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Uci) {
         Cmd::Perft {
@@ -170,6 +171,7 @@ fn main() {
             fen,
             divide: div,
         } => {
+            require_networks();
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             let mut b = Board::from_fen(&fen_str).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
@@ -188,6 +190,7 @@ fn main() {
             depth,
             threads,
         } => {
+            require_networks();
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             let mut b = Board::from_fen(&fen_str).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
@@ -202,48 +205,60 @@ fn main() {
             fen,
             threads,
         } => {
+            require_networks();
             let threads_count = threads.unwrap_or_else(num_cpus::get).max(1);
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             self_play(&fen_str, rounds, time, depth, threads_count);
         }
         Cmd::Eval { fen } => {
+            require_networks();
             let mut b = Board::from_fen(&fen).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
                 std::process::exit(1);
             });
-            let score = nnue::evaluate(&mut b);
+            let score = eval::evaluate(&mut b);
             let side = if b.turn == Color::White { "white" } else { "black" };
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
         }
-        Cmd::EvalTrace { fen, big } => {
-            let Some(path) = big.as_deref().or(eval::default_net_path(NetKind::Big)) else {
-                exit_with_error("no big network: pass --big or build inside the dev shell");
+        Cmd::EvalTrace { fen, big, small } => {
+            let built_in = eval::NetPaths::built_in();
+            let paths = match (big, small, built_in) {
+                (Some(big), Some(small), _) => eval::NetPaths { big: big.into(), small: small.into() },
+                (big, small, Some(defaults)) => eval::NetPaths {
+                    big: big.map_or(defaults.big, Into::into),
+                    small: small.map_or(defaults.small, Into::into),
+                },
+                _ => exit_with_error("no networks: pass --big and --small or build inside the dev shell"),
             };
-            let net = eval::net_file::load_network(Path::new(path), NetKind::Big)
-                .unwrap_or_else(|e| exit_with_error(&format!("{path}: {e}")));
+            if let Err(e) = eval::ensure_loaded(&paths) {
+                exit_with_error(&format!("failed to load NNUE: {e}"));
+            }
             let fens: Vec<String> = match fen {
                 Some(fen) => vec![fen],
                 None => io::stdin().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect(),
             };
             for fen in fens {
-                let board = Board::from_fen(&fen)
+                let mut board = Board::from_fen(&fen)
                     .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error in {fen}: {e}")));
-                print!("{}", eval::trace::format_trace(&net, &board));
+                print!("{}", eval::trace_text(&mut board).unwrap_or_default());
             }
         }
-        Cmd::Bench { depth, hash } => match bench::run(depth, hash) {
-            Ok(result) => {
-                println!("===========================");
-                println!("Total time (ms) : {}", result.elapsed_ms);
-                println!("Nodes searched  : {}", result.nodes);
-                println!("Nodes/second    : {}", result.nps());
+        Cmd::Bench { depth, hash } => {
+            require_networks();
+            match bench::run(depth, hash) {
+                Ok(result) => {
+                    println!("===========================");
+                    println!("Total time (ms) : {}", result.elapsed_ms);
+                    println!("Nodes searched  : {}", result.nodes);
+                    println!("Nodes/second    : {}", result.nps());
+                }
+                Err(e) => {
+                    eprintln!("bench failed: {e}");
+                    std::process::exit(1);
+                }
             }
-            Err(e) => {
-                eprintln!("bench failed: {e}");
-                std::process::exit(1);
-            }
-        },
+        }
         Cmd::Challenge {
             engine1,
             engine2,

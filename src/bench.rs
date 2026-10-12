@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn bench_node_count_is_deterministic() {
-        crate::nnue::tests::ensure_model_loaded();
+        crate::eval::ensure_built_in_loaded().unwrap();
 
         let first = run(5, BENCH_HASH_MB).unwrap();
         let second = run(5, BENCH_HASH_MB).unwrap();

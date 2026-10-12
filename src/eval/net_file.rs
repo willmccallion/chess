@@ -60,7 +60,6 @@ pub struct FeatureTransformer {
     pub weights: Vec<i16>,
     /// `[feature][bucket]`
     pub psqt: Vec<i32>,
-    pub threats: Option<ThreatWeights>,
 }
 
 /// One of the eight output networks, selected by piece count.
@@ -78,6 +77,12 @@ pub struct LayerStack {
 pub struct Network {
     pub transformer: FeatureTransformer,
     pub stacks: Vec<LayerStack>,
+}
+
+/// The big net: a `Network` plus the threat half of its feature transformer.
+pub struct BigNetwork {
+    pub net: Network,
+    pub threats: ThreatWeights,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -224,7 +229,7 @@ fn read_header<R: Read>(reader: &mut R, kind: NetKind) -> Result<String, NetLoad
 fn read_transformer<R: Read>(
     reader: &mut R,
     kind: NetKind,
-) -> Result<FeatureTransformer, NetLoadError> {
+) -> Result<(FeatureTransformer, Option<ThreatWeights>), NetLoadError> {
     expect_hash(reader, transformer_hash(kind), "feature transformer")?;
     let half_dims = kind.half_dims();
     let mut biases = vec![0i16; half_dims];
@@ -266,13 +271,13 @@ fn read_transformer<R: Read>(
         None
     };
 
-    Ok(FeatureTransformer {
+    let transformer = FeatureTransformer {
         half_dims,
         biases,
         weights,
         psqt,
-        threats,
-    })
+    };
+    Ok((transformer, threats))
 }
 
 fn read_layer_stack<R: Read>(reader: &mut R, kind: NetKind) -> Result<LayerStack, NetLoadError> {
@@ -304,9 +309,12 @@ fn read_layer_stack<R: Read>(reader: &mut R, kind: NetKind) -> Result<LayerStack
 }
 
 /// Parses a complete network of the given kind and checks that nothing follows it.
-pub fn read_network<R: Read>(reader: &mut R, kind: NetKind) -> Result<Network, NetLoadError> {
+fn read_network<R: Read>(
+    reader: &mut R,
+    kind: NetKind,
+) -> Result<(Network, Option<ThreatWeights>), NetLoadError> {
     read_header(reader, kind)?;
-    let transformer = read_transformer(reader, kind)?;
+    let (transformer, threats) = read_transformer(reader, kind)?;
     let stacks = (0..LAYER_STACKS)
         .map(|_| read_layer_stack(reader, kind))
         .collect::<Result<Vec<_>, _>>()?;
@@ -315,15 +323,26 @@ pub fn read_network<R: Read>(reader: &mut R, kind: NetKind) -> Result<Network, N
     if reader.read(&mut trailing)? != 0 {
         return Err(format_error("unexpected data after the last layer"));
     }
-    Ok(Network {
+    let net = Network {
         transformer,
         stacks,
-    })
+    };
+    Ok((net, threats))
 }
 
-pub fn load_network(path: &Path, kind: NetKind) -> Result<Network, NetLoadError> {
-    let file = File::open(path)?;
-    read_network(&mut BufReader::with_capacity(1 << 20, file), kind)
+fn open(path: &Path) -> Result<BufReader<File>, NetLoadError> {
+    Ok(BufReader::with_capacity(1 << 20, File::open(path)?))
+}
+
+pub fn load_big_network(path: &Path) -> Result<BigNetwork, NetLoadError> {
+    let (net, threats) = read_network(&mut open(path)?, NetKind::Big)?;
+    let threats = threats.ok_or_else(|| format_error("big network has no threat weights"))?;
+    Ok(BigNetwork { net, threats })
+}
+
+pub fn load_small_network(path: &Path) -> Result<Network, NetLoadError> {
+    let (net, _) = read_network(&mut open(path)?, NetKind::Small)?;
+    Ok(net)
 }
 
 #[cfg(test)]
@@ -381,12 +400,11 @@ mod tests {
         let big = std::env::var("CHESS_NNUE_BIG").expect("run inside the dev shell");
         let small = std::env::var("CHESS_NNUE_SMALL").expect("run inside the dev shell");
 
-        let big = load_network(Path::new(&big), NetKind::Big).unwrap();
-        let small = load_network(Path::new(&small), NetKind::Small).unwrap();
+        let big = load_big_network(Path::new(&big)).unwrap();
+        let small = load_small_network(Path::new(&small)).unwrap();
 
-        assert!(big.transformer.threats.is_some());
-        assert!(small.transformer.threats.is_none());
-        assert_eq!(big.stacks.len(), LAYER_STACKS);
+        assert_eq!(big.threats.weights.len(), THREAT_DIMENSIONS * 1024);
+        assert_eq!(big.net.stacks.len(), LAYER_STACKS);
         assert_eq!(small.transformer.biases.len(), 128);
     }
 }

@@ -1,7 +1,7 @@
 //! Input feature indices: HalfKAv2_hm (piece-square) and FullThreats (attacker-target pairs).
 
 use super::arch::{PSQ_DIMENSIONS, THREAT_DIMENSIONS};
-use crate::board::Board;
+use super::threat_delta::PositionView;
 use crate::magics;
 use crate::types::{Bitboard, Color, Piece, PieceKind};
 use std::sync::OnceLock;
@@ -200,8 +200,8 @@ pub fn threat_index(
     (index < THREAT_DIMENSIONS).then_some(index)
 }
 
-fn sf_piece_on(board: &Board, sq: usize) -> Option<SfPiece> {
-    SfPiece::new(board.piece_on[sq])
+fn sf_piece_on(position: PositionView, sq: usize) -> Option<SfPiece> {
+    SfPiece::new(position.piece_on[sq])
 }
 
 /// Squares attacked by the piece on `from`, given `occupied`.
@@ -214,39 +214,39 @@ pub fn attacks_from(piece: SfPiece, from: usize, occupied: Bitboard) -> Bitboard
     }
 }
 
-pub fn king_square(board: &Board, color: Color) -> usize {
-    board.piece_bb[Piece::from_kind(PieceKind::King, color).index()].trailing_zeros() as usize
+pub fn king_square(position: PositionView, color: Color) -> usize {
+    position.piece_bb[Piece::from_kind(PieceKind::King, color).index()].trailing_zeros() as usize
 }
 
 /// Every active HalfKAv2_hm feature of `perspective`.
-pub fn active_psq_features(board: &Board, perspective: Color, out: &mut Vec<usize>) {
-    let king_sq = king_square(board, perspective);
-    let mut occupied = board.all_pieces;
+pub fn active_psq_features(position: PositionView, perspective: Color, out: &mut Vec<usize>) {
+    let king_sq = king_square(position, perspective);
+    let mut occupied = position.occupied;
     while occupied != 0 {
         let sq = occupied.trailing_zeros() as usize;
         occupied &= occupied - 1;
-        if let Some(piece) = sf_piece_on(board, sq) {
+        if let Some(piece) = sf_piece_on(position, sq) {
             out.push(psq_index(perspective, sq, piece, king_sq));
         }
     }
 }
 
 /// Every active FullThreats feature of `perspective`.
-pub fn active_threat_features(board: &Board, perspective: Color, out: &mut Vec<usize>) {
-    let king_sq = king_square(board, perspective);
-    let occupied = board.all_pieces;
+pub fn active_threat_features(position: PositionView, perspective: Color, out: &mut Vec<usize>) {
+    let king_sq = king_square(position, perspective);
+    let occupied = position.occupied;
     let mut pieces = occupied;
     while pieces != 0 {
         let from = pieces.trailing_zeros() as usize;
         pieces &= pieces - 1;
-        let Some(attacker) = sf_piece_on(board, from) else {
+        let Some(attacker) = sf_piece_on(position, from) else {
             continue;
         };
         let mut targets = attacks_from(attacker, from, occupied) & occupied;
         while targets != 0 {
             let to = targets.trailing_zeros() as usize;
             targets &= targets - 1;
-            let Some(attacked) = sf_piece_on(board, to) else {
+            let Some(attacked) = sf_piece_on(position, to) else {
                 continue;
             };
             if let Some(index) = threat_index(perspective, attacker, from, to, attacked, king_sq) {
@@ -259,6 +259,7 @@ pub fn active_threat_features(board: &Board, perspective: Color, out: &mut Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Board;
     use crate::types::START_FEN;
 
     #[test]
@@ -266,7 +267,7 @@ mod tests {
         let board = Board::from_fen(START_FEN).unwrap();
         for perspective in [Color::White, Color::Black] {
             let mut features = Vec::new();
-            active_psq_features(&board, perspective, &mut features);
+            active_psq_features(board.position_view(), perspective, &mut features);
 
             let mut sorted = features.clone();
             sorted.sort_unstable();
@@ -283,10 +284,10 @@ mod tests {
         let mut white = (Vec::new(), Vec::new());
         let mut black = (Vec::new(), Vec::new());
 
-        active_psq_features(&board, Color::White, &mut white.0);
-        active_psq_features(&board, Color::Black, &mut black.0);
-        active_threat_features(&board, Color::White, &mut white.1);
-        active_threat_features(&board, Color::Black, &mut black.1);
+        active_psq_features(board.position_view(), Color::White, &mut white.0);
+        active_psq_features(board.position_view(), Color::Black, &mut black.0);
+        active_threat_features(board.position_view(), Color::White, &mut white.1);
+        active_threat_features(board.position_view(), Color::Black, &mut black.1);
         for list in [&mut white.0, &mut white.1, &mut black.0, &mut black.1] {
             list.sort_unstable();
         }

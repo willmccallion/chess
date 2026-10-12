@@ -1,7 +1,7 @@
-use crate::eval::threat_delta::PositionView;
+use crate::eval::accumulator::{AccumulatorStack, PlyRecord};
+use crate::eval::threat_delta::{self, PositionView};
 use crate::fen;
 use crate::magics;
-use crate::nnue;
 use crate::types::*;
 use crate::zobrist;
 
@@ -21,24 +21,34 @@ pub struct Board {
     pub plies_from_null: u32,
     pub history: Vec<ZKey>,
     pub zobrist: ZKey,
-    accumulators: nnue::AccumulatorStack,
+    accumulators: AccumulatorStack,
 }
 
-fn refresh_context_from<'a>(
-    piece_on: &'a [Piece; 64],
-    piece_bb: &'a [Bitboard; 13],
-    all_pieces: Bitboard,
-) -> nnue::RefreshContext<'a> {
-    let white_king = piece_bb[Piece::WK.index()];
-    let black_king = piece_bb[Piece::BK.index()];
-    nnue::RefreshContext {
-        piece_on,
-        piece_bb,
-        non_king_pieces: all_pieces & !white_king & !black_king,
-        king_squares: [
-            white_king.trailing_zeros() as usize,
-            black_king.trailing_zeros() as usize,
-        ],
+/// Piece-square changes of `m` in `position` (before the move), in removal-then-add order.
+fn record_piece_changes(position: PositionView, m: Move, record: &mut PlyRecord) {
+    let from = m.from as usize;
+    let to = m.to as usize;
+    let moving = position.piece_on[from];
+    let updates = &mut *record.psq_updates;
+    updates.push(UpdateBody { piece: moving, sq: from, add: false });
+    if m.capture {
+        let cap_sq = match (m.en_passant, position.turn) {
+            (true, Color::White) => to - 8,
+            (true, Color::Black) => to + 8,
+            (false, _) => to,
+        };
+        let captured = position.piece_on[cap_sq];
+        if !captured.is_empty() {
+            updates.push(UpdateBody { piece: captured, sq: cap_sq, add: false });
+        }
+    }
+    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, position.turn));
+    updates.push(UpdateBody { piece: placed, sq: to, add: true });
+    if m.castle {
+        let (rook_from, rook_to) = if to > from { (to + 1, to - 1) } else { (to - 2, to + 1) };
+        let rook = position.piece_on[rook_from];
+        updates.push(UpdateBody { piece: rook, sq: rook_from, add: false });
+        updates.push(UpdateBody { piece: rook, sq: rook_to, add: true });
     }
 }
 
@@ -58,7 +68,7 @@ impl Board {
             plies_from_null: 0,
             history: Vec::with_capacity(128),
             zobrist: 0,
-            accumulators: nnue::AccumulatorStack::new(Accumulator::default()),
+            accumulators: AccumulatorStack::new(),
         }
     }
 
@@ -80,7 +90,7 @@ impl Board {
     #[inline]
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
         let mut b = fen::parse_fen(fen_str)?;
-        b.accumulators = nnue::AccumulatorStack::new(nnue::refresh_accumulator(&b));
+        b.accumulators.reset();
         Ok(b)
     }
 
@@ -107,6 +117,7 @@ impl Board {
             }
         }
         self.all_pieces = self.w_pieces | self.b_pieces;
+        self.accumulators.reset();
     }
 
     #[inline]
@@ -1181,24 +1192,23 @@ impl Board {
         };
         self.plies_from_null += 1;
 
-        let mut updates = [UpdateBody {
-            piece: Piece::Empty,
-            sq: 0,
-            add: false,
-        }; 5];
-        let mut update_count = 0;
-
         let from = m.from as usize;
         let to = m.to as usize;
         let moving = self.piece_on[from];
         let is_king_move = moving.kind() == Some(PieceKind::King);
 
-        updates[update_count] = UpdateBody {
-            piece: moving,
-            sq: from,
-            add: false,
+        let position = PositionView {
+            piece_on: &self.piece_on,
+            piece_bb: &self.piece_bb,
+            occupied: self.all_pieces,
+            turn: self.turn,
         };
-        update_count += 1;
+        let mut record = self.accumulators.push();
+        threat_delta::record_move(position, m, record.threats);
+        record_piece_changes(position, m, &mut record);
+        if is_king_move {
+            record.king_moved(self.turn, from, to);
+        }
 
         if m.capture {
             let cap_sq = if m.en_passant {
@@ -1210,51 +1220,7 @@ impl Board {
             } else {
                 to
             };
-            let captured = self.piece_on[cap_sq];
-            undo.captured_piece = captured;
-
-            if !captured.is_empty() {
-                updates[update_count] = UpdateBody {
-                    piece: captured,
-                    sq: cap_sq,
-                    add: false,
-                };
-                update_count += 1;
-            }
-        }
-
-        let piece_to_add = if let Some(pk) = m.promotion {
-            Piece::from_kind(pk, self.turn)
-        } else {
-            moving
-        };
-        updates[update_count] = UpdateBody {
-            piece: piece_to_add,
-            sq: to,
-            add: true,
-        };
-        update_count += 1;
-
-        if m.castle {
-            let (rook_from, rook_to) = if to > from {
-                (to + 1, to - 1)
-            } else {
-                (to - 2, to + 1)
-            };
-            let rook_piece = self.piece_on[rook_from];
-
-            updates[update_count] = UpdateBody {
-                piece: rook_piece,
-                sq: rook_from,
-                add: false,
-            };
-            update_count += 1;
-            updates[update_count] = UpdateBody {
-                piece: rook_piece,
-                sq: rook_to,
-                add: true,
-            };
-            update_count += 1;
+            undo.captured_piece = self.piece_on[cap_sq];
         }
 
         if self.en_passant_sq != NO_SQ {
@@ -1383,9 +1349,6 @@ impl Board {
         self.turn = self.turn.other();
         self.history.push(self.zobrist);
 
-        let king_mover = moving.color().filter(|_| is_king_move);
-        self.accumulators.push(&updates[..update_count], king_mover);
-
         undo
     }
 
@@ -1398,15 +1361,15 @@ impl Board {
         }
     }
 
-    /// What a from-scratch NNUE refresh of this position needs.
-    pub fn refresh_context(&self) -> nnue::RefreshContext<'_> {
-        refresh_context_from(&self.piece_on, &self.piece_bb, self.all_pieces)
-    }
-
-    /// The NNUE accumulator of this position, computed on demand.
-    pub fn accumulator(&mut self) -> &Accumulator {
-        let ctx = refresh_context_from(&self.piece_on, &self.piece_bb, self.all_pieces);
-        self.accumulators.current(&ctx)
+    /// The NNUE accumulators and the position they describe, borrowed together.
+    pub fn accumulators_and_view(&mut self) -> (&mut AccumulatorStack, PositionView<'_>) {
+        let position = PositionView {
+            piece_on: &self.piece_on,
+            piece_bb: &self.piece_bb,
+            occupied: self.all_pieces,
+            turn: self.turn,
+        };
+        (&mut self.accumulators, position)
     }
 
     #[inline]

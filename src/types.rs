@@ -8,25 +8,6 @@ pub const NO_SQ: i32 = -1;
 
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-// NNUE Constants
-pub const NNUE_FEATURE_SIZE: usize = 256;
-
-#[derive(Copy, Clone)]
-#[repr(C, align(64))]
-pub struct Accumulator {
-    pub white: [i16; NNUE_FEATURE_SIZE],
-    pub black: [i16; NNUE_FEATURE_SIZE],
-}
-
-impl Default for Accumulator {
-    fn default() -> Self {
-        Self {
-            white: [0; NNUE_FEATURE_SIZE],
-            black: [0; NNUE_FEATURE_SIZE],
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug)]
 pub struct UpdateBody {
     pub piece: Piece,

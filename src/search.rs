@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::nnue::evaluate;
+use crate::eval::evaluate;
 use crate::legality::LegalityInfo;
 use crate::history::{ContinuationKey, CorrectionHistory, Histories, captured_kind, stat_bonus};
 use crate::movepicker::{MovePicker, OrderingContext};

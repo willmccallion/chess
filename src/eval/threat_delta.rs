@@ -21,7 +21,7 @@ pub struct ThreatDelta {
 /// Bound on deltas per move; overflowing means the accumulator must be refreshed instead.
 pub const MAX_THREAT_DELTAS: usize = 160;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ThreatDeltas {
     pub list: StackVec<ThreatDelta, MAX_THREAT_DELTAS>,
     pub overflowed: bool,

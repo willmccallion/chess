@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::nnue;
+use crate::eval::{self, NetPaths};
 use crate::opening_book::get_book_move;
 use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
 use crate::time::{TimeBudget, TimeControl};
@@ -83,6 +83,24 @@ struct Options {
     threads: usize,
     own_book: bool,
     move_overhead_ms: i64,
+    eval_file: String,
+    eval_file_small: String,
+}
+
+fn built_in_net_path(kind: eval::net_file::NetKind) -> String {
+    eval::default_net_path(kind).unwrap_or_default().to_string()
+}
+
+/// Loads the networks named by the options, or exits: the engine cannot play without them.
+fn require_networks(options: &Options) {
+    let paths = NetPaths {
+        big: options.eval_file.clone().into(),
+        small: options.eval_file_small.clone().into(),
+    };
+    if let Err(e) = eval::ensure_loaded(&paths) {
+        send(&format!("info string ERROR: {e}"));
+        std::process::exit(1);
+    }
 }
 
 fn print_options() {
@@ -96,6 +114,14 @@ fn print_options() {
     send("option name OwnBook type check default true");
     send(&format!(
         "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD_MS} min 0 max {MAX_MOVE_OVERHEAD_MS}"
+    ));
+    send(&format!(
+        "option name EvalFile type string default {}",
+        built_in_net_path(eval::net_file::NetKind::Big)
+    ));
+    send(&format!(
+        "option name EvalFileSmall type string default {}",
+        built_in_net_path(eval::net_file::NetKind::Small)
     ));
 }
 
@@ -209,15 +235,19 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
         }
     } else if name.eq_ignore_ascii_case("OwnBook") {
         options.own_book = parse_check_value(value);
-    } else if name.eq_ignore_ascii_case("Move Overhead")
-        && let Ok(ms) = value.parse::<i64>()
-    {
-        options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
+    } else if name.eq_ignore_ascii_case("Move Overhead") {
+        if let Ok(ms) = value.parse::<i64>() {
+            options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
+        }
+    } else if name.eq_ignore_ascii_case("EvalFile") {
+        options.eval_file = value.to_string();
+    } else if name.eq_ignore_ascii_case("EvalFileSmall") {
+        options.eval_file_small = value.to_string();
     }
 }
 
 fn print_eval(board: &mut Board) {
-    let score = nnue::evaluate(board);
+    let score = eval::evaluate(board);
     let side = if board.turn == crate::types::Color::White {
         "white"
     } else {
@@ -235,6 +265,8 @@ pub fn run_uci() {
         threads: DEFAULT_THREADS,
         own_book: true,
         move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
+        eval_file: built_in_net_path(eval::net_file::NetKind::Big),
+        eval_file_small: built_in_net_path(eval::net_file::NetKind::Small),
     };
     let mut tt = SharedTransTable::new(options.hash_mb);
     let mut active: Option<ActiveSearch> = None;
@@ -258,7 +290,10 @@ pub fn run_uci() {
                 print_options();
                 send("uciok");
             }
-            "isready" => send("readyok"),
+            "isready" => {
+                require_networks(&options);
+                send("readyok");
+            }
             "ucinewgame" => {
                 stop_search(&mut active, &mut threads, options.threads);
                 tt.clear();
@@ -278,6 +313,7 @@ pub fn run_uci() {
             }
             "go" => {
                 stop_search(&mut active, &mut threads, options.threads);
+                require_networks(&options);
                 if options.own_book
                     && !has_token(rest, "infinite")
                     && let Some(book_uci) = get_book_move(&board)
@@ -299,7 +335,10 @@ pub fn run_uci() {
                 }
             }
             "stop" => stop_search(&mut active, &mut threads, options.threads),
-            "eval" => print_eval(&mut board),
+            "eval" => {
+                require_networks(&options);
+                print_eval(&mut board);
+            }
             "quit" => break,
             _ => {}
         }

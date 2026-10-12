@@ -14,6 +14,7 @@ import chess
 
 ROW = re.compile(r"^\|\s+(\d)\s+\|(.*)\|(.*)\|(.*)\|")
 NNUE_LINE = re.compile(r"^NNUE evaluation\s+(\S+)")
+FINAL_LINE = re.compile(r"^Final evaluation\s+(\S+)")
 
 
 def sample_positions(epd_path, count, seed):
@@ -36,9 +37,10 @@ def sample_positions(epd_path, count, seed):
 
 
 def parse_trace(text):
-    """Bucket rows and the NNUE evaluation line from one trace, as strings."""
+    """Bucket rows, the big-net evaluation and the final evaluation of one trace, as strings."""
     rows = []
     nnue = None
+    final = None
     for line in text.splitlines():
         m = ROW.match(line)
         if m:
@@ -46,14 +48,17 @@ def parse_trace(text):
         m = NNUE_LINE.match(line)
         if m:
             nnue = m.group(1)
-    return rows, nnue
+        m = FINAL_LINE.match(line)
+        if m:
+            final = m.group(1)
+    return rows, nnue, final
 
 
 def stockfish_traces(stockfish, fens):
     commands = "".join(f"position fen {fen}\neval\n" for fen in fens) + "quit\n"
     out = subprocess.run([stockfish], input=commands, capture_output=True, text=True, check=True).stdout
-    chunks = out.split("Final evaluation")
-    return [parse_trace(chunk) for chunk in chunks[: len(fens)]]
+    chunks = out.split("NNUE network contributions")[1:]
+    return [parse_trace(chunk) for chunk in chunks]
 
 
 def engine_traces(engine, fens):

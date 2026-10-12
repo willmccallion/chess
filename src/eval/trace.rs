@@ -1,6 +1,6 @@
 //! Text output matching Stockfish's `eval` command, for checking the port against it.
 
-use super::net_file::Network;
+use super::net_file::BigNetwork;
 use super::network::{NetOutput, bucket_for, evaluate_all_buckets};
 use crate::board::Board;
 use crate::types::{Color, Piece};
@@ -40,9 +40,9 @@ fn aligned_pawns(value: i32, board: &Board) -> String {
 }
 
 /// The "NNUE network contributions" table and big-net evaluation from Stockfish's `eval`.
-pub fn format_trace(net: &Network, board: &Board) -> String {
-    let outputs = evaluate_all_buckets(net, board);
-    let used = bucket_for(board);
+pub fn format_trace(big: &BigNetwork, board: &Board) -> String {
+    let outputs = evaluate_all_buckets(&big.net, Some(&big.threats), board);
+    let used = bucket_for(board.position_view());
     let side = if board.turn == Color::White { "White" } else { "Black" };
     let mut out = String::new();
     let _ = writeln!(out, " NNUE network contributions ({side} to move)");

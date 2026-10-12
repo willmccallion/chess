@@ -1,13 +1,15 @@
 //! Scalar forward pass of a Stockfish 18 network from fully refreshed accumulators.
 //!
-//! This is the reference the incremental and SIMD paths must reproduce exactly.
+//! The refresh functions are the reference the incremental accumulators must reproduce.
 
 use super::arch::{
     FC0_HIDDEN, FC0_OUTPUTS, FC1_INPUTS, FC1_INPUTS_PADDED, FC1_OUTPUTS, OUTPUT_SCALE,
     PSQT_BUCKETS, WEIGHT_SCALE_BITS,
 };
 use super::features::{active_psq_features, active_threat_features};
-use super::net_file::{FeatureTransformer, LayerStack, Network};
+use super::net_file::{FeatureTransformer, LayerStack, Network, ThreatWeights};
+use super::simd::dot_u8_i8;
+use super::threat_delta::PositionView;
 use crate::board::Board;
 use crate::types::Color;
 
@@ -45,10 +47,10 @@ impl Accumulation {
     }
 }
 
-pub fn refresh_psq(transformer: &FeatureTransformer, board: &Board, perspective: Color) -> Accumulation {
+pub fn refresh_psq(transformer: &FeatureTransformer, position: PositionView, perspective: Color) -> Accumulation {
     let half = transformer.half_dims;
     let mut features = Vec::with_capacity(32);
-    active_psq_features(board, perspective, &mut features);
+    active_psq_features(position, perspective, &mut features);
     let mut acc = Accumulation::new(&transformer.biases);
     for feature in features {
         acc.add_feature(
@@ -59,16 +61,14 @@ pub fn refresh_psq(transformer: &FeatureTransformer, board: &Board, perspective:
     acc
 }
 
-/// `None` for a net without threat inputs.
 pub fn refresh_threats(
-    transformer: &FeatureTransformer,
-    board: &Board,
+    threats: &ThreatWeights,
+    half: usize,
+    position: PositionView,
     perspective: Color,
-) -> Option<Accumulation> {
-    let threats = transformer.threats.as_ref()?;
-    let half = transformer.half_dims;
+) -> Accumulation {
     let mut features = Vec::with_capacity(128);
-    active_threat_features(board, perspective, &mut features);
+    active_threat_features(position, perspective, &mut features);
     let mut acc = Accumulation::new(&vec![0; half]);
     for feature in features {
         acc.add_threat_feature(
@@ -76,13 +76,29 @@ pub fn refresh_threats(
             &threats.psqt[feature * PSQT_BUCKETS..(feature + 1) * PSQT_BUCKETS],
         );
     }
-    Some(acc)
+    acc
 }
 
-/// Both perspectives' accumulators, indexed by `Color as usize`.
+/// One perspective's first-layer sums, borrowed from wherever they are kept.
+#[derive(Copy, Clone)]
+pub struct SumsView<'a> {
+    pub values: &'a [i16],
+    pub psqt: &'a [i32; PSQT_BUCKETS],
+}
+
+impl<'a> From<&'a Accumulation> for SumsView<'a> {
+    fn from(acc: &'a Accumulation) -> Self {
+        Self {
+            values: &acc.values,
+            psqt: &acc.psqt,
+        }
+    }
+}
+
+/// Both perspectives' sums, indexed by `Color as usize`.
 pub struct PerspectiveSums<'a> {
-    pub psq: [&'a Accumulation; 2],
-    pub threats: Option<[&'a Accumulation; 2]>,
+    pub psq: [SumsView<'a>; 2],
+    pub threats: Option<[SumsView<'a>; 2]>,
 }
 
 const BIG_NET_CLIP: i16 = 255;
@@ -103,8 +119,8 @@ pub fn transform(sums: &PerspectiveSums, side_to_move: Color, bucket: usize, out
     let half = sums.psq[us].values.len();
     let pair = half / 2;
     for (p, perspective) in perspectives.into_iter().enumerate() {
-        let psq = &sums.psq[perspective as usize].values;
-        let threat = sums.threats.as_ref().map(|t| &t[perspective as usize].values);
+        let psq = sums.psq[perspective as usize].values;
+        let threat = sums.threats.as_ref().map(|t| t[perspective as usize].values);
         let clip = if threat.is_some() { BIG_NET_CLIP } else { SMALL_NET_CLIP };
         for j in 0..pair {
             let (mut first, mut second) = (psq[j], psq[j + pair]);
@@ -137,12 +153,7 @@ impl LayerStack {
             .iter_mut()
             .zip(self.fc0_biases.iter().zip(self.fc0_weights.chunks_exact(width)))
         {
-            *out = *bias
-                + row
-                    .iter()
-                    .zip(input)
-                    .map(|(&w, &x)| i32::from(w) * i32::from(x))
-                    .sum::<i32>();
+            *out = bias + dot_u8_i8(input, row);
         }
 
         let mut hidden = [0u8; FC1_INPUTS_PADDED];
@@ -157,22 +168,10 @@ impl LayerStack {
             .iter_mut()
             .zip(self.fc1_biases.iter().zip(self.fc1_weights.chunks_exact(FC1_INPUTS_PADDED)))
         {
-            let sum = *bias
-                + row
-                    .iter()
-                    .zip(&hidden)
-                    .map(|(&w, &x)| i32::from(w) * i32::from(x))
-                    .sum::<i32>();
-            *out = clipped_relu(sum);
+            *out = clipped_relu(bias + dot_u8_i8(&hidden, row));
         }
 
-        let fc2 = self.fc2_bias
-            + self
-                .fc2_weights
-                .iter()
-                .zip(&fc1)
-                .map(|(&w, &x)| i32::from(w) * i32::from(x))
-                .sum::<i32>();
+        let fc2 = self.fc2_bias + dot_u8_i8(&fc1, &self.fc2_weights);
 
         // fc0's last neuron skips to the output: 127 << 6 in it means 600 * OUTPUT_SCALE.
         let forwarded = fc0[FC0_OUTPUTS - 1] * (600 * OUTPUT_SCALE) / (127 * (1 << WEIGHT_SCALE_BITS));
@@ -188,8 +187,8 @@ pub struct NetOutput {
 }
 
 /// Layer stack chosen by the number of pieces on the board.
-pub fn bucket_for(board: &Board) -> usize {
-    (board.all_pieces.count_ones() as usize - 1) / 4
+pub fn bucket_for(position: PositionView) -> usize {
+    (position.occupied.count_ones() as usize - 1) / 4
 }
 
 pub fn evaluate_bucket(net: &Network, sums: &PerspectiveSums, side_to_move: Color, bucket: usize) -> NetOutput {
@@ -202,23 +201,25 @@ pub fn evaluate_bucket(net: &Network, sums: &PerspectiveSums, side_to_move: Colo
     }
 }
 
-/// Every bucket's output for `board`, computed from scratch.
-pub fn evaluate_all_buckets(net: &Network, board: &Board) -> Vec<NetOutput> {
+/// Every bucket's output for `board`, computed from scratch; `threats` only for the big net.
+pub fn evaluate_all_buckets(net: &Network, threats: Option<&ThreatWeights>, board: &Board) -> Vec<NetOutput> {
+    let position = board.position_view();
+    let half = net.transformer.half_dims;
     let psq = [
-        refresh_psq(&net.transformer, board, Color::White),
-        refresh_psq(&net.transformer, board, Color::Black),
+        refresh_psq(&net.transformer, position, Color::White),
+        refresh_psq(&net.transformer, position, Color::Black),
     ];
-    let threats = [
-        refresh_threats(&net.transformer, board, Color::White),
-        refresh_threats(&net.transformer, board, Color::Black),
-    ];
-    let threat_refs = match &threats {
-        [Some(white), Some(black)] => Some([white, black]),
-        _ => None,
-    };
+    let threat_sums = threats.map(|threats| {
+        [
+            refresh_threats(threats, half, position, Color::White),
+            refresh_threats(threats, half, position, Color::Black),
+        ]
+    });
     let sums = PerspectiveSums {
-        psq: [&psq[0], &psq[1]],
-        threats: threat_refs,
+        psq: [SumsView::from(&psq[0]), SumsView::from(&psq[1])],
+        threats: threat_sums
+            .as_ref()
+            .map(|[white, black]| [SumsView::from(white), SumsView::from(black)]),
     };
     (0..net.stacks.len())
         .map(|bucket| evaluate_bucket(net, &sums, board.turn, bucket))
