@@ -98,4 +98,15 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn bench_node_count_is_deterministic() {
+        crate::nnue::tests::ensure_model_loaded();
+
+        let first = run(5).unwrap();
+        let second = run(5).unwrap();
+
+        assert!(first.nodes > 0);
+        assert_eq!(first.nodes, second.nodes);
+    }
 }

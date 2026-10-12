@@ -514,10 +514,10 @@ fn nn_value_to_centipawn(nn_value: i32) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn ensure_model_loaded() {
+    pub(crate) fn ensure_model_loaded() {
         match init() {
             Ok(()) | Err(NnueError::AlreadyInitialized) => {}
             Err(e) => panic!("failed to load NNUE: {e}"),
