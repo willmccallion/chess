@@ -28,7 +28,7 @@ You can interact with the engine in several ways:
   Speaks the Universal Chess Interface (UCI) protocol, so it works with most modern chess GUIs.
 
 - **NNUE Evaluation**  
-  Evaluates positions with an embedded Stockfish HalfKP network (see **NNUE** below).
+  Evaluates positions with Stockfish 18's networks (see **NNUE** below).
 
 ---
 
@@ -37,7 +37,7 @@ You can interact with the engine in several ways:
 The repository ships a Nix flake. With [direnv](https://direnv.net/) and nix-direnv, run `direnv allow` once; otherwise use `nix develop`. The dev shell provides:
 
 - the stable Rust toolchain pinned in `rust-toolchain.toml` (with clippy, rustfmt, rust-analyzer),
-- `pkg-config` and OpenSSL (the build script downloads the NNUE network),
+- the Stockfish 18 networks (`$CHESS_NNUE_BIG`, `$CHESS_NNUE_SMALL`), whose paths are baked into the binary at build time,
 - Stockfish 18 (`$STOCKFISH`) for matches and comparisons,
 - opening suites: `$CHESS_BOOK_UHO` (UHO Lichess, for engine-vs-engine testing) and `$CHESS_BOOK_BALANCED` (noob 3-moves),
 - the Baron Polyglot book, linked to `moves/book.bin`,
@@ -169,10 +169,17 @@ python3 tools/perft_test.py --stockfish "$STOCKFISH"
 
 ## NNUE
 
-The evaluation is Stockfish's HalfKP network `nn-9931db908a9b.nnue` (41024 → 2×256 → 32 → 32 → 1), downloaded by `build.rs` and embedded in the binary. Accumulators are updated lazily and incrementally; the dense layers use AVX2 (and AVX-VNNI when available).
+The evaluation is a port of Stockfish 18's: the big network `nn-c288c895ea92.nnue` (HalfKAv2_hm piece-square plus FullThreats attacker–target inputs, 1024 wide, 8 layer stacks chosen by piece count) and the small network `nn-37f18f62d772.nnue` (piece-square only, 128 wide), combined exactly as Stockfish does: the small net for lopsided material with a big-net recheck near equality, complexity damping, material scaling and 50-move damping. Scores are converted to centipawns with Stockfish's WDL normalisation.
 
-The NNUE parsing code was originally adapted from
-[https://github.com/github-jimjim/NNUE-Parser.git](https://github.com/github-jimjim/NNUE-Parser.git).
+The networks are read at runtime. The default paths come from the dev shell at build time; the UCI options `EvalFile` and `EvalFileSmall` override them before the first `isready`.
+
+Accumulators are updated lazily and incrementally: each move records its piece changes and the attacker–target relations it creates and destroys, king moves refresh from a per-king-square cache, and the dense layers use AVX2 (AVX-VNNI when available) with a sparse first layer.
+
+`chess eval-trace <fen>` prints the same per-bucket table and final evaluation as Stockfish's `eval` command, and `tools/nnue_check.py` diffs the two over random playout positions:
+
+```bash
+python3 tools/nnue_check.py --stockfish "$STOCKFISH" --epd "$CHESS_BOOK_UHO" --count 3000
+```
 
 ---
 
@@ -182,6 +189,6 @@ The NNUE parsing code was originally adapted from
   The opening book data is sourced from *The Baron's Polyglot Opening Book*, available via the
   [Chess Programming Wiki](https://www.chessprogramming.net/new-version-of-the-baron-v3-43-plus-the-barons-polyglot-opening-book/).
 
-* **NNUE Parser**
-  NNUE-related code is heavily inspired by and based on
-  [https://github.com/github-jimjim/NNUE-Parser.git](https://github.com/github-jimjim/NNUE-Parser.git).
+* **Stockfish**
+  The networks are Stockfish's, and the network format, input features and evaluation
+  follow the [Stockfish](https://github.com/official-stockfish/Stockfish) 18 source (GPLv3).
