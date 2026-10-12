@@ -66,6 +66,9 @@ enum Cmd {
     Bench {
         #[arg(default_value_t = 13)]
         depth: usize,
+        /// Transposition table size in MB
+        #[arg(long, default_value_t = bench::BENCH_HASH_MB)]
+        hash: usize,
     },
     Challenge {
         /// Path to engine 1 binary
@@ -203,7 +206,7 @@ fn main() {
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
         }
-        Cmd::Bench { depth } => match bench::run(depth) {
+        Cmd::Bench { depth, hash } => match bench::run(depth, hash) {
             Ok(result) => {
                 println!("===========================");
                 println!("Total time (ms) : {}", result.elapsed_ms);

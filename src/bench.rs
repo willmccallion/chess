@@ -5,7 +5,7 @@ use crate::search::{SearchControl, SearchLimits, search};
 use crate::tt::SharedTransTable;
 use std::time::Instant;
 
-const BENCH_HASH_MB: usize = 16;
+pub const BENCH_HASH_MB: usize = 16;
 
 pub const BENCH_FENS: [&str; 30] = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -55,8 +55,8 @@ impl BenchResult {
 }
 
 /// Searches every bench position to `depth` from a cleared TT and fresh search state.
-pub fn run(depth: usize) -> Result<BenchResult, String> {
-    let tt = SharedTransTable::new(BENCH_HASH_MB);
+pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
+    let tt = SharedTransTable::new(hash_mb);
     let limits = SearchLimits {
         max_depth: depth,
         wait_for_stop: false,
@@ -103,8 +103,8 @@ mod tests {
     fn bench_node_count_is_deterministic() {
         crate::nnue::tests::ensure_model_loaded();
 
-        let first = run(5).unwrap();
-        let second = run(5).unwrap();
+        let first = run(5, BENCH_HASH_MB).unwrap();
+        let second = run(5, BENCH_HASH_MB).unwrap();
 
         assert!(first.nodes > 0);
         assert_eq!(first.nodes, second.nodes);
