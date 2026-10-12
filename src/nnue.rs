@@ -17,6 +17,7 @@ const FT_INPUT_DIM: usize = 41024;
 const HL1_INPUT_DIM: usize = 512;
 const HL1_OUTPUT_DIM: usize = 32;
 const HL2_OUTPUT_DIM: usize = 32;
+const WEIGHT_SCALE_BITS: u32 = 6;
 
 pub struct Model {
     ft_weights: Vec<i16>,
@@ -155,9 +156,8 @@ pub fn refresh_perspective(board: &Board, perspective: Color, acc: &mut Accumula
 
     let is_white_pov = perspective == Color::White;
     let king_sq = board.king_square(perspective) as usize;
-    let mut pieces = board.all_pieces
-        & !board.piece_bb[Piece::WK.index()]
-        & !board.piece_bb[Piece::BK.index()];
+    let mut pieces =
+        board.all_pieces & !board.piece_bb[Piece::WK.index()] & !board.piece_bb[Piece::BK.index()];
 
     while pieces != 0 {
         let sq = pieces.trailing_zeros() as usize;
@@ -205,43 +205,61 @@ pub fn evaluate(board: &Board) -> i32 {
         return 0;
     };
 
-    let is_white = board.turn == Color::White;
-
-    let mut ft_us = [0i32; NNUE_FEATURE_SIZE];
-    let mut ft_them = [0i32; NNUE_FEATURE_SIZE];
-
-    let (acc_us, acc_them) = if is_white {
+    let (acc_us, acc_them) = if board.turn == Color::White {
         (&board.accumulator.white, &board.accumulator.black)
     } else {
         (&board.accumulator.black, &board.accumulator.white)
     };
 
-    for i in 0..NNUE_FEATURE_SIZE {
-        ft_us[i] = acc_us[i].clamp(0, 127) as i32;
-        ft_them[i] = acc_them[i].clamp(0, 127) as i32;
-    }
+    let mut transformed = AlignedBytes::<HL1_INPUT_DIM>::default();
+    clipped_relu_i16(acc_us, &mut transformed.0[..NNUE_FEATURE_SIZE]);
+    clipped_relu_i16(acc_them, &mut transformed.0[NNUE_FEATURE_SIZE..]);
 
-    let mut concat = [0i32; HL1_INPUT_DIM];
-    concat[..NNUE_FEATURE_SIZE].copy_from_slice(&ft_us);
-    concat[NNUE_FEATURE_SIZE..].copy_from_slice(&ft_them);
-
-    let hl1 = dense_layer(
-        &concat,
+    let mut hidden1 = AlignedBytes::<HL1_OUTPUT_DIM>::default();
+    affine_clipped_relu(
+        &transformed.0,
         &model.hl1_weights,
         &model.hl1_biases,
-        HL1_INPUT_DIM,
-        HL1_OUTPUT_DIM,
+        &mut hidden1.0,
     );
-    let hl2 = dense_layer(
-        &hl1,
+    let mut hidden2 = AlignedBytes::<HL2_OUTPUT_DIM>::default();
+    affine_clipped_relu(
+        &hidden1.0,
         &model.hl2_weights,
         &model.hl2_biases,
-        HL1_OUTPUT_DIM,
-        HL2_OUTPUT_DIM,
+        &mut hidden2.0,
     );
-    let out = dense_output(&hl2, &model.out_weights, model.out_bias);
 
+    let out = model.out_bias + dot_u8_i8(&hidden2.0, &model.out_weights);
     nn_value_to_centipawn(out)
+}
+
+#[repr(C, align(32))]
+struct AlignedBytes<const N: usize>([u8; N]);
+
+impl<const N: usize> Default for AlignedBytes<N> {
+    fn default() -> Self {
+        Self([0; N])
+    }
+}
+
+/// Feature-transformer activation: clamp each accumulator lane to 0..=127.
+#[inline(always)]
+fn clipped_relu_i16(input: &[i16], output: &mut [u8]) {
+    for (out, &value) in output.iter_mut().zip(input) {
+        *out = value.clamp(0, 127) as u8;
+    }
+}
+
+/// Dense layer with i8 weights (row per output) followed by the scaled clipped ReLU.
+#[inline(always)]
+fn affine_clipped_relu(input: &[u8], weights: &[i8], biases: &[i32], output: &mut [u8]) {
+    let in_dim = input.len();
+    for (j, out) in output.iter_mut().enumerate() {
+        let row = &weights[j * in_dim..(j + 1) * in_dim];
+        let sum = biases[j] + dot_u8_i8(input, row);
+        *out = (sum >> WEIGHT_SCALE_BITS).clamp(0, 127) as u8;
+    }
 }
 
 /// HalfKP orients black's view by rotating the board, not by flipping ranks.
@@ -259,7 +277,11 @@ fn make_halfkp_index(
     piece_color: Color,
 ) -> usize {
     let oriented_sq = if is_white_pov { sq } else { rotate_180(sq) };
-    let king_oriented = if is_white_pov { king_sq } else { rotate_180(king_sq) };
+    let king_oriented = if is_white_pov {
+        king_sq
+    } else {
+        rotate_180(king_sq)
+    };
 
     let color_is_pov = (piece_color == Color::White) == is_white_pov;
     let color_offset = if color_is_pov { 0 } else { 1 };
@@ -315,24 +337,59 @@ fn sub_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
     }
 }
 
+/// Dot product of activations (0..=127) and weights; exact for any length.
 #[inline(always)]
-fn dot_product(input: &[i32], weights: &[i8]) -> i32 {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        dot_product_avx2(input, weights)
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        dot_product_neon(input, weights)
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn dot_u8_i8(input: &[u8], weights: &[i8]) -> i32 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
-        input
-            .iter()
-            .zip(weights.iter())
-            .map(|(&x, &w)| x * (w as i32))
-            .sum()
+        dot_u8_i8_avx2(input, weights)
     }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    {
+        dot_u8_i8_scalar(input, weights)
+    }
+}
+
+#[cfg_attr(all(target_arch = "x86_64", target_feature = "avx2"), allow(dead_code))]
+fn dot_u8_i8_scalar(input: &[u8], weights: &[i8]) -> i32 {
+    input
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| i32::from(x) * i32::from(w))
+        .sum()
+}
+
+/// `maddubs` sums adjacent u8*i8 pairs into i16; with inputs <= 127 the pair sum
+/// lies within ±32_512, so it never saturates and the result is exact.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline(always)]
+fn dot_u8_i8_avx2(input: &[u8], weights: &[i8]) -> i32 {
+    const LANES: usize = 32;
+    let len = input.len().min(weights.len());
+    let chunks = len / LANES;
+    // SAFETY: AVX2 is enabled at compile time; every load reads LANES bytes inside
+    // both slices because i < chunks * LANES <= len.
+    let mut sum = unsafe {
+        let ones = _mm256_set1_epi16(1);
+        let mut acc = _mm256_setzero_si256();
+        for chunk in 0..chunks {
+            let offset = chunk * LANES;
+            let x = _mm256_loadu_si256(input.as_ptr().add(offset).cast());
+            let w = _mm256_loadu_si256(weights.as_ptr().add(offset).cast());
+            let pairs = _mm256_maddubs_epi16(x, w);
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(pairs, ones));
+        }
+        let lo = _mm256_castsi256_si128(acc);
+        let hi = _mm256_extracti128_si256(acc, 1);
+        let quad = _mm_add_epi32(lo, hi);
+        let pair = _mm_add_epi32(quad, _mm_shuffle_epi32(quad, 0b01_00_11_10));
+        let single = _mm_add_epi32(pair, _mm_shuffle_epi32(pair, 0b10_11_00_01));
+        _mm_cvtsi128_si32(single)
+    };
+    for i in chunks * LANES..len {
+        sum += i32::from(input[i]) * i32::from(weights[i]);
+    }
+    sum
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -369,40 +426,6 @@ unsafe fn sub_weight_avx2(acc: &mut [i16], weights: &[i16], idx: usize) {
         }
         i += 16;
     }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn dot_product_avx2(input: &[i32], weights: &[i8]) -> i32 {
-    let len = input.len();
-    let mut i = 0;
-    let mut acc = _mm256_setzero_si256();
-    while i + 16 <= len {
-        unsafe {
-            let in_vec1 = _mm256_loadu_si256(input.as_ptr().add(i) as *const __m256i);
-            let wt_chunk1 = _mm_loadl_epi64(weights.as_ptr().add(i) as *const __m128i);
-            let wt_vec1 = _mm256_cvtepi8_epi32(wt_chunk1);
-            let in_vec2 = _mm256_loadu_si256(input.as_ptr().add(i + 8) as *const __m256i);
-            let wt_chunk2 = _mm_loadl_epi64(weights.as_ptr().add(i + 8) as *const __m128i);
-            let wt_vec2 = _mm256_cvtepi8_epi32(wt_chunk2);
-            let prod1 = _mm256_madd_epi16(
-                _mm256_packs_epi32(in_vec1, in_vec2),
-                _mm256_packs_epi32(wt_vec1, wt_vec2),
-            );
-            acc = _mm256_add_epi32(acc, prod1);
-        }
-        i += 16;
-    }
-    let mut acc_arr = [0i32; 8];
-    unsafe {
-        _mm256_storeu_si256(acc_arr.as_mut_ptr() as *mut __m256i, acc);
-    }
-    let mut sum = acc_arr.iter().sum();
-    while i < len {
-        sum += input[i] * (weights[i] as i32);
-        i += 1;
-    }
-    sum
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -442,74 +465,6 @@ unsafe fn sub_weight_neon(acc: &mut [i16], weights: &[i16], idx: usize) {
         vst1q_s16(acc_ptr.add(8), vsubq_s16(a1, w1));
 
         i += 16;
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn dot_product_neon(input: &[i32], weights: &[i8]) -> i32 {
-    let len = input.len();
-    let mut i = 0;
-    let mut sum0 = vdupq_n_s32(0);
-    let mut sum1 = vdupq_n_s32(0);
-
-    while i + 8 <= len {
-        let w_ptr = weights.as_ptr().add(i);
-        let w_8 = vld1_s8(w_ptr);
-
-        let w_16 = vmovl_s8(w_8);
-
-        let w_32_low = vmovl_s16(vget_low_s16(w_16));
-        let w_32_high = vmovl_s16(vget_high_s16(w_16));
-
-        let in_ptr = input.as_ptr().add(i);
-        let in_0 = vld1q_s32(in_ptr);
-        let in_1 = vld1q_s32(in_ptr.add(4));
-
-        sum0 = vmlaq_s32(sum0, in_0, w_32_low);
-        sum1 = vmlaq_s32(sum1, in_1, w_32_high);
-
-        i += 8;
-    }
-
-    let sum = vaddq_s32(sum0, sum1);
-    let mut result = vaddvq_s32(sum);
-
-    while i < len {
-        result += input[i] * (weights[i] as i32);
-        i += 1;
-    }
-    result
-}
-
-#[inline]
-fn dense_layer(
-    input: &[i32],
-    weights: &[i8],
-    biases: &[i32],
-    in_dim: usize,
-    out_dim: usize,
-) -> [i32; HL1_OUTPUT_DIM] {
-    let mut out = [0i32; HL1_OUTPUT_DIM];
-    for j in 0..out_dim {
-        let weight_slice = &weights[j * in_dim..(j + 1) * in_dim];
-        let sum = biases[j] + dot_product(input, weight_slice);
-        out[j] = nnue_relu(sum);
-    }
-    out
-}
-
-#[inline]
-fn dense_output(input: &[i32], weights: &[i8], bias: i32) -> i32 {
-    bias + dot_product(input, weights)
-}
-
-#[inline]
-fn nnue_relu(x: i32) -> i32 {
-    if x < 0 {
-        0
-    } else {
-        let y = x / 64;
-        if y > 127 { 127 } else { y }
     }
 }
 
@@ -566,8 +521,14 @@ pub(crate) mod tests {
 
     fn assert_accumulator_matches_refresh(board: &Board, context: &str) {
         let fresh = refresh_accumulator(board);
-        assert_eq!(board.accumulator.white, fresh.white, "white half: {context}");
-        assert_eq!(board.accumulator.black, fresh.black, "black half: {context}");
+        assert_eq!(
+            board.accumulator.white, fresh.white,
+            "white half: {context}"
+        );
+        assert_eq!(
+            board.accumulator.black, fresh.black,
+            "black half: {context}"
+        );
     }
 
     /// Walks every legal move to `depth`, checking the accumulator before and after each.
@@ -602,6 +563,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn simd_dot_product_matches_scalar_at_extreme_values() {
+        let lengths = [32usize, 512, 37];
+        for len in lengths {
+            let input: Vec<u8> = (0..len)
+                .map(|i| if i % 3 == 0 { 127 } else { (i * 7 % 128) as u8 })
+                .collect();
+            let weights: Vec<i8> = (0..len)
+                .map(|i| match i % 4 {
+                    0 => -128,
+                    1 => 127,
+                    _ => ((i * 13) % 256) as u8 as i8,
+                })
+                .collect();
+            assert_eq!(
+                dot_u8_i8(&input, &weights),
+                dot_u8_i8_scalar(&input, &weights),
+                "len {len}"
+            );
+        }
+    }
+
+    #[test]
     fn eval_is_invariant_under_rotation_and_color_swap() {
         ensure_model_loaded();
         let fens = [
@@ -613,7 +596,11 @@ pub(crate) mod tests {
         for fen in fens {
             let board = Board::from_fen(fen).unwrap();
             let mirrored = Board::from_fen(&rotated_color_swapped_fen(&board)).unwrap();
-            assert_eq!(evaluate(&board), evaluate(&mirrored), "asymmetric eval for {fen}");
+            assert_eq!(
+                evaluate(&board),
+                evaluate(&mirrored),
+                "asymmetric eval for {fen}"
+            );
         }
     }
 }
