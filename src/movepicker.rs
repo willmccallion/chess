@@ -1,8 +1,9 @@
 use crate::board::Board;
 use crate::see::see;
-use crate::types::{Move, MoveList};
+use crate::types::{MAX_MOVES, Move, MoveList, StackVec};
 
 const GOOD_CAPTURE_BASE: i32 = 1_000_000;
+const MAX_BAD_CAPTURES: usize = 64;
 
 // ── MovePicker for negamax ──────────────────────────────────────────
 
@@ -28,11 +29,10 @@ pub struct MovePicker {
     counter_move: Option<Move>,
 
     moves: MoveList,
-    scores: [i32; 300],
+    scores: StackVec<i32, MAX_MOVES>,
     idx: usize,
 
-    bad_captures: [Move; 64],
-    bad_count: usize,
+    bad_captures: StackVec<Move, MAX_BAD_CAPTURES>,
     bad_idx: usize,
 }
 
@@ -54,10 +54,9 @@ impl MovePicker {
             killer2,
             counter_move,
             moves: MoveList::new(),
-            scores: [0; 300],
+            scores: StackVec::default(),
             idx: 0,
-            bad_captures: [Move::default(); 64],
-            bad_count: 0,
+            bad_captures: StackVec::default(),
             bad_idx: 0,
         }
     }
@@ -76,14 +75,14 @@ impl MovePicker {
 
                 Stage::GenCaptures => {
                     board.generate_captures(&mut self.moves);
-                    for i in 0..self.moves.len() {
-                        let m = self.moves.moves[i];
+                    self.scores.clear();
+                    for &m in self.moves.as_slice() {
                         let see_val = see(board, m);
-                        self.scores[i] = if see_val >= 0 {
+                        self.scores.push(if see_val >= 0 {
                             GOOD_CAPTURE_BASE + see_val
                         } else {
-                            see_val // negative => bad capture
-                        };
+                            see_val
+                        });
                     }
                     self.idx = 0;
                     self.stage = Stage::GoodCaptures;
@@ -93,18 +92,18 @@ impl MovePicker {
                     while self.idx < self.moves.len() {
                         // Selection sort: find best remaining
                         let mut best_k = self.idx;
-                        let mut best_s = self.scores[self.idx];
+                        let mut best_s = self.scores.as_slice()[self.idx];
                         for j in (self.idx + 1)..self.moves.len() {
-                            if self.scores[j] > best_s {
-                                best_s = self.scores[j];
+                            if self.scores.as_slice()[j] > best_s {
+                                best_s = self.scores.as_slice()[j];
                                 best_k = j;
                             }
                         }
                         self.moves.swap(self.idx, best_k);
-                        self.scores.swap(self.idx, best_k);
+                        self.scores.as_mut_slice().swap(self.idx, best_k);
 
-                        let m = self.moves.moves[self.idx];
-                        let s = self.scores[self.idx];
+                        let m = self.moves.get(self.idx);
+                        let s = self.scores.as_slice()[self.idx];
                         self.idx += 1;
 
                         // Skip if already yielded as TT move
@@ -114,9 +113,8 @@ impl MovePicker {
 
                         if s < GOOD_CAPTURE_BASE {
                             // Bad capture: stash for later
-                            if self.bad_count < 64 {
-                                self.bad_captures[self.bad_count] = m;
-                                self.bad_count += 1;
+                            if self.bad_captures.len() < MAX_BAD_CAPTURES {
+                                self.bad_captures.push(m);
                             }
                             continue;
                         }
@@ -170,10 +168,10 @@ impl MovePicker {
 
                 Stage::GenQuiets => {
                     board.generate_quiets(&mut self.moves);
-                    for i in 0..self.moves.len() {
-                        let m = self.moves.moves[i];
+                    self.scores.clear();
+                    for &m in self.moves.as_slice() {
                         let piece_idx = board.piece_on[m.from as usize].index();
-                        self.scores[i] = history[piece_idx][m.to as usize];
+                        self.scores.push(history[piece_idx][m.to as usize]);
                     }
                     self.idx = 0;
                     self.stage = Stage::Quiets;
@@ -182,17 +180,17 @@ impl MovePicker {
                 Stage::Quiets => {
                     while self.idx < self.moves.len() {
                         let mut best_k = self.idx;
-                        let mut best_s = self.scores[self.idx];
+                        let mut best_s = self.scores.as_slice()[self.idx];
                         for j in (self.idx + 1)..self.moves.len() {
-                            if self.scores[j] > best_s {
-                                best_s = self.scores[j];
+                            if self.scores.as_slice()[j] > best_s {
+                                best_s = self.scores.as_slice()[j];
                                 best_k = j;
                             }
                         }
                         self.moves.swap(self.idx, best_k);
-                        self.scores.swap(self.idx, best_k);
+                        self.scores.as_mut_slice().swap(self.idx, best_k);
 
-                        let m = self.moves.moves[self.idx];
+                        let m = self.moves.get(self.idx);
                         self.idx += 1;
 
                         // Skip duplicates
@@ -211,8 +209,8 @@ impl MovePicker {
                 }
 
                 Stage::BadCaptures => {
-                    if self.bad_idx < self.bad_count {
-                        let m = self.bad_captures[self.bad_idx];
+                    if self.bad_idx < self.bad_captures.len() {
+                        let m = self.bad_captures.as_slice()[self.bad_idx];
                         self.bad_idx += 1;
                         return Some(m);
                     }
@@ -237,7 +235,7 @@ enum QStage {
 pub struct QMovePicker {
     stage: QStage,
     moves: MoveList,
-    scores: [i32; 300],
+    scores: StackVec<i32, MAX_MOVES>,
     idx: usize,
 }
 
@@ -246,7 +244,7 @@ impl QMovePicker {
         Self {
             stage: QStage::GenCaptures,
             moves: MoveList::new(),
-            scores: [0; 300],
+            scores: StackVec::default(),
             idx: 0,
         }
     }
@@ -256,9 +254,9 @@ impl QMovePicker {
             match self.stage {
                 QStage::GenCaptures => {
                     board.generate_captures(&mut self.moves);
-                    for i in 0..self.moves.len() {
-                        let m = self.moves.moves[i];
-                        self.scores[i] = see(board, m);
+                    self.scores.clear();
+                    for &m in self.moves.as_slice() {
+                        self.scores.push(see(board, m));
                     }
                     self.idx = 0;
                     self.stage = QStage::Captures;
@@ -272,17 +270,17 @@ impl QMovePicker {
 
                     // Selection sort
                     let mut best_k = self.idx;
-                    let mut best_s = self.scores[self.idx];
+                    let mut best_s = self.scores.as_slice()[self.idx];
                     for j in (self.idx + 1)..self.moves.len() {
-                        if self.scores[j] > best_s {
-                            best_s = self.scores[j];
+                        if self.scores.as_slice()[j] > best_s {
+                            best_s = self.scores.as_slice()[j];
                             best_k = j;
                         }
                     }
                     self.moves.swap(self.idx, best_k);
-                    self.scores.swap(self.idx, best_k);
+                    self.scores.as_mut_slice().swap(self.idx, best_k);
 
-                    let m = self.moves.moves[self.idx];
+                    let m = self.moves.get(self.idx);
                     self.idx += 1;
                     return Some(m);
                 }

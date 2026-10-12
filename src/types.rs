@@ -1,4 +1,5 @@
 use std::fmt;
+use std::mem::MaybeUninit;
 
 pub type Bitboard = u64;
 pub type ZKey = u64;
@@ -296,43 +297,36 @@ impl From<u16> for Move {
     }
 }
 
-const MAX_MOVES: usize = 300;
+pub const MAX_MOVES: usize = 300;
 
+/// Fixed-capacity vector that does not initialize unused slots.
 #[derive(Clone, Copy)]
-pub struct MoveList {
-    pub moves: [Move; MAX_MOVES],
-    pub len: usize,
+pub struct StackVec<T: Copy, const N: usize> {
+    items: [MaybeUninit<T>; N],
+    len: usize,
 }
 
-impl Default for MoveList {
+impl<T: Copy, const N: usize> Default for StackVec<T, N> {
+    #[inline(always)]
     fn default() -> Self {
         Self {
-            moves: [Move::default(); MAX_MOVES],
+            items: [const { MaybeUninit::uninit() }; N],
             len: 0,
         }
     }
 }
 
-impl MoveList {
+impl<T: Copy, const N: usize> StackVec<T, N> {
+    /// Panics if the capacity `N` is exceeded.
     #[inline(always)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[inline(always)]
-    pub fn push(&mut self, m: Move) {
-        self.moves[self.len] = m;
+    pub fn push(&mut self, item: T) {
+        self.items[self.len] = MaybeUninit::new(item);
         self.len += 1;
     }
 
     #[inline(always)]
     pub fn clear(&mut self) {
         self.len = 0;
-    }
-
-    #[inline(always)]
-    pub fn as_slice(&self) -> &[Move] {
-        &self.moves[..self.len]
     }
 
     #[inline(always)]
@@ -346,8 +340,62 @@ impl MoveList {
     }
 
     #[inline(always)]
+    pub fn as_slice(&self) -> &[T] {
+        // SAFETY: slots 0..len were written by `push` and len <= N.
+        unsafe { std::slice::from_raw_parts(self.items.as_ptr().cast::<T>(), self.len) }
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        // SAFETY: slots 0..len were written by `push` and len <= N.
+        unsafe { std::slice::from_raw_parts_mut(self.items.as_mut_ptr().cast::<T>(), self.len) }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct MoveList {
+    moves: StackVec<Move, MAX_MOVES>,
+}
+
+impl MoveList {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, m: Move) {
+        self.moves.push(m);
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.moves.clear();
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[Move] {
+        self.moves.as_slice()
+    }
+
+    #[inline(always)]
+    pub fn get(&self, index: usize) -> Move {
+        self.moves.as_slice()[index]
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.moves.len()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.moves.is_empty()
+    }
+
+    #[inline(always)]
     pub fn swap(&mut self, a: usize, b: usize) {
-        self.moves.swap(a, b);
+        self.moves.as_mut_slice().swap(a, b);
     }
 }
 

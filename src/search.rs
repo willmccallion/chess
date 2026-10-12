@@ -3,7 +3,7 @@ use crate::nnue::evaluate;
 use crate::see::see;
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
-use crate::types::{Move, MoveList, Piece, PieceKind};
+use crate::types::{MAX_MOVES, Move, MoveList, Piece, PieceKind};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -233,14 +233,9 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         let mut move_list = MoveList::new();
         s.board.generate_pseudo_legal_moves(&mut move_list);
 
-        let mut scores = [0i32; 300];
-        for i in 0..move_list.len() {
-            let m = move_list.moves[i];
-            if m.capture {
-                scores[i] = see(&s.board, m);
-            } else {
-                scores[i] = 0;
-            }
+        let mut scores = [0i32; MAX_MOVES];
+        for (score, &m) in scores.iter_mut().zip(move_list.as_slice()) {
+            *score = if m.capture { see(&s.board, m) } else { 0 };
         }
 
         let mut legal_moves_found = false;
@@ -257,7 +252,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
             move_list.swap(i, best_idx);
             scores.swap(i, best_idx);
 
-            let m = move_list.moves[i];
+            let m = move_list.get(i);
 
             let undo = s.board.make_move(m);
             if mover_left_king_in_check(&s.board) {
@@ -745,7 +740,7 @@ pub fn search(
     }
     if root_moves.len() == 1 && control.is_timed() && !limits.wait_for_stop {
         return SearchResult {
-            best_move: Some(root_moves.moves[0]),
+            best_move: Some(root_moves.get(0)),
             ponder_move: None,
             nodes: 0,
         };
@@ -790,7 +785,7 @@ pub fn search(
         (best_move, main_nodes + helper_nodes)
     });
 
-    let best_move = best_move.or(Some(root_moves.moves[0]));
+    let best_move = best_move.or(Some(root_moves.get(0)));
     let ponder_move = best_move.and_then(|m| ponder_move_after(board, m, tt));
     SearchResult {
         best_move,
