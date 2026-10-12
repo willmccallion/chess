@@ -245,27 +245,6 @@ fn generate_attacks_source(out_dir: &PathBuf) {
     );
 }
 
-/// Downloads the NNUE file
-fn download_nnue(out_dir: &PathBuf) {
-    const NNUE_URL: &str = "https://tests.stockfishchess.org/api/nn/nn-9931db908a9b.nnue";
-    let dest_path = out_dir.join("nn-9931db908a9b.nnue");
-
-    if dest_path.exists() {
-        return;
-    }
-
-    println!("cargo:warning=Downloading NNUE file from {}", NNUE_URL);
-    let response = reqwest::blocking::get(NNUE_URL).expect("Failed to download NNUE file");
-    let bytes = response
-        .bytes()
-        .expect("Failed to get bytes from NNUE download response");
-
-    let mut dest_file = File::create(&dest_path).expect("Failed to create NNUE file");
-    dest_file
-        .write_all(&bytes)
-        .expect("Failed to write to NNUE file");
-}
-
 fn generate_zobrist_keys(out_dir: &PathBuf) {
     let dest_path = out_dir.join("generated_zobrist.rs");
     let mut f = BufWriter::new(File::create(&dest_path).unwrap());
@@ -323,7 +302,6 @@ fn generate_zobrist_keys(out_dir: &PathBuf) {
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     generate_attacks_source(&out_dir);
-    download_nnue(&out_dir);
     generate_zobrist_keys(&out_dir);
     println!("cargo:rerun-if-changed=build.rs");
 }

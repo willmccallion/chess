@@ -87,8 +87,6 @@
           devShell = pkgs.mkShell {
             packages = [
               rustToolchain
-              pkgs.pkg-config
-              pkgs.openssl
               pkgs.stockfish
               pkgs.perf
               (pkgs.python3.withPackages (ps: [ ps.chess ]))
