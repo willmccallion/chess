@@ -129,67 +129,73 @@ pub fn init() -> Result<(), NnueError> {
     Ok(())
 }
 
-/// Computes the accumulator from scratch. Used when loading FEN or when King moves.
-pub fn refresh_accumulator(board: &Board) -> Accumulator {
-    let Some(model) = MODEL.get() else {
-        return Accumulator::default();
-    };
-
-    let mut acc = Accumulator::default();
-
-    acc.white.copy_from_slice(&model.ft_biases);
-    acc.black.copy_from_slice(&model.ft_biases);
-
-    let wk_sq = board.king_square(Color::White) as usize;
-    let bk_sq = board.king_square(Color::Black) as usize;
-
-    let mut occupied = board.all_pieces;
-    occupied &= !board.piece_bb[Piece::WK.index()];
-    occupied &= !board.piece_bb[Piece::BK.index()];
-
-    while occupied != 0 {
-        let sq = occupied.trailing_zeros() as usize;
-        occupied &= occupied - 1;
-
-        let piece = board.piece_on[sq];
-        let color = piece.color().unwrap();
-
-        let idx_w = make_halfkp_index(true, wk_sq, sq, piece, color);
-        add_weight(&mut acc.white, &model.ft_weights, idx_w);
-
-        let idx_b = make_halfkp_index(false, bk_sq, sq, piece, color);
-        add_weight(&mut acc.black, &model.ft_weights, idx_b);
+#[inline(always)]
+fn perspective_half(acc: &mut Accumulator, perspective: Color) -> &mut [i16; NNUE_FEATURE_SIZE] {
+    match perspective {
+        Color::White => &mut acc.white,
+        Color::Black => &mut acc.black,
     }
+}
 
+/// Computes the accumulator from scratch for both perspectives.
+pub fn refresh_accumulator(board: &Board) -> Accumulator {
+    let mut acc = Accumulator::default();
+    refresh_perspective(board, Color::White, &mut acc);
+    refresh_perspective(board, Color::Black, &mut acc);
     acc
 }
 
-/// Incrementally updates the accumulator based on a list of changes.
-pub fn update_accumulator(
+/// Recomputes one perspective from scratch; needed when that side's king moves.
+pub fn refresh_perspective(board: &Board, perspective: Color, acc: &mut Accumulator) {
+    let Some(model) = MODEL.get() else {
+        return;
+    };
+    let half = perspective_half(acc, perspective);
+    half.copy_from_slice(&model.ft_biases);
+
+    let is_white_pov = perspective == Color::White;
+    let king_sq = board.king_square(perspective) as usize;
+    let mut pieces = board.all_pieces
+        & !board.piece_bb[Piece::WK.index()]
+        & !board.piece_bb[Piece::BK.index()];
+
+    while pieces != 0 {
+        let sq = pieces.trailing_zeros() as usize;
+        pieces &= pieces - 1;
+        let piece = board.piece_on[sq];
+        let Some(color) = piece.color() else {
+            continue;
+        };
+        let idx = make_halfkp_index(is_white_pov, king_sq, sq, piece, color);
+        add_weight(half, &model.ft_weights, idx);
+    }
+}
+
+/// Applies piece additions/removals to one perspective. Kings are not HalfKP features.
+pub fn update_perspective(
     acc: &mut Accumulator,
-    wk_sq: usize,
-    bk_sq: usize,
+    perspective: Color,
+    king_sq: usize,
     updates: &[UpdateBody],
 ) {
     let Some(model) = MODEL.get() else {
         return;
     };
+    let half = perspective_half(acc, perspective);
+    let is_white_pov = perspective == Color::White;
 
     for u in updates {
-        let color = u.piece.color().unwrap();
-
-        let idx_w = make_halfkp_index(true, wk_sq, u.sq, u.piece, color);
-        if u.add {
-            add_weight(&mut acc.white, &model.ft_weights, idx_w);
-        } else {
-            sub_weight(&mut acc.white, &model.ft_weights, idx_w);
+        if u.piece.kind() == Some(PieceKind::King) {
+            continue;
         }
-
-        let idx_b = make_halfkp_index(false, bk_sq, u.sq, u.piece, color);
+        let Some(color) = u.piece.color() else {
+            continue;
+        };
+        let idx = make_halfkp_index(is_white_pov, king_sq, u.sq, u.piece, color);
         if u.add {
-            add_weight(&mut acc.black, &model.ft_weights, idx_b);
+            add_weight(half, &model.ft_weights, idx);
         } else {
-            sub_weight(&mut acc.black, &model.ft_weights, idx_b);
+            sub_weight(half, &model.ft_weights, idx);
         }
     }
 }
@@ -556,6 +562,43 @@ pub(crate) mod tests {
         }
         let side = if board.turn == Color::White { "b" } else { "w" };
         format!("{} {side} - - 0 1", rows.join("/"))
+    }
+
+    fn assert_accumulator_matches_refresh(board: &Board, context: &str) {
+        let fresh = refresh_accumulator(board);
+        assert_eq!(board.accumulator.white, fresh.white, "white half: {context}");
+        assert_eq!(board.accumulator.black, fresh.black, "black half: {context}");
+    }
+
+    /// Walks every legal move to `depth`, checking the accumulator before and after each.
+    fn walk_and_check(board: &mut Board, depth: usize) {
+        if depth == 0 {
+            return;
+        }
+        let mut moves = crate::types::MoveList::new();
+        board.generate_legal_moves(&mut moves);
+        for &m in moves.as_slice() {
+            let before = board.to_fen();
+            let undo = board.make_move(m);
+            assert_accumulator_matches_refresh(board, &format!("{before} after {m:?}"));
+            walk_and_check(board, depth - 1);
+            board.unmake_move(m, undo);
+            assert_accumulator_matches_refresh(board, &format!("{before} after undoing {m:?}"));
+        }
+    }
+
+    #[test]
+    fn incremental_accumulator_matches_refresh_through_special_moves() {
+        ensure_model_loaded();
+        let fens = [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+            "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+        ];
+        for fen in fens {
+            let mut board = Board::from_fen(fen).unwrap();
+            walk_and_check(&mut board, 2);
+        }
     }
 
     #[test]

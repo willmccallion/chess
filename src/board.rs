@@ -21,6 +21,8 @@ pub struct Board {
     pub history: Vec<ZKey>,
     pub zobrist: ZKey,
     pub accumulator: Accumulator,
+    /// Accumulators of the positions before each move, restored on unmake.
+    accumulator_history: Vec<Accumulator>,
 }
 
 impl Board {
@@ -40,6 +42,7 @@ impl Board {
             history: Vec::with_capacity(128),
             zobrist: 0,
             accumulator: Accumulator::default(),
+            accumulator_history: Vec::with_capacity(128),
         }
     }
 
@@ -1361,26 +1364,30 @@ impl Board {
         self.turn = self.turn.other();
         self.history.push(self.zobrist);
 
-        if is_king_move {
-            self.accumulator = nnue::refresh_accumulator(self);
-        } else {
-            let wk = self.king_square(Color::White) as usize;
-            let bk = self.king_square(Color::Black) as usize;
-            nnue::update_accumulator(&mut self.accumulator, wk, bk, &updates[..update_count]);
-        }
+        self.accumulator_history.push(self.accumulator);
+        let king_mover = moving.color().filter(|_| is_king_move);
+        self.update_accumulator(king_mover, &updates[..update_count]);
 
         undo
     }
 
+    /// Brings the accumulator up to date after a move. The moving side's perspective
+    /// is rebuilt when its king moved; HalfKP features are relative to that king.
+    fn update_accumulator(&mut self, king_mover: Option<Color>, updates: &[UpdateBody]) {
+        let mut acc = self.accumulator;
+        for perspective in [Color::White, Color::Black] {
+            if king_mover == Some(perspective) {
+                nnue::refresh_perspective(self, perspective, &mut acc);
+            } else {
+                let king_sq = self.king_square(perspective) as usize;
+                nnue::update_perspective(&mut acc, perspective, king_sq, updates);
+            }
+        }
+        self.accumulator = acc;
+    }
+
     #[inline]
     pub fn unmake_move(&mut self, m: Move, u: Undo) {
-        let mut updates = [UpdateBody {
-            piece: Piece::Empty,
-            sq: 0,
-            add: false,
-        }; 5];
-        let mut update_count = 0;
-
         let from = m.from as usize;
         let to = m.to as usize;
 
@@ -1390,69 +1397,9 @@ impl Board {
         } else {
             piece_on_to
         };
-        let is_king_move = moving_piece.kind() == Some(PieceKind::King);
 
-        updates[update_count] = UpdateBody {
-            piece: piece_on_to,
-            sq: to,
-            add: false,
-        };
-        update_count += 1;
-
-        updates[update_count] = UpdateBody {
-            piece: moving_piece,
-            sq: from,
-            add: true,
-        };
-        update_count += 1;
-
-        if m.capture {
-            let cap_sq = if m.en_passant {
-                if self.turn == Color::White {
-                    to + 8
-                } else {
-                    to - 8
-                }
-            } else {
-                to
-            };
-            let captured = u.captured_piece;
-            if !captured.is_empty() {
-                updates[update_count] = UpdateBody {
-                    piece: captured,
-                    sq: cap_sq,
-                    add: true,
-                };
-                update_count += 1;
-            }
-        }
-
-        if m.castle {
-            let (rook_from, rook_to) = if to > from {
-                (to + 1, to - 1)
-            } else {
-                (to - 2, to + 1)
-            };
-            let rook_piece = self.piece_on[rook_to];
-
-            updates[update_count] = UpdateBody {
-                piece: rook_piece,
-                sq: rook_to,
-                add: false,
-            };
-            update_count += 1;
-            updates[update_count] = UpdateBody {
-                piece: rook_piece,
-                sq: rook_from,
-                add: true,
-            };
-            update_count += 1;
-        }
-
-        if !is_king_move {
-            let wk = self.king_square(Color::White) as usize;
-            let bk = self.king_square(Color::Black) as usize;
-            nnue::update_accumulator(&mut self.accumulator, wk, bk, &updates[..update_count]);
+        if let Some(previous) = self.accumulator_history.pop() {
+            self.accumulator = previous;
         }
 
         self.history.pop();
@@ -1535,10 +1482,6 @@ impl Board {
         }
 
         self.all_pieces = self.w_pieces | self.b_pieces;
-
-        if is_king_move {
-            self.accumulator = nnue::refresh_accumulator(self);
-        }
     }
 
     #[inline]
