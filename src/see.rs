@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn quiet_move_onto_attacked_square_loses_the_piece() {
-        see_value_bracket("4k3/8/8/3p4/8/8/8/4RK2 w - - 0 1", "e1e4", -500);
+        see_value_bracket("k7/8/8/3p4/8/8/8/4RK2 w - - 0 1", "e1e4", -500);
     }
 
     #[test]

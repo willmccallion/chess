@@ -76,10 +76,26 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
     b.fullmove_number = fullmove.parse().unwrap_or(1);
 
     b.rebuild_derived();
+    validate_kings(&b)?;
     b.recompute_zobrist();
     b.history.push(b.zobrist);
 
     Ok(b)
+}
+
+/// Each side needs exactly one king, and the side that just moved cannot be in check.
+fn validate_kings(b: &Board) -> Result<(), String> {
+    for king in [Piece::WK, Piece::BK] {
+        if b.piece_bb[king.index()].count_ones() != 1 {
+            return Err(format!("FEN must have exactly one {king} king"));
+        }
+    }
+    let waiting_side = b.turn.other();
+    let waiting_king = b.king_square(waiting_side) as i32;
+    if b.is_square_attacked(waiting_king, b.turn) {
+        return Err("side not to move is in check".into());
+    }
+    Ok(())
 }
 
 pub fn to_fen(b: &Board) -> String {
@@ -151,4 +167,27 @@ pub fn to_fen(b: &Board) -> String {
     s.push(' ');
     s.push_str(&b.fullmove_number.to_string());
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_position_where_side_not_to_move_is_in_check() {
+        let fen = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 b kq - 0 1";
+        assert!(parse_fen(fen).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_or_extra_kings() {
+        assert!(parse_fen("8/8/8/8/8/8/8/K7 w - - 0 1").is_err());
+        assert!(parse_fen("k7/8/8/8/8/8/8/KK6 w - - 0 1").is_err());
+    }
+
+    #[test]
+    fn round_trips_a_legal_position() {
+        let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+        assert_eq!(to_fen(&parse_fen(fen).unwrap()), fen);
+    }
 }
