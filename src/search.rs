@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::eval::evaluate;
+use crate::eval::{Optimism, evaluate_with_optimism};
 use crate::legality::LegalityInfo;
 use crate::history::{ContinuationKey, CorrectionHistory, Histories, captured_kind, stat_bonus};
 use crate::movepicker::{MovePicker, OrderingContext};
@@ -339,6 +339,8 @@ struct Search<'a> {
     root_best: Option<(Move, i32)>,
     /// Nodes searched under each root move during this `go`.
     root_move_nodes: Vec<(Move, u64)>,
+    /// Evaluation bias per color from the root score so far, indexed by `Color as usize`.
+    optimism: [Optimism; 2],
 }
 
 #[inline(always)]
@@ -490,9 +492,22 @@ impl Search<'_> {
         }
     }
 
+    fn evaluate(&mut self) -> i32 {
+        let optimism = self.optimism[self.board.turn as usize];
+        evaluate_with_optimism(&mut self.board, optimism)
+    }
+
     /// Static eval for the current node, reusing the TT's copy when it has one.
     fn static_eval(&mut self, tt_eval: Option<i32>) -> i32 {
-        tt_eval.unwrap_or_else(|| evaluate(&mut self.board))
+        tt_eval.unwrap_or_else(|| self.evaluate())
+    }
+
+    /// Leans the evaluation toward the side the root score favors, as Stockfish does.
+    fn set_optimism(&mut self, average_root_score: i32) {
+        let root = Optimism::from_root_score(average_root_score);
+        let us = self.board.turn as usize;
+        self.optimism[us] = root;
+        self.optimism[1 - us] = root.opposite();
     }
 
     /// Static eval adjusted by what searches have learned about this pawn structure.
@@ -644,7 +659,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         return 0;
     }
     if s.ply >= MAX_PLY - 1 {
-        return evaluate(&mut s.board);
+        return s.evaluate();
     }
 
     let is_pv = beta - alpha > 1;
@@ -893,7 +908,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             return DRAW_SCORE;
         }
         if s.ply >= MAX_PLY - 1 {
-            return evaluate(&mut s.board);
+            return s.evaluate();
         }
         alpha = alpha.max(-MATE_SCORE + s.ply as i32);
         beta = beta.min(MATE_SCORE - s.ply as i32 - 1);
@@ -1304,12 +1319,17 @@ fn iterative_deepening(
         seldepth: 0,
         root_best: None,
         root_move_nodes: Vec::new(),
+        optimism: [Optimism::default(); 2],
     };
 
     let mut score = 0;
+    let mut average_score: Option<i32> = None;
     for depth in 1..=max_depth {
         let previous_score = score;
         search.seldepth = 0;
+        if let Some(average) = average_score {
+            search.set_optimism(average);
+        }
         let mut delta = ASPIRATION_DELTA;
         let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
             ((score - delta).max(-INFINITY), (score + delta).min(INFINITY))
@@ -1343,6 +1363,7 @@ fn iterative_deepening(
         if aborted {
             break;
         }
+        average_score = Some(average_score.map_or(score, |average| (score + average) / 2));
 
         let best_move = search.root_best.map(|(m, _)| m);
         if is_main_thread && let Some(m) = best_move {
