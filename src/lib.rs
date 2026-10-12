@@ -1,5 +1,6 @@
 pub mod bench;
 pub mod board;
+pub mod compare;
 pub mod fen;
 pub mod game_runner;
 pub mod magics;

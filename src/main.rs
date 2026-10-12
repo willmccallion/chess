@@ -1,5 +1,6 @@
 use chess::bench;
 use chess::board::Board;
+use chess::compare::{CompareConfig, run_compare};
 use chess::nnue;
 use chess::openings;
 use chess::perft::{divide, perft};
@@ -101,6 +102,42 @@ enum Cmd {
         /// Stop early via SPRT: "elo0,elo1" or "elo0,elo1,alpha,beta" (logistic Elo)
         #[arg(long)]
         sprt: Option<String>,
+    },
+    /// Analyse positions with this engine and a reference engine and compare the results
+    Compare {
+        /// Position to analyse (repeatable); defaults to the bench positions
+        #[arg(long)]
+        fen: Vec<String>,
+        /// EPD file to sample positions from
+        #[arg(long)]
+        epd: Option<String>,
+        /// Number of positions sampled from --epd
+        #[arg(long, default_value_t = 20)]
+        count: usize,
+        /// Seed for sampling --epd positions
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// Search depth for both engines
+        #[arg(long, default_value_t = 12)]
+        depth: u32,
+        /// Search time per position in ms for both engines (overrides --depth)
+        #[arg(long)]
+        movetime: Option<u64>,
+        /// Reference engine search depth (overrides --depth/--movetime for the reference)
+        #[arg(long)]
+        ref_depth: Option<u32>,
+        /// Engine to evaluate (default: this binary)
+        #[arg(long)]
+        engine: Option<String>,
+        /// Reference engine (default: $STOCKFISH, else `stockfish` on PATH)
+        #[arg(long)]
+        reference: Option<String>,
+        /// UCI options for the engine; OwnBook=false is always sent first
+        #[arg(long = "e1-option")]
+        e1_options: Vec<String>,
+        /// UCI options for the reference engine
+        #[arg(long = "e2-option")]
+        e2_options: Vec<String>,
     },
     Uci,
 }
@@ -234,8 +271,64 @@ fn main() {
                 sprt,
             });
         }
+        Cmd::Compare {
+            fen,
+            epd,
+            count,
+            seed,
+            depth,
+            movetime,
+            ref_depth,
+            engine,
+            reference,
+            e1_options,
+            e2_options,
+        } => {
+            let fens = match (fen.is_empty(), epd) {
+                (false, _) => fen,
+                (true, Some(path)) => openings::sample_openings(&path, count, seed)
+                    .unwrap_or_else(|e| exit_with_error(&e)),
+                (true, None) => bench::BENCH_FENS.iter().map(|f| f.to_string()).collect(),
+            };
+            let engine_go = movetime.map_or_else(|| format!("depth {depth}"), |ms| format!("movetime {ms}"));
+            let reference_go = ref_depth.map_or_else(|| engine_go.clone(), |d| format!("depth {d}"));
+            let engine_path = engine.unwrap_or_else(|| {
+                std::env::current_exe()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|e| exit_with_error(&format!("cannot locate own binary: {e}")))
+            });
+            let reference_path = reference
+                .or_else(|| std::env::var("STOCKFISH").ok())
+                .unwrap_or_else(|| "stockfish".to_string());
+            let mut engine_options = vec![("OwnBook".to_string(), "false".to_string())];
+            engine_options.extend(parse_options(&e1_options));
+            let config = CompareConfig {
+                engine_path,
+                reference_path,
+                engine_options,
+                reference_options: parse_options(&e2_options),
+                fens,
+                engine_go,
+                reference_go,
+            };
+            if let Err(e) = run_compare(&config) {
+                exit_with_error(&e);
+            }
+        }
         Cmd::Uci => uci::run_uci(),
     }
+}
+
+fn exit_with_error(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::exit(1);
+}
+
+fn parse_options(options: &[String]) -> Vec<(String, String)> {
+    options
+        .iter()
+        .map(|s| tournament::parse_option(s).unwrap_or_else(|e| exit_with_error(&e)))
+        .collect()
 }
 
 fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threads_count: usize) {
