@@ -99,7 +99,8 @@ impl Histories {
     }
 }
 
-const CORRECTION_ENTRIES: usize = 16_384;
+const CORRECTION_BITS: u32 = 14;
+const CORRECTION_ENTRIES: usize = 1 << CORRECTION_BITS;
 const CORRECTION_GRAIN: i32 = 256;
 const CORRECTION_WEIGHT_SCALE: i32 = 256;
 const CORRECTION_MAX_WEIGHT: i32 = 16;
@@ -117,8 +118,9 @@ impl CorrectionHistory {
         }
     }
 
+    /// The top bits, since the key's low bits ignore pawns on the far ranks.
     fn slot(pawn_key: u64) -> usize {
-        (pawn_key as usize) % CORRECTION_ENTRIES
+        (pawn_key >> (64 - CORRECTION_BITS)) as usize
     }
 
     /// Centipawns to add to the static eval of a position with this pawn structure.
@@ -158,6 +160,20 @@ mod tests {
         }
         let saturated = correction.correction(Color::White, 99);
         assert!((CORRECTION_LIMIT_CP - 2..=CORRECTION_LIMIT_CP).contains(&saturated), "{saturated}");
+    }
+
+    #[test]
+    fn every_single_pawn_change_moves_to_a_different_correction_slot() {
+        let mut board = crate::board::Board::from_fen(crate::types::START_FEN).unwrap();
+        let base = CorrectionHistory::slot(board.pawn_key());
+        for piece in [Piece::WP, Piece::BP] {
+            for sq in 8..56 {
+                board.piece_bb[piece.index()] ^= 1u64 << sq;
+                let slot = CorrectionHistory::slot(board.pawn_key());
+                board.piece_bb[piece.index()] ^= 1u64 << sq;
+                assert_ne!(slot, base, "{piece:?} on {sq}");
+            }
+        }
     }
 
     #[test]
