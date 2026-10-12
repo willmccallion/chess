@@ -1,9 +1,11 @@
 use crate::board::Board;
 use crate::nnue::evaluate;
-use crate::see::{see, see_ge};
+use crate::history::{ContinuationKey, Histories, captured_kind, stat_bonus};
+use crate::movepicker::{MovePicker, OrderingContext};
+use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
-use crate::types::{MAX_MOVES, Move, MoveList, Piece, PieceKind};
+use crate::types::{MAX_MOVES, Move, MoveList, Piece, PieceKind, StackVec, Undo};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,8 +33,7 @@ const SEE_CAPTURE_MARGIN: i32 = -90;
 const DELTA_MARGIN: i32 = 200;
 const ASPIRATION_WINDOW: i32 = 20;
 
-const HISTORY_MAX: i32 = 16_384;
-const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
+const MAX_TRIED_MOVES: usize = 64;
 
 const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
 const NO_DEADLINE: u64 = u64::MAX;
@@ -113,14 +114,14 @@ pub struct SearchResult {
 
 /// Move-ordering statistics one search thread keeps between `go` commands.
 pub struct ThreadData {
-    history: [[i32; 64]; 13],
+    histories: Histories,
     counter_moves: [[[Option<Move>; 64]; 13]; 2],
 }
 
 impl ThreadData {
     fn new() -> Box<Self> {
         Box::new(Self {
-            history: [[0; 64]; 13],
+            histories: Histories::new(),
             counter_moves: [[[None; 64]; 13]; 2],
         })
     }
@@ -211,11 +212,23 @@ impl TimeManager {
 }
 
 /// What the search knows about one ply of the current line.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone)]
 struct StackEntry {
     static_eval: Option<i32>,
     /// Move played from this ply (`None` for a null move or before one is made).
     current_move: Option<Move>,
+    /// Piece that made `current_move`.
+    moved_piece: Piece,
+}
+
+impl Default for StackEntry {
+    fn default() -> Self {
+        Self {
+            static_eval: None,
+            current_move: None,
+            moved_piece: Piece::Empty,
+        }
+    }
 }
 
 struct Search<'a> {
@@ -355,7 +368,8 @@ impl Search<'_> {
         tt_eval.unwrap_or_else(|| evaluate(&self.board))
     }
 
-    fn make_move(&mut self, m: Move) -> Option<crate::types::Undo> {
+    fn make_move(&mut self, m: Move) -> Option<Undo> {
+        let moved_piece = self.board.piece_on[m.from as usize];
         let undo = self.board.make_move(m);
         if mover_left_king_in_check(&self.board) {
             self.board.unmake_move(m, undo);
@@ -363,42 +377,85 @@ impl Search<'_> {
         }
         self.tt.prefetch(self.board.zobrist);
         self.stack[self.ply].current_move = Some(m);
+        self.stack[self.ply].moved_piece = moved_piece;
         self.ply += 1;
         Some(undo)
     }
 
-    fn unmake_move(&mut self, m: Move, undo: crate::types::Undo) {
+    fn make_null_move(&mut self) -> Undo {
+        let undo = self.board.make_null_move();
+        self.stack[self.ply].current_move = None;
+        self.stack[self.ply].moved_piece = Piece::Empty;
+        self.ply += 1;
+        undo
+    }
+
+    fn unmake_null_move(&mut self, undo: Undo) {
+        self.ply -= 1;
+        self.board.unmake_null_move(undo);
+    }
+
+    /// Continuation-history keys for the moves played one and two plies ago.
+    fn continuation_keys(&self) -> [Option<ContinuationKey>; 2] {
+        let key = |back: usize| {
+            let entry = self.stack[self.ply.checked_sub(back)?];
+            entry
+                .current_move
+                .map(|m| ContinuationKey::new(entry.moved_piece, m.to))
+        };
+        [key(1), key(2)]
+    }
+
+    fn unmake_move(&mut self, m: Move, undo: Undo) {
         self.ply -= 1;
         self.board.unmake_move(m, undo);
     }
 
-    fn update_quiet_stats(&mut self, m: Move, depth: i32, failed_quiets: &[Move]) {
-        let ply = self.ply;
-        if Some(m) != self.killers[ply][0] {
-            self.killers[ply][1] = self.killers[ply][0];
-            self.killers[ply][0] = Some(m);
+    fn update_capture_history(&mut self, m: Move, bonus: i32) {
+        let piece = self.board.piece_on[m.from as usize];
+        if let Some(victim) = captured_kind(self.board.piece_on[m.to as usize], m) {
+            self.td.histories.update_capture(piece, m.to, victim, bonus);
         }
+    }
 
-        if let Some(prev) = self.previous_move() {
-            let (capture, piece, to) = counter_move_slot(&self.board, prev);
-            self.td.counter_moves[capture][piece][to] = Some(m);
-        }
+    /// Rewards the move that caused a beta cutoff and penalizes the moves tried before it.
+    fn update_cutoff_stats(
+        &mut self,
+        best: Move,
+        depth: i32,
+        tried_quiets: &[Move],
+        tried_captures: &[Move],
+    ) {
+        let bonus = stat_bonus(depth);
+        let continuations = self.continuation_keys();
+        let color = self.board.turn;
 
-        let piece_idx = self.board.piece_on[m.from as usize].index();
-        let bonus = (depth * depth).min(1000);
-        self.td.history[piece_idx][m.to as usize] += bonus;
-
-        if self.td.history[piece_idx][m.to as usize] > HISTORY_MAX {
-            for piece_history in &mut self.td.history[1..] {
-                for value in piece_history.iter_mut() {
-                    *value >>= 1;
-                }
+        if best.capture {
+            self.update_capture_history(best, bonus);
+        } else {
+            let ply = self.ply;
+            if Some(best) != self.killers[ply][0] {
+                self.killers[ply][1] = self.killers[ply][0];
+                self.killers[ply][0] = Some(best);
+            }
+            if let Some(prev) = self.previous_move() {
+                let (capture, piece, to) = counter_move_slot(&self.board, prev);
+                self.td.counter_moves[capture][piece][to] = Some(best);
+            }
+            let piece = self.board.piece_on[best.from as usize];
+            self.td
+                .histories
+                .update_quiet(color, best, piece, &continuations, bonus);
+            for &quiet in tried_quiets {
+                let piece = self.board.piece_on[quiet.from as usize];
+                self.td
+                    .histories
+                    .update_quiet(color, quiet, piece, &continuations, -bonus);
             }
         }
 
-        for failed_move in failed_quiets {
-            let p_idx = self.board.piece_on[failed_move.from as usize].index();
-            self.td.history[p_idx][failed_move.to as usize] -= bonus;
+        for &capture in tried_captures {
+            self.update_capture_history(capture, -bonus);
         }
     }
 }
@@ -621,12 +678,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
             && has_non_pawn_material(&s.board)
         {
             let r = 4 + depth / 3 + ((eval - beta) / NMP_EVAL_DIVISOR).min(3);
-            let undo = s.board.make_null_move();
-            s.stack[s.ply].current_move = None;
-            s.ply += 1;
+            let undo = s.make_null_move();
             let null_score = -negamax(s, -beta, -beta + 1, depth - r);
-            s.ply -= 1;
-            s.board.unmake_null_move(undo);
+            s.unmake_null_move(undo);
             if s.tm.check_hard_limit() {
                 return 0;
             }
@@ -648,18 +702,25 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
         s.td.counter_moves[capture][piece][to]
     });
 
-    let mut picker =
-        crate::movepicker::MovePicker::new(tt_move, killer1, killer2, counter_move);
+    let mut picker = MovePicker::new(tt_move, killer1, killer2, counter_move);
+    let continuations = s.continuation_keys();
     let mut best_score = -INFINITY;
     let mut best_move: Option<Move> = None;
     let mut moves_searched = 0;
-    let mut searched_quiets = [Move::default(); 128];
-    let mut num_searched_quiets: usize = 0;
+    let mut tried_quiets: StackVec<Move, MAX_TRIED_MOVES> = StackVec::default();
+    let mut tried_captures: StackVec<Move, MAX_TRIED_MOVES> = StackVec::default();
 
     let lmp_limit = (3 + depth * depth) / (2 - i32::from(improving));
     let mut quiets_seen = 0;
 
-    while let Some(m) = picker.next(&s.board, &s.td.history) {
+    loop {
+        let ordering = OrderingContext {
+            histories: &s.td.histories,
+            continuations,
+        };
+        let Some(m) = picker.next(&s.board, &ordering) else {
+            break;
+        };
         let is_quiet = !m.capture && m.promotion.is_none();
         if is_quiet {
             quiets_seen += 1;
@@ -690,7 +751,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
             }
         }
 
-        let moved_piece = s.board.piece_on[m.from as usize];
+        let butterfly_score = s.td.histories.butterfly(s.board.turn, m);
         let Some(undo) = s.make_move(m) else {
             continue;
         };
@@ -707,7 +768,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
                 if !is_pv {
                     reduction += 1;
                 }
-                reduction -= s.td.history[moved_piece.index()][m.to as usize] / 4096;
+                reduction -= butterfly_score / 4096;
                 reduction = reduction.clamp(0, depth - 2);
             }
 
@@ -737,17 +798,16 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
                 best_move = Some(m);
                 alpha = score;
                 if alpha >= beta {
-                    if !m.capture {
-                        s.update_quiet_stats(m, depth, &searched_quiets[..num_searched_quiets]);
-                    }
+                    s.update_cutoff_stats(m, depth, tried_quiets.as_slice(), tried_captures.as_slice());
                     break;
                 }
             }
         }
 
-        if is_quiet && num_searched_quiets < searched_quiets.len() {
-            searched_quiets[num_searched_quiets] = m;
-            num_searched_quiets += 1;
+        if is_quiet && tried_quiets.len() < MAX_TRIED_MOVES {
+            tried_quiets.push(m);
+        } else if m.capture && tried_captures.len() < MAX_TRIED_MOVES {
+            tried_captures.push(m);
         }
     }
 

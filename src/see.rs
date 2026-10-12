@@ -2,7 +2,8 @@ use crate::board::Board;
 use crate::magics;
 use crate::types::{Bitboard, Color, Move, Piece, PieceKind};
 
-const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000]; // P, N, B, R, Q, K
+/// Exchange values indexed by `PieceKind` (P, N, B, R, Q, K).
+pub const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
 
 #[inline(always)]
 fn val(p: Piece) -> i32 {
