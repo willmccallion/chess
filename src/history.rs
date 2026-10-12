@@ -1,9 +1,9 @@
 //! Move-ordering statistics updated from search results.
 
+use crate::search_params::SearchParams;
 use crate::types::{Color, Move, Piece, PieceKind};
 
 pub const HISTORY_MAX: i32 = 16_384;
-const MAX_BONUS: i32 = 1_500;
 
 /// Scores indexed by `[piece][to]`; one table per previous (piece, to) pair.
 pub type PieceToHistory = [[i16; 64]; 13];
@@ -17,8 +17,11 @@ pub struct Histories {
 }
 
 /// History bonus for a move that caused (or failed to cause) a cutoff at `depth`.
-pub fn stat_bonus(depth: i32) -> i32 {
-    (16 * depth * depth + 32 * depth + 16).min(MAX_BONUS)
+pub fn stat_bonus(depth: i32, params: &SearchParams) -> i32 {
+    let bonus = params.history_bonus_quadratic * depth * depth
+        + params.history_bonus_linear * depth
+        + params.history_bonus_constant;
+    bonus.clamp(0, params.history_bonus_max)
 }
 
 /// Moves the entry toward ±HISTORY_MAX, shrinking updates as it saturates.
@@ -103,7 +106,6 @@ const CORRECTION_BITS: u32 = 14;
 const CORRECTION_ENTRIES: usize = 1 << CORRECTION_BITS;
 const CORRECTION_GRAIN: i32 = 256;
 const CORRECTION_WEIGHT_SCALE: i32 = 256;
-const CORRECTION_MAX_WEIGHT: i32 = 16;
 const CORRECTION_LIMIT_CP: i32 = 128;
 
 /// Learned static-eval error per pawn structure, in 1/256 centipawn units.
@@ -129,9 +131,9 @@ impl CorrectionHistory {
     }
 
     /// Moves the stored correction toward `error` (search score minus corrected eval),
-    /// trusting deeper searches more.
-    pub fn update(&mut self, color: Color, pawn_key: u64, error: i32, depth: i32) {
-        let weight = (depth + 1).min(CORRECTION_MAX_WEIGHT);
+    /// trusting deeper searches more, up to `max_weight` (out of 256).
+    pub fn update(&mut self, color: Color, pawn_key: u64, error: i32, depth: i32, max_weight: i32) {
+        let weight = (depth + 1).min(max_weight);
         let limit = CORRECTION_LIMIT_CP * CORRECTION_GRAIN;
         let entry = &mut self.entries[color as usize][Self::slot(pawn_key)];
         let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
@@ -149,14 +151,14 @@ mod tests {
     fn correction_moves_toward_observed_error_and_stays_bounded() {
         let mut correction = CorrectionHistory::new();
         for _ in 0..200 {
-            correction.update(Color::White, 99, 80, 10);
+            correction.update(Color::White, 99, 80, 10, 16);
         }
         let learned = correction.correction(Color::White, 99);
         assert!((70..=80).contains(&learned), "{learned}");
         assert_eq!(correction.correction(Color::Black, 99), 0);
 
         for _ in 0..200 {
-            correction.update(Color::White, 99, 10_000, 20);
+            correction.update(Color::White, 99, 10_000, 20, 16);
         }
         let saturated = correction.correction(Color::White, 99);
         assert!((CORRECTION_LIMIT_CP - 2..=CORRECTION_LIMIT_CP).contains(&saturated), "{saturated}");
@@ -178,21 +180,23 @@ mod tests {
 
     #[test]
     fn gravity_keeps_entries_within_bounds() {
+        let largest_bonus = crate::search_params::ParamSpec::find("HistoryBonusMax").unwrap().max;
         let mut entry = 0i16;
         for _ in 0..1000 {
-            apply_gravity(&mut entry, MAX_BONUS);
+            apply_gravity(&mut entry, largest_bonus);
         }
         assert!(i32::from(entry) <= HISTORY_MAX);
         for _ in 0..1000 {
-            apply_gravity(&mut entry, -MAX_BONUS);
+            apply_gravity(&mut entry, -largest_bonus);
         }
         assert!(i32::from(entry) >= -HISTORY_MAX);
     }
 
     #[test]
     fn bonus_grows_with_depth_and_is_capped() {
-        assert!(stat_bonus(2) > stat_bonus(1));
-        assert_eq!(stat_bonus(50), MAX_BONUS);
+        let params = SearchParams::default();
+        assert!(stat_bonus(2, &params) > stat_bonus(1, &params));
+        assert_eq!(stat_bonus(50, &params), params.history_bonus_max);
     }
 
     #[test]

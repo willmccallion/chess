@@ -20,20 +20,11 @@ const INFINITY: i32 = MATE_SCORE + 1;
 const MAX_PLY: usize = 128;
 const DRAW_SCORE: i32 = 0;
 
-const NMP_MIN_DEPTH: i32 = 3;
-const IIR_MIN_DEPTH: i32 = 4;
-const MOVE_PRUNING_MAX_DEPTH: i32 = 8;
-const PROBCUT_MIN_DEPTH: i32 = 5;
-const PROBCUT_DEPTH_REDUCTION: i32 = 4;
-const HISTORY_PRUNING_MAX_DEPTH: i32 = 4;
 const ASPIRATION_MIN_DEPTH: usize = 4;
-const SINGULAR_MIN_DEPTH: i32 = 8;
-const SINGULAR_TT_DEPTH_MARGIN: i32 = 3;
 const MAX_DOUBLE_EXTENSIONS: u8 = 6;
 
 const MAX_TRIED_MOVES: usize = 64;
 
-const LMR_MIN_DEPTH: i32 = 3;
 const LMR_TABLE_SIZE: usize = 64;
 
 /// The search measures scores in units of 3/4 centipawn: its margins were set for an
@@ -550,7 +541,7 @@ impl Search<'_> {
         let continuations = self.continuation_keys();
         self.td
             .histories
-            .update_quiet(self.board.turn, m, piece, &continuations, stat_bonus(depth));
+            .update_quiet(self.board.turn, m, piece, &continuations, stat_bonus(depth, &self.params));
     }
 
     /// The opponent's last move refuted everything here, so it was a good quiet move.
@@ -571,7 +562,7 @@ impl Search<'_> {
             prior,
             parent.moved_piece,
             &continuations,
-            stat_bonus(depth),
+            stat_bonus(depth, &self.params),
         );
     }
 
@@ -595,7 +586,7 @@ impl Search<'_> {
         tried_quiets: &[Move],
         tried_captures: &[Move],
     ) {
-        let bonus = stat_bonus(depth);
+        let bonus = stat_bonus(depth, &self.params);
         let continuations = self.continuation_keys();
         let color = self.board.turn;
 
@@ -789,7 +780,7 @@ fn probcut(
 ) -> ProbCut {
     use crate::movepicker::QMovePicker;
 
-    let probe_depth = depth - PROBCUT_DEPTH_REDUCTION;
+    let probe_depth = depth - s.params.probcut_reduction;
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&s.board) {
         if !see_ge(&s.board, m, probcut_beta - static_eval) {
@@ -844,8 +835,8 @@ fn singular_extension(
         return Singularity::Extend(0);
     };
     let tt_score = score_from_tt(entry.score(), s.ply);
-    let reliable = depth >= SINGULAR_MIN_DEPTH
-        && i32::from(entry.depth()) >= depth - SINGULAR_TT_DEPTH_MARGIN
+    let reliable = depth >= s.params.singular_min_depth
+        && i32::from(entry.depth()) >= depth - s.params.singular_tt_depth_margin
         && entry.bound() != Bound::Upper
         && tt_score.abs() < MATE_THRESHOLD;
     if !reliable {
@@ -973,7 +964,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
 
         let previous_was_null = !is_root && s.stack[s.ply - 1].current_move.is_none();
-        if depth >= NMP_MIN_DEPTH
+        if depth >= s.params.nmp_min_depth
             && excluded_move.is_none()
             && eval >= beta
             && !previous_was_null
@@ -981,7 +972,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         {
             let r = s.params.nmp_base_reduction
                 + depth / s.params.nmp_depth_divisor
-                + ((eval - beta) / s.params.nmp_eval_divisor).min(3);
+                + ((eval - beta) / s.params.nmp_eval_divisor).min(s.params.nmp_eval_max);
             let undo = s.make_null_move();
             let null_score = -negamax(s, -beta, -beta + 1, depth - r, !cut_node);
             s.unmake_null_move(undo);
@@ -997,7 +988,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     if !is_pv
         && !in_check
         && excluded_move.is_none()
-        && depth >= PROBCUT_MIN_DEPTH
+        && depth >= s.params.probcut_min_depth
         && beta.abs() < MATE_THRESHOLD
         && let Some(static_eval) = corrected_eval
     {
@@ -1015,7 +1006,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
     }
 
-    if depth >= IIR_MIN_DEPTH && tt_move.is_none() && excluded_move.is_none() {
+    if depth >= s.params.iir_min_depth && tt_move.is_none() && excluded_move.is_none() {
         depth -= 1;
     }
 
@@ -1073,23 +1064,23 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                     picker.skip_quiets();
                     continue;
                 }
-                if depth <= HISTORY_PRUNING_MAX_DEPTH
+                if depth <= s.params.history_pruning_max_depth
                     && quiet_history < -s.params.history_pruning_margin * depth
                 {
                     continue;
                 }
-                if depth <= MOVE_PRUNING_MAX_DEPTH
+                if depth <= s.params.move_pruning_max_depth
                     && eval + s.params.futility_base + s.params.futility_per_depth * depth <= alpha
                 {
                     picker.skip_quiets();
                     continue;
                 }
-                if depth <= MOVE_PRUNING_MAX_DEPTH
+                if depth <= s.params.move_pruning_max_depth
                     && !see_ge(&s.board, m, -s.params.see_quiet_margin * depth * depth)
                 {
                     continue;
                 }
-            } else if depth <= MOVE_PRUNING_MAX_DEPTH
+            } else if depth <= s.params.move_pruning_max_depth
                 && !see_ge(&s.board, m, -s.params.see_capture_margin * depth)
             {
                 continue;
@@ -1122,15 +1113,16 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         let score = if moves_searched == 1 {
             -negamax(s, -beta, -alpha, new_depth, !is_pv && !cut_node)
         } else {
-            let reduction = if depth >= LMR_MIN_DEPTH && !in_check && (is_quiet || !is_pv) {
+            let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv) {
                 let gives_check = side_to_move_in_check(&s.board);
-                let mut r = s.lmr.base_reduction(depth, moves_searched, is_quiet);
-                r += i32::from(!is_pv);
-                r += i32::from(cut_node);
-                r += i32::from(!improving);
-                r -= i32::from(is_killer_or_counter);
-                r -= i32::from(gives_check);
-                r -= quiet_history / s.params.lmr_history_divisor;
+                let p = &s.params;
+                let mut r_1024 = 1024 * s.lmr.base_reduction(depth, moves_searched, is_quiet);
+                r_1024 += if is_pv { 0 } else { p.lmr_non_pv_x1024 };
+                r_1024 += if cut_node { p.lmr_cut_node_x1024 } else { 0 };
+                r_1024 += if improving { 0 } else { p.lmr_not_improving_x1024 };
+                r_1024 -= if is_killer_or_counter { p.lmr_killer_or_counter_x1024 } else { 0 };
+                r_1024 -= if gives_check { p.lmr_gives_check_x1024 } else { 0 };
+                let r = r_1024 / 1024 - quiet_history / p.lmr_history_divisor;
                 r.clamp(0, (new_depth - 1).max(0))
             } else {
                 0
@@ -1211,7 +1203,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     {
         let pawn_key = s.board.pawn_key();
         s.td.correction
-            .update(s.board.turn, pawn_key, best_score - static_eval, depth);
+            .update(s.board.turn, pawn_key, best_score - static_eval, depth, s.params.correction_max_weight);
     }
     s.tt.store(
         key,

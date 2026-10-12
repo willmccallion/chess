@@ -73,6 +73,26 @@ search_params! {
     lmr_history_divisor: "LmrHistoryDivisor" = 8192, 2048..=20000, step 600;
     deeper_margin: "DeeperMargin" = 70, 20..=150, step 6;
     shallower_margin: "ShallowerMargin" = 8, 0..=30, step 2;
+    nmp_min_depth: "NmpMinDepth" = 3, 1..=6, step 1;
+    nmp_eval_max: "NmpEvalMax" = 3, 1..=6, step 1;
+    iir_min_depth: "IirMinDepth" = 4, 2..=8, step 1;
+    move_pruning_max_depth: "MovePruningMaxDepth" = 8, 4..=12, step 1;
+    history_pruning_max_depth: "HistoryPruningMaxDepth" = 4, 1..=8, step 1;
+    probcut_min_depth: "ProbcutMinDepth" = 5, 3..=8, step 1;
+    probcut_reduction: "ProbcutReduction" = 4, 2..=6, step 1;
+    singular_min_depth: "SingularMinDepth" = 8, 4..=12, step 1;
+    singular_tt_depth_margin: "SingularTtDepthMargin" = 3, 1..=6, step 1;
+    lmr_min_depth: "LmrMinDepth" = 3, 2..=5, step 1;
+    lmr_non_pv_x1024: "LmrNonPv" = 1024, 0..=2048, step 64;
+    lmr_cut_node_x1024: "LmrCutNode" = 1024, 0..=2048, step 64;
+    lmr_not_improving_x1024: "LmrNotImproving" = 1024, 0..=2048, step 64;
+    lmr_killer_or_counter_x1024: "LmrKillerOrCounter" = 1024, 0..=2048, step 64;
+    lmr_gives_check_x1024: "LmrGivesCheck" = 1024, 0..=2048, step 64;
+    history_bonus_quadratic: "HistoryBonusQuadratic" = 16, 4..=40, step 2;
+    history_bonus_linear: "HistoryBonusLinear" = 32, 0..=96, step 4;
+    history_bonus_constant: "HistoryBonusConstant" = 16, -64..=96, step 6;
+    history_bonus_max: "HistoryBonusMax" = 1500, 500..=3000, step 100;
+    correction_max_weight: "CorrectionMaxWeight" = 16, 4..=48, step 2;
 }
 
 impl ParamSpec {
