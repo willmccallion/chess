@@ -1,3 +1,4 @@
+use chess::bench;
 use chess::board::Board;
 use chess::nnue;
 use chess::perft::{divide, perft};
@@ -59,6 +60,11 @@ enum Cmd {
     },
     Eval {
         fen: String,
+    },
+    /// Fixed-depth search over the bench positions; prints total nodes and NPS
+    Bench {
+        #[arg(default_value_t = 13)]
+        depth: usize,
     },
     Challenge {
         /// Path to engine 1 binary
@@ -151,6 +157,18 @@ fn main() {
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
         }
+        Cmd::Bench { depth } => match bench::run(depth) {
+            Ok(result) => {
+                println!("===========================");
+                println!("Total time (ms) : {}", result.elapsed_ms);
+                println!("Nodes searched  : {}", result.nodes);
+                println!("Nodes/second    : {}", result.nps());
+            }
+            Err(e) => {
+                eprintln!("bench failed: {e}");
+                std::process::exit(1);
+            }
+        },
         Cmd::Challenge {
             engine1,
             engine2,
