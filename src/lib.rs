@@ -17,6 +17,7 @@ pub mod pst;
 pub mod search;
 pub mod search_params;
 pub mod see;
+pub mod spsa;
 pub mod sprt;
 pub mod time;
 pub mod tournament;

@@ -148,6 +148,16 @@ target/release/chess challenge target/release/chess "$STOCKFISH" \
   --time 60000 --inc 600 --rounds 100 --concurrency 8 --openings "$CHESS_BOOK_BALANCED"
 ```
 
+### Tuning search parameters (SPSA)
+
+The search margins and reductions are runtime parameters (`chess params` lists them with their defaults, ranges and steps; UCI `setoption` accepts them by name). `chess tune` adjusts them with SPSA: each game pair perturbs every parameter up or down, plays the two versions against each other with colors swapped, and moves the estimate toward the winner. The current estimate is written to `--output` after every 20 pairs and can be continued with `--resume`.
+
+```bash
+taskset -c 0-15 chess tune --openings "$CHESS_BOOK_UHO" --pairs 10000 --time 5000 --inc 50 --concurrency 8 --output spsa.txt
+```
+
+Pin the run to one core type: the two engines of a pair should run at the same speed.
+
 ### Comparing analysis with Stockfish
 
 `compare` analyses positions with this engine and a reference engine (Stockfish by default) and reports both scores, best moves, the score gap and static evaluations, plus a summary over all positions.

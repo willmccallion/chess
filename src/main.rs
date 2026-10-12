@@ -5,7 +5,8 @@ use chess::eval;
 use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search::{SearchControl, SearchLimits, SearchThreads, search};
-use chess::search_params::SearchParams;
+use chess::search_params::{PARAM_SPECS, SearchParams};
+use chess::spsa;
 use chess::sprt::SprtConfig;
 use chess::tournament::{self, TournamentConfig};
 use chess::time::TimeBudget;
@@ -153,6 +154,39 @@ enum Cmd {
         /// UCI options for the reference engine
         #[arg(long = "e2-option")]
         e2_options: Vec<String>,
+    },
+    /// List the tunable search parameters with their defaults, ranges and SPSA steps
+    Params,
+    /// Tune the search parameters with SPSA self-play game pairs
+    Tune {
+        /// EPD opening suite (e.g. $CHESS_BOOK_UHO)
+        #[arg(long)]
+        openings: String,
+        /// Engine binary to tune; defaults to this executable
+        #[arg(long)]
+        engine: Option<String>,
+        /// Planned number of game pairs (SPSA iterations)
+        #[arg(long, default_value_t = 10_000)]
+        pairs: usize,
+        /// Base time per game in milliseconds
+        #[arg(long, default_value_t = 5000)]
+        time: u64,
+        /// Increment per move in milliseconds
+        #[arg(long, default_value_t = 50)]
+        inc: u64,
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// File the current estimate is written to
+        #[arg(long, default_value = "spsa.txt")]
+        output: String,
+        /// Start from an estimate file written by an earlier run
+        #[arg(long)]
+        resume: Option<String>,
+        /// Extra UCI options for both engines (e.g. "Hash=16")
+        #[arg(long = "option")]
+        options: Vec<String>,
     },
     Uci,
 }
@@ -358,6 +392,63 @@ fn main() {
             };
             if let Err(e) = run_compare(&config) {
                 exit_with_error(&e);
+            }
+        }
+        Cmd::Params => {
+            println!("{:<24} {:>8} {:>8} {:>8} {:>6}", "name", "default", "min", "max", "step");
+            for spec in PARAM_SPECS {
+                println!("{:<24} {:>8} {:>8} {:>8} {:>6}", spec.name, spec.default, spec.min, spec.max, spec.step);
+            }
+        }
+        Cmd::Tune {
+            openings,
+            engine,
+            pairs,
+            time,
+            inc,
+            concurrency,
+            seed,
+            output,
+            resume,
+            options,
+        } => {
+            let engine = engine
+                .or_else(|| std::env::current_exe().ok().map(|p| p.display().to_string()))
+                .unwrap_or_else(|| exit_with_error("cannot locate the engine binary; pass --engine"));
+            let start = match resume {
+                Some(path) => std::fs::read_to_string(&path)
+                    .map_err(|e| format!("{path}: {e}"))
+                    .and_then(|text| spsa::read_estimate(&text))
+                    .unwrap_or_else(|e| exit_with_error(&e)),
+                None => Vec::new(),
+            };
+            let openings = openings::sample_openings(&openings, 100_000, seed)
+                .unwrap_or_else(|e| exit_with_error(&e));
+            let mut engine_options = vec![
+                ("OwnBook".to_string(), "false".to_string()),
+                ("Hash".to_string(), "16".to_string()),
+            ];
+            engine_options.extend(parse_options(&options));
+            let config = spsa::SpsaConfig {
+                engine,
+                engine_options,
+                openings,
+                pairs,
+                base_time_ms: time,
+                increment_ms: inc,
+                concurrency,
+                seed,
+                output: output.into(),
+                start,
+            };
+            match spsa::run(config) {
+                Ok(theta) => {
+                    println!("final estimate (rounded):");
+                    for (spec, value) in PARAM_SPECS.iter().zip(theta) {
+                        println!("  {:<24} {:>6} (default {})", spec.name, value.round() as i32, spec.default);
+                    }
+                }
+                Err(e) => exit_with_error(&e),
             }
         }
         Cmd::Uci => uci::run_uci(),

@@ -167,7 +167,7 @@ fn format_pct(n: usize, total: usize) -> String {
     }
 }
 
-fn spawn_and_init(path: &str, options: &[(String, String)]) -> Result<UciEngine, String> {
+pub(crate) fn spawn_and_init(path: &str, options: &[(String, String)]) -> Result<UciEngine, String> {
     let mut engine = UciEngine::spawn(path)?;
     engine.init_uci()?;
     if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("Threads")) {
