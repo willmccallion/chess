@@ -531,15 +531,41 @@ impl Search<'_> {
         self.board.unmake_null_move(undo);
     }
 
-    /// Continuation-history keys for the moves played one and two plies ago.
-    fn continuation_keys(&self) -> [Option<ContinuationKey>; 2] {
+    /// Continuation-history keys for the moves played one and two plies before `ply`.
+    fn continuation_keys_at(&self, ply: usize) -> [Option<ContinuationKey>; 2] {
         let key = |back: usize| {
-            let entry = self.stack[self.ply.checked_sub(back)?];
+            let entry = self.stack[ply.checked_sub(back)?];
             entry
                 .current_move
                 .map(|m| ContinuationKey::new(entry.moved_piece, m.to))
         };
         [key(1), key(2)]
+    }
+
+    fn continuation_keys(&self) -> [Option<ContinuationKey>; 2] {
+        self.continuation_keys_at(self.ply)
+    }
+
+    /// The opponent's last move refuted everything here, so it was a good quiet move.
+    fn reward_prior_quiet_move(&mut self, depth: i32) {
+        let Some(parent_ply) = self.ply.checked_sub(1) else {
+            return;
+        };
+        let parent = self.stack[parent_ply];
+        let Some(prior) = parent.current_move else {
+            return;
+        };
+        if prior.capture || prior.promotion.is_some() {
+            return;
+        }
+        let continuations = self.continuation_keys_at(parent_ply);
+        self.td.histories.update_quiet(
+            self.board.turn.other(),
+            prior,
+            parent.moved_piece,
+            &continuations,
+            stat_bonus(depth),
+        );
     }
 
     fn unmake_move(&mut self, m: Move, undo: Undo) {
@@ -1161,6 +1187,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
+    if bound == Bound::Upper && !is_root {
+        s.reward_prior_quiet_move(depth);
+    }
     if let Some(static_eval) = corrected_eval
         && best_move.is_none_or(|m| !m.capture)
         && best_score.abs() < MATE_THRESHOLD
