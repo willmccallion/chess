@@ -7,7 +7,7 @@ use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
 use crate::types::{MAX_MOVES, Move, MoveList, Piece, PieceKind, StackVec, Undo};
 use crate::uci_io::format_uci;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,6 +34,16 @@ const DELTA_MARGIN: i32 = 200;
 const ASPIRATION_WINDOW: i32 = 20;
 
 const MAX_TRIED_MOVES: usize = 64;
+
+const LMR_MIN_DEPTH: i32 = 3;
+const LMR_TABLE_SIZE: usize = 64;
+const LMR_QUIET_BASE: f64 = 0.77;
+const LMR_QUIET_DIVISOR: f64 = 2.36;
+const LMR_CAPTURE_BASE: f64 = 0.0;
+const LMR_CAPTURE_DIVISOR: f64 = 3.0;
+const LMR_HISTORY_DIVISOR: i32 = 8192;
+const DEEPER_MARGIN: i32 = 70;
+const SHALLOWER_MARGIN: i32 = 8;
 
 const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
 const NO_DEADLINE: u64 = u64::MAX;
@@ -147,6 +157,43 @@ impl SearchThreads {
     pub fn clear(&mut self) {
         let count = self.count();
         *self = Self::new(count);
+    }
+}
+
+struct LmrTables {
+    quiet: [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
+    capture: [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
+}
+
+static LMR_TABLES: OnceLock<LmrTables> = OnceLock::new();
+
+fn lmr_tables() -> &'static LmrTables {
+    LMR_TABLES.get_or_init(|| {
+        let mut tables = LmrTables {
+            quiet: [[0; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
+            capture: [[0; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
+        };
+        for depth in 1..LMR_TABLE_SIZE {
+            for moves in 1..LMR_TABLE_SIZE {
+                let product = (depth as f64).ln() * (moves as f64).ln();
+                tables.quiet[depth][moves] = (LMR_QUIET_BASE + product / LMR_QUIET_DIVISOR) as i32;
+                tables.capture[depth][moves] =
+                    (LMR_CAPTURE_BASE + product / LMR_CAPTURE_DIVISOR) as i32;
+            }
+        }
+        tables
+    })
+}
+
+/// Base late-move reduction for the `moves_searched`-th move at `depth`.
+fn base_reduction(depth: i32, moves_searched: i32, is_quiet: bool) -> i32 {
+    let d = (depth.max(0) as usize).min(LMR_TABLE_SIZE - 1);
+    let m = (moves_searched.max(0) as usize).min(LMR_TABLE_SIZE - 1);
+    let tables = lmr_tables();
+    if is_quiet {
+        tables.quiet[d][m]
+    } else {
+        tables.capture[d][m]
     }
 }
 
@@ -594,7 +641,8 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     best_score
 }
 
-fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32 {
+/// `cut_node`: a non-PV node expected to fail high.
+fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_node: bool) -> i32 {
     s.seldepth = s.seldepth.max(s.ply);
     if s.tm.check_hard_limit() {
         return 0;
@@ -679,7 +727,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
         {
             let r = 4 + depth / 3 + ((eval - beta) / NMP_EVAL_DIVISOR).min(3);
             let undo = s.make_null_move();
-            let null_score = -negamax(s, -beta, -beta + 1, depth - r);
+            let null_score = -negamax(s, -beta, -beta + 1, depth - r, !cut_node);
             s.unmake_null_move(undo);
             if s.tm.check_hard_limit() {
                 return 0;
@@ -751,33 +799,54 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32) -> i32
             }
         }
 
-        let butterfly_score = s.td.histories.butterfly(s.board.turn, m);
+        let quiet_history = if is_quiet {
+            let piece = s.board.piece_on[m.from as usize];
+            s.td.histories.butterfly(s.board.turn, m)
+                + continuations
+                    .iter()
+                    .flatten()
+                    .map(|&key| s.td.histories.continuation(key, piece, m.to))
+                    .sum::<i32>()
+        } else {
+            0
+        };
+        let is_killer_or_counter =
+            Some(m) == killer1 || Some(m) == killer2 || Some(m) == counter_move;
         let Some(undo) = s.make_move(m) else {
             continue;
         };
         moves_searched += 1;
+        let new_depth = depth - 1;
 
         let score = if moves_searched == 1 {
-            -negamax(s, -beta, -alpha, depth - 1)
+            -negamax(s, -beta, -alpha, new_depth, !is_pv && !cut_node)
         } else {
-            let mut reduction = 0;
-            if depth >= 3 && !m.capture && !in_check {
-                let d = depth as f32;
-                let mn = moves_searched as f32;
-                reduction = (0.5 + d.ln() * mn.ln() / 2.0) as i32;
-                if !is_pv {
-                    reduction += 1;
-                }
-                reduction -= butterfly_score / 4096;
-                reduction = reduction.clamp(0, depth - 2);
-            }
+            let reduction = if depth >= LMR_MIN_DEPTH && !in_check && (is_quiet || !is_pv) {
+                let gives_check = side_to_move_in_check(&s.board);
+                let mut r = base_reduction(depth, moves_searched, is_quiet);
+                r += i32::from(!is_pv);
+                r += i32::from(cut_node);
+                r += i32::from(!improving);
+                r -= i32::from(is_killer_or_counter);
+                r -= i32::from(gives_check);
+                r -= quiet_history / LMR_HISTORY_DIVISOR;
+                r.clamp(0, new_depth - 1)
+            } else {
+                0
+            };
+            let reduced_depth = new_depth - reduction;
 
-            let mut search_score = -negamax(s, -alpha - 1, -alpha, depth - 1 - reduction);
+            let mut search_score = -negamax(s, -alpha - 1, -alpha, reduced_depth, true);
             if search_score > alpha && reduction > 0 {
-                search_score = -negamax(s, -alpha - 1, -alpha, depth - 1);
+                let deeper = search_score > best_score + DEEPER_MARGIN + 2 * new_depth;
+                let shallower = search_score < best_score + SHALLOWER_MARGIN;
+                let research_depth = new_depth + i32::from(deeper) - i32::from(shallower);
+                if research_depth > reduced_depth {
+                    search_score = -negamax(s, -alpha - 1, -alpha, research_depth, !cut_node);
+                }
             }
-            if search_score > alpha && search_score < beta {
-                search_score = -negamax(s, -beta, -alpha, depth - 1);
+            if is_pv && search_score > alpha && search_score < beta {
+                search_score = -negamax(s, -beta, -alpha, new_depth, false);
             }
             search_score
         };
@@ -925,7 +994,7 @@ fn iterative_deepening(
 
         let mut aborted = false;
         loop {
-            let iteration_score = negamax(&mut search, alpha, beta, depth as i32);
+            let iteration_score = negamax(&mut search, alpha, beta, depth as i32, false);
             if search.tm.check_hard_limit() {
                 aborted = true;
                 break;
