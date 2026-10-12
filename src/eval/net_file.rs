@@ -138,36 +138,33 @@ const fn network_hash(kind: NetKind) -> u32 {
     transformer_hash(kind) ^ layer_stack_hash(kind)
 }
 
-/// Signed LEB128 values packed in one length-prefixed block.
-struct Leb128Block<'r, R: Read> {
-    reader: &'r mut R,
-    bytes_left: u32,
+/// Signed LEB128 values packed in one length-prefixed block, read into memory whole.
+struct Leb128Block {
+    bytes: Vec<u8>,
+    position: usize,
 }
 
-impl<'r, R: Read> Leb128Block<'r, R> {
-    fn open(reader: &'r mut R) -> Result<Self, NetLoadError> {
+impl Leb128Block {
+    fn open<R: Read>(reader: &mut R) -> Result<Self, NetLoadError> {
         let mut magic = [0u8; LEB128_MAGIC.len()];
         reader.read_exact(&mut magic)?;
         if &magic != LEB128_MAGIC {
             return Err(format_error("missing LEB128 block marker"));
         }
-        let bytes_left = reader.read_u32::<LittleEndian>()?;
-        Ok(Self { reader, bytes_left })
-    }
-
-    fn next_byte(&mut self) -> Result<u8, NetLoadError> {
-        if self.bytes_left == 0 {
-            return Err(format_error("LEB128 block ended early"));
-        }
-        self.bytes_left -= 1;
-        Ok(self.reader.read_u8()?)
+        let len = reader.read_u32::<LittleEndian>()? as usize;
+        let mut bytes = vec![0u8; len];
+        reader.read_exact(&mut bytes)?;
+        Ok(Self { bytes, position: 0 })
     }
 
     fn next_i32(&mut self) -> Result<i32, NetLoadError> {
         let mut result: i32 = 0;
         let mut shift = 0u32;
         loop {
-            let byte = self.next_byte()?;
+            let Some(&byte) = self.bytes.get(self.position) else {
+                return Err(format_error("LEB128 block ended early"));
+            };
+            self.position += 1;
             if shift < 32 {
                 result |= i32::from(byte & 0x7f) << shift;
             }
@@ -197,7 +194,7 @@ impl<'r, R: Read> Leb128Block<'r, R> {
     }
 
     fn close(self) -> Result<(), NetLoadError> {
-        if self.bytes_left == 0 {
+        if self.position == self.bytes.len() {
             Ok(())
         } else {
             Err(format_error("LEB128 block has trailing bytes"))
