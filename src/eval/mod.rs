@@ -131,27 +131,8 @@ fn simple_eval(position: PositionView) -> i32 {
 const SMALL_NET_THRESHOLD: i32 = 962;
 const SMALL_NET_RECHECK: i32 = 277;
 
-/// How much the search leans toward the side to move, in Stockfish's internal units.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct Optimism(i32);
-
-impl Optimism {
-    /// Stockfish's optimism for the side whose root score averages `average_cp`.
-    pub fn from_root_score(average_cp: i32) -> Self {
-        let average = average_cp * INTERNAL_PER_100_CP / 100;
-        Self(142 * average / (average.abs() + 91))
-    }
-
-    pub const fn opposite(self) -> Self {
-        Self(-self.0)
-    }
-}
-
-/// Stockfish's internal units per 100 centipawns at typical material.
-const INTERNAL_PER_100_CP: i32 = 385;
-
-/// Stockfish 18's `Eval::evaluate`, in its internal units.
-fn stockfish_eval(nets: &Networks, board: &mut Board, optimism: Optimism) -> i32 {
+/// Stockfish 18's `Eval::evaluate` with zero optimism, in its internal units.
+fn stockfish_eval(nets: &Networks, board: &mut Board) -> i32 {
     let halfmove_clock = board.halfmove_clock;
     let (stack, position) = board.accumulators_and_view();
     let bucket = bucket_for(position);
@@ -176,29 +157,22 @@ fn stockfish_eval(nets: &Networks, board: &mut Board, optimism: Optimism) -> i32
 
     let mut nnue = i64::from(blend(output));
     let complexity = i64::from((output.psqt - output.positional).abs());
-    let mut optimism = i64::from(optimism.0);
-    optimism += optimism * complexity / 476;
     nnue -= nnue * complexity / 18_236;
 
     let (white_npm, black_npm) = non_pawn_material(position);
     let pawns = count(position, Piece::WP) + count(position, Piece::BP);
     let material = i64::from(534 * pawns + white_npm + black_npm);
-    let mut value = (nnue * (77_871 + material) + optimism * (7_191 + material)) / 77_871;
+    let mut value = nnue * (77_871 + material) / 77_871;
     value -= value * i64::from(halfmove_clock) / 199;
     value as i32
 }
 
 /// Static evaluation in centipawns for the side to move; 0 if no networks are loaded.
 pub fn evaluate(board: &mut Board) -> i32 {
-    evaluate_with_optimism(board, Optimism::default())
-}
-
-/// Like `evaluate`, leaning toward the side to move by `optimism`, as during a search.
-pub fn evaluate_with_optimism(board: &mut Board, optimism: Optimism) -> i32 {
     let Some(nets) = NETWORKS.get() else {
         return 0;
     };
-    let internal = stockfish_eval(nets, board, optimism);
+    let internal = stockfish_eval(nets, board);
     trace::to_cp(internal, board)
 }
 
@@ -206,7 +180,7 @@ pub fn evaluate_with_optimism(board: &mut Board, optimism: Optimism) -> i32 {
 pub fn trace_text(board: &mut Board) -> Option<String> {
     let nets = NETWORKS.get()?;
     let mut text = trace::format_trace(&nets.big, board);
-    let internal = stockfish_eval(nets, board, Optimism::default());
+    let internal = stockfish_eval(nets, board);
     let white_relative = if board.turn == Color::White { internal } else { -internal };
     text.push_str(&format!(
         "Final evaluation       {:+.2} (white side)\n",
