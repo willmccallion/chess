@@ -1,10 +1,8 @@
 //! Fixed-depth search over a set of positions; the node total is a search signature.
 
 use crate::board::Board;
-use crate::search::best_move_timed;
+use crate::search::{SearchControl, SearchLimits, search};
 use crate::tt::SharedTransTable;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 const BENCH_HASH_MB: usize = 16;
@@ -58,17 +56,19 @@ impl BenchResult {
 
 /// Searches every bench position to `depth` from a cleared TT and fresh search state.
 pub fn run(depth: usize) -> Result<BenchResult, String> {
-    let mut tt = SharedTransTable::new(BENCH_HASH_MB);
+    let tt = SharedTransTable::new(BENCH_HASH_MB);
+    let limits = SearchLimits {
+        max_depth: depth,
+        wait_for_stop: false,
+    };
     let mut nodes = 0u64;
     let start = Instant::now();
 
     for fen in BENCH_FENS {
         let board = Board::from_fen(fen)?;
         tt.clear();
-        let stop = Arc::new(AtomicBool::new(false));
-        let (_, _, position_nodes) =
-            best_move_timed(&board, &mut tt, u64::MAX / 4, depth, stop, true);
-        nodes += position_nodes;
+        let control = SearchControl::new(None);
+        nodes += search(&board, &tt, limits, 1, &control).nodes;
     }
 
     Ok(BenchResult {

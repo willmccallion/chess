@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::types::{Move, MoveList};
+use crate::types::MoveList;
 
 fn perft_inner(b: &mut Board, depth: usize) -> u64 {
     if depth == 0 {

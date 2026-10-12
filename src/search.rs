@@ -1,12 +1,14 @@
 use crate::board::Board;
 use crate::nnue::evaluate;
 use crate::see::see;
+use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
 use crate::types::{Move, MoveList, Piece, PieceKind};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub const MATE_SCORE: i32 = 30_000;
 const MATE_THRESHOLD: i32 = MATE_SCORE - 512;
@@ -23,30 +25,97 @@ const DELTA_MARGIN: i32 = 200;
 const HISTORY_MAX: i32 = 16_384;
 const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
 
+const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
+const NO_DEADLINE: u64 = u64::MAX;
+const TIME_CHECK_INTERVAL: u64 = 2048;
+const NEW_ITERATION_FRACTION: f64 = 0.6;
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// Shared between the UCI loop and all search threads of one `go`.
+pub struct SearchControl {
+    stop: AtomicBool,
+    start: Instant,
+    soft_deadline_ms: AtomicU64,
+    hard_deadline_ms: AtomicU64,
+}
+
+impl SearchControl {
+    pub fn new(budget: Option<TimeBudget>) -> Arc<Self> {
+        let (soft, hard) = budget.map_or((NO_DEADLINE, NO_DEADLINE), |b| (b.soft_ms, b.hard_ms));
+        Arc::new(Self {
+            stop: AtomicBool::new(false),
+            start: Instant::now(),
+            soft_deadline_ms: AtomicU64::new(soft),
+            hard_deadline_ms: AtomicU64::new(hard),
+        })
+    }
+
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Starts the clock for a search that was running untimed (`ponderhit`).
+    pub fn set_budget_from_now(&self, budget: TimeBudget) {
+        let now = self.elapsed_ms();
+        self.soft_deadline_ms
+            .store(now + budget.soft_ms, Ordering::Relaxed);
+        self.hard_deadline_ms
+            .store(now + budget.hard_ms, Ordering::Relaxed);
+    }
+
+    fn is_timed(&self) -> bool {
+        self.hard_deadline_ms.load(Ordering::Relaxed) != NO_DEADLINE
+    }
+
+    /// `go movetime`: use the whole budget instead of stopping between iterations.
+    fn is_fixed_time(&self) -> bool {
+        self.soft_deadline_ms() >= self.hard_deadline_ms()
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+
+    fn soft_deadline_ms(&self) -> u64 {
+        self.soft_deadline_ms.load(Ordering::Relaxed)
+    }
+
+    fn hard_deadline_ms(&self) -> u64 {
+        self.hard_deadline_ms.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct SearchLimits {
+    pub max_depth: usize,
+    /// `go infinite` / `go ponder`: never return before `stop` (or `ponderhit` sets a budget).
+    pub wait_for_stop: bool,
+}
+
+pub struct SearchResult {
+    pub best_move: Option<Move>,
+    pub ponder_move: Option<Move>,
+    pub nodes: u64,
+}
+
 struct TimeManager {
-    start_time: Instant,
-    soft_limit: u64,
-    hard_limit: u64,
-    stop_signal: Arc<AtomicBool>,
+    control: Arc<SearchControl>,
     is_main_thread: bool,
     nodes: u64,
-    best_move_changes: usize,
     best_move_stability: usize,
     previous_best_move: Option<Move>,
 }
 
 impl TimeManager {
-    fn new(time_ms: u64, stop_signal: Arc<AtomicBool>, is_main_thread: bool) -> Self {
-        let (soft, hard) = (time_ms, time_ms);
-
+    fn new(control: Arc<SearchControl>, is_main_thread: bool) -> Self {
         Self {
-            start_time: Instant::now(),
-            soft_limit: soft,
-            hard_limit: hard,
-            stop_signal,
+            control,
             is_main_thread,
             nodes: 0,
-            best_move_changes: 0,
             best_move_stability: 0,
             previous_best_move: None,
         }
@@ -54,63 +123,47 @@ impl TimeManager {
 
     #[inline(always)]
     fn check_hard_limit(&mut self) -> bool {
-        if self.stop_signal.load(Ordering::Relaxed) {
+        if self.control.is_stopped() {
             return true;
         }
-        if self.is_main_thread && (self.nodes & 4095) == 0 {
-            let elapsed = self.start_time.elapsed().as_millis() as u64;
-            if elapsed >= self.hard_limit {
-                self.stop_signal.store(true, Ordering::Relaxed);
-                return true;
-            }
+        if self.is_main_thread
+            && self.nodes % TIME_CHECK_INTERVAL == 0
+            && self.control.elapsed_ms() >= self.control.hard_deadline_ms()
+        {
+            self.control.stop();
+            return true;
         }
         false
     }
 
-    fn check_soft_limit(&mut self, depth: usize, best_move: Option<Move>) -> bool {
-        if self.stop_signal.load(Ordering::Relaxed) {
-            return true;
-        }
-        if !self.is_main_thread {
-            return false;
-        }
-
-        let elapsed = self.start_time.elapsed().as_millis() as u64;
-
-        if best_move != self.previous_best_move {
-            self.best_move_changes += 1;
-            self.best_move_stability = 0;
-        } else {
+    /// Decides after a completed iteration whether another one is worth starting.
+    fn should_stop_iterating(&mut self, depth: usize, best_move: Option<Move>) -> bool {
+        if best_move == self.previous_best_move {
             self.best_move_stability += 1;
+        } else {
+            self.best_move_stability = 0;
         }
         self.previous_best_move = best_move;
 
-        if elapsed >= self.hard_limit {
-            self.stop_signal.store(true, Ordering::Relaxed);
-            return true;
+        if !self.is_main_thread || !self.control.is_timed() || self.control.is_fixed_time() {
+            return false;
         }
 
-        if elapsed >= self.soft_limit {
-            let extension_limit = (self.soft_limit as f64 * 1.5) as u64;
-
-            if self.best_move_stability == 0 && elapsed < extension_limit.min(self.hard_limit) {
-                return false;
-            }
-
-            self.stop_signal.store(true, Ordering::Relaxed);
-            return true;
-        }
-
-        if depth > 8 && self.best_move_stability >= 4 && elapsed > (self.soft_limit / 2) {
-            self.stop_signal.store(true, Ordering::Relaxed);
-            return true;
-        }
-
-        false
+        let stability_scale = if self.best_move_stability == 0 {
+            1.3
+        } else if depth > 8 && self.best_move_stability >= 4 {
+            0.7
+        } else {
+            1.0
+        };
+        let target = self.control.soft_deadline_ms() as f64 * stability_scale;
+        let elapsed = self.control.elapsed_ms();
+        elapsed as f64 >= target * NEW_ITERATION_FRACTION
+            || elapsed >= self.control.hard_deadline_ms()
     }
 }
 
-pub struct Search<'a> {
+struct Search<'a> {
     board: Board,
     tt: &'a SharedTransTable,
     tm: TimeManager,
@@ -120,6 +173,32 @@ pub struct Search<'a> {
     ply: usize,
     seldepth: usize,
     prev_move: [Option<Move>; MAX_PLY],
+    /// Best root move found so far; only moves that raised alpha in a finished subtree.
+    root_best: Option<(Move, i32)>,
+}
+
+#[inline(always)]
+fn side_to_move_in_check(board: &Board) -> bool {
+    let king_sq = board.king_square(board.turn) as i32;
+    board.is_square_attacked(king_sq, board.turn.other())
+}
+
+/// True when the side that just moved left its own king attacked.
+#[inline(always)]
+fn mover_left_king_in_check(board: &Board) -> bool {
+    let mover = board.turn.other();
+    let king_bb = board.piece_bb[Piece::from_kind(PieceKind::King, mover).index()];
+    king_bb != 0 && board.is_square_attacked(king_bb.trailing_zeros() as i32, board.turn)
+}
+
+/// Piece-index for the counter-move table: the piece that made `prev` now stands on `prev.to`.
+#[inline(always)]
+fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
+    (
+        prev.capture as usize,
+        board.piece_on[prev.to as usize].index(),
+        prev.to as usize,
+    )
 }
 
 fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
@@ -131,10 +210,11 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     if s.tm.check_hard_limit() {
         return 0;
     }
+    if s.ply >= MAX_PLY - 1 {
+        return evaluate(&s.board);
+    }
 
-    let king_sq = s.board.piece_bb[Piece::from_kind(PieceKind::King, s.board.turn).index()]
-        .trailing_zeros() as i32;
-    let in_check = s.board.is_square_attacked(king_sq, s.board.turn.other());
+    let in_check = side_to_move_in_check(&s.board);
 
     let stand_pat = if !in_check {
         let val = evaluate(&s.board);
@@ -150,8 +230,6 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     };
 
     if in_check {
-        // In check: need all moves (including quiet evasions) for checkmate detection.
-        // Use the old approach — this path is rare.
         let mut move_list = MoveList::new();
         s.board.generate_pseudo_legal_moves(&mut move_list);
 
@@ -182,12 +260,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
             let m = move_list.moves[i];
 
             let undo = s.board.make_move(m);
-            let us = s.board.turn.other();
-            let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
-            if king_bb != 0
-                && s.board
-                    .is_square_attacked(king_bb.trailing_zeros() as i32, s.board.turn)
-            {
+            if mover_left_king_in_check(&s.board) {
                 s.board.unmake_move(m, undo);
                 continue;
             }
@@ -213,10 +286,8 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         return alpha;
     }
 
-    // Not in check: only search captures + promotions via QMovePicker.
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&s.board) {
-        // Delta pruning
         if m.capture && m.promotion.is_none() {
             let captured = s.board.piece_on[m.to as usize];
             if !captured.is_empty() {
@@ -226,18 +297,12 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 }
             }
         }
-        // SEE pruning
         if m.capture && see(&s.board, m) < 0 {
             continue;
         }
 
         let undo = s.board.make_move(m);
-        let us = s.board.turn.other();
-        let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
-        if king_bb != 0
-            && s.board
-                .is_square_attacked(king_bb.trailing_zeros() as i32, s.board.turn)
-        {
+        if mover_left_king_in_check(&s.board) {
             s.board.unmake_move(m, undo);
             continue;
         }
@@ -265,20 +330,21 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         return 0;
     }
 
-    if s.ply > 0 && (s.board.is_draw_by_repetition() || s.board.halfmove_clock >= 100) {
+    if s.ply > 0 && (s.board.is_repetition(s.ply) || s.board.halfmove_clock >= 100) {
         return DRAW_SCORE;
     }
     if s.ply >= MAX_PLY - 1 {
         return evaluate(&s.board);
     }
 
+    let is_root = s.ply == 0;
     let is_pv = beta - alpha > 1;
     let alpha_orig = alpha;
     let key = s.board.zobrist;
     let mut tt_move: Option<Move> = None;
 
     if let Some(entry) = s.tt.probe(key) {
-        if entry.depth() >= depth as i16 && s.ply > 0 {
+        if entry.depth() >= depth as i16 && !is_root {
             let mut score = entry.score();
             if score.abs() > MATE_THRESHOLD {
                 if score > 0 {
@@ -297,9 +363,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         tt_move = entry.best_move();
     }
 
-    let king_sq = s.board.piece_bb[Piece::from_kind(PieceKind::King, s.board.turn).index()]
-        .trailing_zeros() as i32;
-    let in_check = s.board.is_square_attacked(king_sq, s.board.turn.other());
+    let in_check = side_to_move_in_check(&s.board);
 
     if in_check {
         depth += 1;
@@ -346,6 +410,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         let r = 3 + depth / 6;
         let undo = s.board.make_null_move();
         s.ply += 1;
+        s.prev_move[s.ply] = None;
         let null_score = -negamax(s, -beta, -beta + 1, depth - r);
         s.ply -= 1;
         s.board.unmake_null_move(undo);
@@ -360,12 +425,12 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         }
     }
 
-    // Determine killer and counter move for this ply
     let killer1 = s.killers[s.ply][0];
     let killer2 = s.killers[s.ply][1];
-    let counter_move = s.prev_move[s.ply.saturating_sub(1)].and_then(|prev_m| {
-        let piece_idx = s.board.piece_on[prev_m.from as usize].index();
-        s.counter_moves[prev_m.capture as usize][piece_idx][prev_m.to as usize]
+    let previous_move = if is_root { None } else { s.prev_move[s.ply] };
+    let counter_move = previous_move.and_then(|prev| {
+        let (capture, piece, to) = counter_move_slot(&s.board, prev);
+        s.counter_moves[capture][piece][to]
     });
 
     let mut picker =
@@ -377,14 +442,12 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
     let mut num_searched_quiets: usize = 0;
 
     while let Some(m) = picker.next(&s.board, &s.history) {
-        // LMP: skip quiet moves after threshold
         if !is_pv && !in_check && depth <= 3 && !m.capture && m.promotion.is_none() {
             let lmp_limit = LMP_LIMITS[depth as usize];
             if moves_searched as i32 >= lmp_limit {
                 continue;
             }
         }
-        // History pruning
         if depth <= 2 && !in_check && !m.capture && m.promotion.is_none() {
             let piece_idx = s.board.piece_on[m.from as usize].index();
             let hist_score = s.history[piece_idx][m.to as usize];
@@ -392,15 +455,13 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                 continue;
             }
         }
+        if moves_searched > 0 && depth < 8 && !in_check && m.capture && see(&s.board, m) < 0 {
+            continue;
+        }
 
-        // Make move + legality check
+        let moved_piece = s.board.piece_on[m.from as usize];
         let undo = s.board.make_move(m);
-        let us = s.board.turn.other();
-        let king_bb = s.board.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
-        if king_bb != 0
-            && s.board
-                .is_square_attacked(king_bb.trailing_zeros() as i32, s.board.turn)
-        {
+        if mover_left_king_in_check(&s.board) {
             s.board.unmake_move(m, undo);
             continue;
         }
@@ -413,14 +474,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
         if moves_searched == 1 {
             score = -negamax(s, -beta, -alpha, depth - 1);
         } else {
-            // Bad capture pruning
-            if depth < 8 && !in_check && m.capture && see(&s.board, m) < 0 {
-                s.ply -= 1;
-                s.board.unmake_move(m, undo);
-                continue;
-            }
-
-            // LMR
             let mut reduction = 0;
             if depth >= 3 && !m.capture && !in_check {
                 let d = depth as f32;
@@ -429,8 +482,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                 if !is_pv {
                     reduction += 1;
                 }
-                let history_score =
-                    s.history[s.board.piece_on[m.from as usize].index()][m.to as usize];
+                let history_score = s.history[moved_piece.index()][m.to as usize];
                 reduction -= history_score / 4096;
                 reduction = reduction.clamp(0, depth - 2);
             }
@@ -452,23 +504,25 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             return 0;
         }
 
+        if is_root && (s.root_best.is_none() || score > alpha) {
+            s.root_best = Some((m, score));
+        }
+
         if score > best_score {
             best_score = score;
             best_move = Some(m);
             if score > alpha {
                 alpha = score;
                 if alpha >= beta {
-                    // Beta cutoff — update killer, counter, history
                     if !m.capture {
                         if Some(m) != s.killers[s.ply][0] {
                             s.killers[s.ply][1] = s.killers[s.ply][0];
                             s.killers[s.ply][0] = Some(m);
                         }
 
-                        if let Some(prev_m) = s.prev_move[s.ply.saturating_sub(1)] {
-                            let piece_idx = s.board.piece_on[prev_m.from as usize].index();
-                            s.counter_moves[prev_m.capture as usize][piece_idx]
-                                [prev_m.to as usize] = Some(m);
+                        if let Some(prev) = previous_move {
+                            let (capture, piece, to) = counter_move_slot(&s.board, prev);
+                            s.counter_moves[capture][piece][to] = Some(m);
                         }
 
                         let piece_idx = s.board.piece_on[m.from as usize].index();
@@ -483,9 +537,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
                             }
                         }
 
-                        // History malus for previously searched quiet moves
-                        for k in 0..num_searched_quiets {
-                            let failed_move = searched_quiets[k];
+                        for failed_move in &searched_quiets[..num_searched_quiets] {
                             let p_idx = s.board.piece_on[failed_move.from as usize].index();
                             s.history[p_idx][failed_move.to as usize] -= bonus;
                         }
@@ -495,7 +547,6 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             }
         }
 
-        // Track searched quiets for history malus (only non-cutoff moves reach here)
         if !m.capture && m.promotion.is_none() && num_searched_quiets < 128 {
             searched_quiets[num_searched_quiets] = m;
             num_searched_quiets += 1;
@@ -529,80 +580,106 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
     best_score
 }
 
+/// Follows TT best moves from `pos`, stopping at the first move that is not legal there.
 pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> Vec<Move> {
     let mut pv = Vec::with_capacity(max_len);
     for _ in 0..max_len {
-        if let Some(m) = tt.probe(pos.zobrist).and_then(|e| e.best_move()) {
-            pv.push(m);
-            pos.make_move(m);
-        } else {
+        let Some(m) = tt.probe(pos.zobrist).and_then(|e| e.best_move()) else {
+            break;
+        };
+        if !pos.is_pseudo_legal(m) {
             break;
         }
+        let undo = pos.make_move(m);
+        if mover_left_king_in_check(&pos) {
+            pos.unmake_move(m, undo);
+            break;
+        }
+        pv.push(m);
     }
     pv
 }
 
-pub fn best_move_timed(
-    b: &Board,
-    tt: &mut SharedTransTable,
-    time_ms: u64,
-    max_depth: usize,
-    stop_signal: Arc<AtomicBool>,
-    is_main_thread: bool,
-) -> (Option<Move>, usize, u64) {
-    if is_main_thread {
-        tt.tick_age();
-    }
-
-    if is_main_thread && time_ms < u64::MAX / 2 {
-        let mut legal_moves = MoveList::new();
-        let mut temp_board = b.clone();
-        temp_board.generate_legal_moves(&mut legal_moves);
-        if legal_moves.len() == 1 {
-            return (Some(legal_moves.moves[0]), 1, 0);
-        }
-    }
-
-    let soft_limit = time_ms;
-    let hard_limit = if time_ms > 300_000 {
-        time_ms
+fn format_score(score: i32) -> String {
+    if score.abs() > MATE_THRESHOLD {
+        let mate_in = (MATE_SCORE - score.abs() + 1) / 2;
+        format!("mate {}", if score > 0 { mate_in } else { -mate_in })
     } else {
-        time_ms * 4
-    };
+        format!("cp {}", score)
+    }
+}
 
+fn print_iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) {
+    let elapsed_ms = s.tm.control.elapsed_ms();
+    let nps = if elapsed_ms > 0 {
+        s.tm.nodes * 1000 / elapsed_ms
+    } else {
+        0
+    };
+    let mut after_best = s.board.clone();
+    after_best.make_move(best_move);
+    let pv_str = std::iter::once(best_move)
+        .chain(get_pv_from_tt(after_best, s.tt, depth.saturating_sub(1)))
+        .map(format_uci)
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!(
+        "info depth {} seldepth {} score {} hashfull {} nodes {} nps {} time {} pv {}",
+        depth,
+        s.seldepth,
+        format_score(score),
+        s.tt.hashfull_permill(),
+        s.tm.nodes,
+        nps,
+        elapsed_ms,
+        pv_str
+    );
+}
+
+fn legal_moves(board: &Board) -> MoveList {
+    let mut moves = MoveList::new();
+    board.clone().generate_legal_moves(&mut moves);
+    moves
+}
+
+/// Iterative deepening on one thread; returns the best root move and the nodes searched.
+fn iterative_deepening(
+    board: &Board,
+    tt: &SharedTransTable,
+    max_depth: usize,
+    control: Arc<SearchControl>,
+    is_main_thread: bool,
+) -> (Option<Move>, u64) {
     let mut search = Search {
-        board: b.clone(),
+        board: board.clone(),
         tt,
-        tm: TimeManager::new(soft_limit, stop_signal, is_main_thread),
+        tm: TimeManager::new(control, is_main_thread),
         killers: [[None; 2]; MAX_PLY],
         history: [[0; 64]; 13],
         counter_moves: [[[None; 64]; 13]; 2],
         ply: 0,
         seldepth: 0,
         prev_move: [None; MAX_PLY],
+        root_best: None,
     };
 
-    search.tm.soft_limit = soft_limit;
-    search.tm.hard_limit = hard_limit;
-
-    let mut best_move: Option<Move> = None;
     let mut score = 0;
-
-    for d in 1..=max_depth {
+    for depth in 1..=max_depth {
         search.seldepth = 0;
-        let (mut alpha, mut beta) = if d > 3 {
+        let (mut alpha, mut beta) = if depth > 3 {
             (score - 40, score + 40)
         } else {
             (-MATE_SCORE, MATE_SCORE)
         };
 
+        let mut aborted = false;
         loop {
-            score = negamax(&mut search, alpha, beta, d as i32);
-
+            let iteration_score = negamax(&mut search, alpha, beta, depth as i32);
             if search.tm.check_hard_limit() {
+                aborted = true;
                 break;
             }
-
+            score = iteration_score;
             if score <= alpha {
                 alpha = -MATE_SCORE;
             } else if score >= beta {
@@ -612,44 +689,110 @@ pub fn best_move_timed(
             }
         }
 
-        if let Some(entry) = search.tt.probe(search.board.zobrist) {
-            best_move = entry.best_move();
-        }
-
-        if is_main_thread {
-            let elapsed_ms = search.tm.start_time.elapsed().as_millis();
-            let nps = if elapsed_ms > 0 {
-                (search.tm.nodes * 1000) / elapsed_ms as u64
-            } else {
-                0
-            };
-            let hashfull = search.tt.hashfull_permill();
-            let pv = get_pv_from_tt(search.board.clone(), search.tt, d);
-            let pv_str = pv
-                .iter()
-                .map(|&m| format_uci(m))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let score_str = if score.abs() > MATE_THRESHOLD {
-                let mate_in = (MATE_SCORE - score.abs() + 1) / 2;
-                format!("mate {}", if score > 0 { mate_in } else { -mate_in })
-            } else {
-                format!("cp {}", score)
-            };
-            println!(
-                "info depth {} seldepth {} score {} hashfull {} nodes {} nps {} time {} pv {}",
-                d, search.seldepth, score_str, hashfull, search.tm.nodes, nps, elapsed_ms, pv_str
-            );
-        }
-
-        if search.tm.check_soft_limit(d, best_move) {
+        if aborted {
             break;
         }
 
+        let best_move = search.root_best.map(|(m, _)| m);
+        if is_main_thread && let Some(m) = best_move {
+            print_iteration_info(&search, depth, m, score);
+        }
+        if search.tm.should_stop_iterating(depth, best_move) {
+            break;
+        }
         if score.abs() > MATE_THRESHOLD {
             break;
         }
     }
 
-    (best_move, max_depth, search.tm.nodes)
+    (search.root_best.map(|(m, _)| m), search.tm.nodes)
+}
+
+fn ponder_move_after(board: &Board, best_move: Move, tt: &SharedTransTable) -> Option<Move> {
+    let mut after_best = board.clone();
+    after_best.make_move(best_move);
+    get_pv_from_tt(after_best, tt, 1).first().copied()
+}
+
+fn wait_until_released(control: &SearchControl) {
+    while !control.is_stopped() && !control.is_timed() {
+        thread::sleep(STOP_POLL_INTERVAL);
+    }
+}
+
+/// Runs a Lazy-SMP search with `threads` threads; thread 0 reports and manages time.
+pub fn search(
+    board: &Board,
+    tt: &SharedTransTable,
+    limits: SearchLimits,
+    threads: usize,
+    control: &Arc<SearchControl>,
+) -> SearchResult {
+    tt.tick_age();
+
+    let root_moves = legal_moves(board);
+    if root_moves.is_empty() {
+        if limits.wait_for_stop {
+            wait_until_released(control);
+        }
+        return SearchResult {
+            best_move: None,
+            ponder_move: None,
+            nodes: 0,
+        };
+    }
+    if root_moves.len() == 1 && control.is_timed() && !limits.wait_for_stop {
+        return SearchResult {
+            best_move: Some(root_moves.moves[0]),
+            ponder_move: None,
+            nodes: 0,
+        };
+    }
+
+    let (best_move, nodes) = thread::scope(|scope| {
+        let helpers: Vec<_> = (1..threads.max(1))
+            .filter_map(|i| {
+                let helper_control = Arc::clone(control);
+                thread::Builder::new()
+                    .name(format!("search-helper-{i}"))
+                    .stack_size(SEARCH_THREAD_STACK)
+                    .spawn_scoped(scope, move || {
+                        iterative_deepening(board, tt, limits.max_depth, helper_control, false).1
+                    })
+                    .ok()
+            })
+            .collect();
+
+        let main_control = Arc::clone(control);
+        let main = thread::Builder::new()
+            .name("search-main".into())
+            .stack_size(SEARCH_THREAD_STACK)
+            .spawn_scoped(scope, move || {
+                let result =
+                    iterative_deepening(board, tt, limits.max_depth, Arc::clone(&main_control), true);
+                if limits.wait_for_stop {
+                    wait_until_released(&main_control);
+                }
+                main_control.stop();
+                result
+            });
+
+        let (best_move, main_nodes) = match main {
+            Ok(handle) => handle.join().unwrap_or((None, 0)),
+            Err(_) => {
+                control.stop();
+                (None, 0)
+            }
+        };
+        let helper_nodes: u64 = helpers.into_iter().map(|h| h.join().unwrap_or(0)).sum();
+        (best_move, main_nodes + helper_nodes)
+    });
+
+    let best_move = best_move.or(Some(root_moves.moves[0]));
+    let ponder_move = best_move.and_then(|m| ponder_move_after(board, m, tt));
+    SearchResult {
+        best_move,
+        ponder_move,
+        nodes,
+    }
 }

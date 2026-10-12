@@ -3,9 +3,10 @@ use chess::board::Board;
 use chess::nnue;
 use chess::openings;
 use chess::perft::{divide, perft};
-use chess::search::{best_move_timed, get_pv_from_tt};
+use chess::search::{SearchControl, SearchLimits, search};
 use chess::sprt::SprtConfig;
 use chess::tournament::{self, TournamentConfig};
+use chess::time::TimeBudget;
 use chess::tt::SharedTransTable;
 use chess::types::{Color, Move, MoveList, Piece, PieceKind, START_FEN};
 use chess::uci;
@@ -13,10 +14,7 @@ use chess::uci_io::{format_uci, parse_uci_move};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-
-const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024; // 32 MiB
 
 #[derive(Parser)]
 #[command(
@@ -259,7 +257,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
         });
 
         let tt_size_mb = 1024;
-        let mut tt = SharedTransTable::new(tt_size_mb);
+        let tt = SharedTransTable::new(tt_size_mb);
 
         println!("\nGame {}/{}", i, rounds);
         println!("Starting FEN: {}", b.to_fen());
@@ -299,45 +297,12 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
 
             println!("Engine ({:?}) is thinking...", b.turn);
 
-            let stop_signal = Arc::new(AtomicBool::new(false));
-            let mut helpers = vec![];
-            let helper_depth = max_depth.min(64);
-
-            for i in 0..(threads_count - 1) {
-                let board_clone = b.clone();
-                let tt_clone = tt.clone();
-                let stop_clone = Arc::clone(&stop_signal);
-                let name = format!("self-play-helper-{}", i);
-                let _ = thread::Builder::new()
-                    .name(name)
-                    .stack_size(SEARCH_THREAD_STACK)
-                    .spawn(move || {
-                        let mut tt_local = tt_clone;
-                        best_move_timed(
-                            &board_clone,
-                            &mut tt_local,
-                            u64::MAX / 4,
-                            helper_depth,
-                            stop_clone,
-                            false,
-                        );
-                    })
-                    .map(|jh| helpers.push(jh));
-            }
-
-            let (engine_move_opt, _, _) = best_move_timed(
-                &b,
-                &mut tt,
-                time_ms,
+            let control = SearchControl::new(Some(TimeBudget::fixed(time_ms)));
+            let limits = SearchLimits {
                 max_depth,
-                Arc::clone(&stop_signal),
-                true,
-            );
-
-            stop_signal.store(true, Ordering::Relaxed);
-            for h in helpers {
-                let _ = h.join();
-            }
+                wait_for_stop: false,
+            };
+            let engine_move_opt = search(&b, &tt, limits, threads_count, &control).best_move;
 
             let engine_move = if let Some(m) = engine_move_opt {
                 m
@@ -372,15 +337,25 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
     }
 
     let tt_size_mb = 1024;
-    let mut tt = SharedTransTable::new(tt_size_mb);
+    let tt = SharedTransTable::new(tt_size_mb);
 
     struct PonderState {
         handle: Option<thread::JoinHandle<()>>,
-        stop_signal: Arc<AtomicBool>,
+        control: Option<Arc<SearchControl>>,
+    }
+    impl PonderState {
+        fn stop_and_join(&mut self) {
+            if let Some(control) = self.control.take() {
+                control.stop();
+            }
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
     }
     let mut ponder_state = PonderState {
         handle: None,
-        stop_signal: Arc::new(AtomicBool::new(false)),
+        control: None,
     };
 
     let mut ponder_move_opt: Option<Move> = None;
@@ -415,10 +390,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
                 break 'gameloop;
             }
 
-            if let Some(handle) = ponder_state.handle.take() {
-                ponder_state.stop_signal.store(true, Ordering::Relaxed);
-                handle.join().unwrap();
-            }
+            ponder_state.stop_and_join();
 
             let mut user_move_opt = parse_uci_move(b, input_str);
 
@@ -462,47 +434,13 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
         println!("--------------------------------");
         io::stdout().flush().unwrap();
 
-        let stop_signal = Arc::new(AtomicBool::new(false));
-        let mut helpers = vec![];
-
-        // Conservative recursion cap for helpers to avoid stack blowups
-        let helper_depth = max_depth.min(64);
-
-        for i in 0..(threads_count - 1) {
-            let board_clone = b.clone();
-            let tt_clone = tt.clone();
-            let stop_clone = Arc::clone(&stop_signal);
-            let name = format!("helper-{}", i);
-            let _ = thread::Builder::new()
-                .name(name)
-                .stack_size(SEARCH_THREAD_STACK)
-                .spawn(move || {
-                    let mut tt_local = tt_clone;
-                    best_move_timed(
-                        &board_clone,
-                        &mut tt_local,
-                        u64::MAX / 4,
-                        helper_depth,
-                        stop_clone,
-                        false,
-                    );
-                })
-                .map(|jh| helpers.push(jh));
-        }
-
-        let (engine_move_opt, _, _) = best_move_timed(
-            b,
-            &mut tt,
-            time_ms,
+        let control = SearchControl::new(Some(TimeBudget::fixed(time_ms)));
+        let limits = SearchLimits {
             max_depth,
-            Arc::clone(&stop_signal),
-            true,
-        );
-
-        stop_signal.store(true, Ordering::Relaxed);
-        for h in helpers {
-            let _ = h.join();
-        }
+            wait_for_stop: false,
+        };
+        let result = search(b, &tt, limits, threads_count, &control);
+        let engine_move_opt = result.best_move;
 
         let engine_move = if let Some(m) = engine_move_opt {
             m
@@ -511,8 +449,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
             break;
         };
 
-        let pv = get_pv_from_tt(b.clone(), &tt, 2);
-        ponder_move_opt = pv.get(1).copied();
+        ponder_move_opt = result.ponder_move;
 
         println!("\n--------------------------------");
         println!("Engine plays: {}", format_uci(engine_move));
@@ -526,32 +463,26 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
                 let mut ponder_board = b.clone();
                 let _ = ponder_board.make_move(ponder_move);
                 let tt_clone = tt.clone();
-                ponder_state.stop_signal.store(false, Ordering::Relaxed);
-                let stop_clone = Arc::clone(&ponder_state.stop_signal);
-
+                let ponder_control = SearchControl::new(None);
+                let thread_control = Arc::clone(&ponder_control);
+                let ponder_limits = SearchLimits {
+                    max_depth,
+                    wait_for_stop: true,
+                };
                 let _ = thread::Builder::new()
-                    .name("ponder-helper-cli".to_string())
-                    .stack_size(SEARCH_THREAD_STACK)
+                    .name("ponder-cli".to_string())
                     .spawn(move || {
-                        let mut tt_local = tt_clone;
-                        best_move_timed(
-                            &ponder_board,
-                            &mut tt_local,
-                            u64::MAX / 4,
-                            helper_depth,
-                            stop_clone,
-                            false,
-                        );
+                        search(&ponder_board, &tt_clone, ponder_limits, threads_count, &thread_control);
                     })
-                    .map(|h| ponder_state.handle = Some(h));
+                    .map(|h| {
+                        ponder_state.handle = Some(h);
+                        ponder_state.control = Some(ponder_control);
+                    });
             }
         }
     }
 
-    if let Some(handle) = ponder_state.handle.take() {
-        ponder_state.stop_signal.store(true, Ordering::Relaxed);
-        let _ = handle.join();
-    }
+    ponder_state.stop_and_join();
     println!("Exiting game.");
 }
 
