@@ -41,6 +41,10 @@ fn parse_setoption(rest: &str) -> Option<(String, String)> {
     }
 }
 
+fn parse_check_value(value: &str) -> bool {
+    matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "on")
+}
+
 struct PonderState {
     handle: Option<std::thread::JoinHandle<()>>,
     stop_signal: Option<Arc<AtomicBool>>,
@@ -107,6 +111,7 @@ pub fn run_uci() {
     let mut tt = SharedTransTable::new(tt_size_mb);
     let mut threads_count: usize = num_cpus::get().max(1);
     let mut ponder = PonderState::new();
+    let mut own_book = true;
 
     loop {
         let mut line = String::new();
@@ -124,6 +129,7 @@ pub fn run_uci() {
             );
             println!("option name Threads type spin default {} min 1 max 128", 1);
             println!("option name Ponder type check default {}", ponder.enabled);
+            println!("option name OwnBook type check default {}", own_book);
             println!("uciok");
             let _ = io::stdout().flush();
             continue;
@@ -164,8 +170,9 @@ pub fn run_uci() {
                         threads_count = n;
                     }
                 } else if name.eq_ignore_ascii_case("Ponder") {
-                    ponder.enabled =
-                        matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "on");
+                    ponder.enabled = parse_check_value(&value);
+                } else if name.eq_ignore_ascii_case("OwnBook") {
+                    own_book = parse_check_value(&value);
                 }
             }
             continue;
@@ -234,7 +241,7 @@ pub fn run_uci() {
             info(format!("FEN before go: {}", b.to_fen()));
             ponder.stop_and_join();
 
-            if let Some(book_uci) = get_book_move(&b) {
+            if own_book && let Some(book_uci) = get_book_move(&b) {
                 println!("bestmove {}", book_uci);
                 let _ = io::stdout().flush();
                 continue;
