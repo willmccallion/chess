@@ -2,6 +2,7 @@ use crate::board::Board;
 use crate::eval::{self, NetPaths};
 use crate::opening_book::get_book_move;
 use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
+use crate::search_params::SearchParams;
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
 use crate::types::START_FEN;
@@ -85,6 +86,7 @@ struct Options {
     move_overhead_ms: i64,
     eval_file: String,
     eval_file_small: String,
+    search_params: SearchParams,
 }
 
 fn built_in_net_path(kind: eval::net_file::NetKind) -> String {
@@ -191,6 +193,7 @@ fn start_search(
     };
 
     let limits = SearchLimits {
+        params: options.search_params,
         max_depth,
         wait_for_stop: is_ponder || is_infinite,
     };
@@ -244,6 +247,9 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
         options.eval_file = value.to_string();
     } else if name.eq_ignore_ascii_case("EvalFileSmall") {
         options.eval_file_small = value.to_string();
+    } else if let Ok(number) = value.parse::<i32>() {
+        // Tunable search parameters are accepted by name but not advertised.
+        options.search_params.set(name, number);
     }
 }
 
@@ -268,6 +274,7 @@ pub fn run_uci() {
         move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
         eval_file: built_in_net_path(eval::net_file::NetKind::Big),
         eval_file_small: built_in_net_path(eval::net_file::NetKind::Small),
+        search_params: SearchParams::default(),
     };
     let mut tt = SharedTransTable::new(options.hash_mb);
     let mut active: Option<ActiveSearch> = None;

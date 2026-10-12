@@ -2,6 +2,7 @@
 
 use crate::board::Board;
 use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
+use crate::search_params::SearchParams;
 use crate::tt::SharedTransTable;
 use std::time::Instant;
 
@@ -58,6 +59,7 @@ impl BenchResult {
 pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
     let tt = SharedTransTable::new(hash_mb);
     let limits = SearchLimits {
+        params: SearchParams::default(),
         max_depth: depth,
         wait_for_stop: false,
     };

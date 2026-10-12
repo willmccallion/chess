@@ -3,12 +3,13 @@ use crate::eval::evaluate;
 use crate::legality::LegalityInfo;
 use crate::history::{ContinuationKey, CorrectionHistory, Histories, captured_kind, stat_bonus};
 use crate::movepicker::{MovePicker, OrderingContext};
+use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
 use crate::types::{MAX_MOVES, Move, MoveList, Piece, StackVec, Undo};
 use crate::uci_io::format_uci;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,43 +20,21 @@ const INFINITY: i32 = MATE_SCORE + 1;
 const MAX_PLY: usize = 128;
 const DRAW_SCORE: i32 = 0;
 
-const RFP_MAX_DEPTH: i32 = 8;
-const RFP_MARGIN: i32 = 80;
-const RAZORING_MARGIN: i32 = 400;
-const RAZORING_DEPTH_SQ_MARGIN: i32 = 250;
 const NMP_MIN_DEPTH: i32 = 3;
-const NMP_EVAL_DIVISOR: i32 = 200;
 const IIR_MIN_DEPTH: i32 = 4;
 const MOVE_PRUNING_MAX_DEPTH: i32 = 8;
-const FUTILITY_BASE: i32 = 100;
-const FUTILITY_PER_DEPTH: i32 = 100;
-const SEE_QUIET_MARGIN: i32 = -50;
-const SEE_CAPTURE_MARGIN: i32 = -90;
-const DELTA_MARGIN: i32 = 200;
 const PROBCUT_MIN_DEPTH: i32 = 5;
-const PROBCUT_MARGIN: i32 = 200;
 const PROBCUT_DEPTH_REDUCTION: i32 = 4;
 const HISTORY_PRUNING_MAX_DEPTH: i32 = 4;
-const HISTORY_PRUNING_PER_DEPTH: i32 = -2048;
-const ASPIRATION_DELTA: i32 = 25;
 const ASPIRATION_MIN_DEPTH: usize = 4;
 const SINGULAR_MIN_DEPTH: i32 = 8;
 const SINGULAR_TT_DEPTH_MARGIN: i32 = 3;
-const SINGULAR_BETA_PER_DEPTH: i32 = 2;
-const DOUBLE_EXTENSION_MARGIN: i32 = 20;
 const MAX_DOUBLE_EXTENSIONS: u8 = 6;
 
 const MAX_TRIED_MOVES: usize = 64;
 
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_TABLE_SIZE: usize = 64;
-const LMR_QUIET_BASE: f64 = 0.77;
-const LMR_QUIET_DIVISOR: f64 = 2.36;
-const LMR_CAPTURE_BASE: f64 = 0.0;
-const LMR_CAPTURE_DIVISOR: f64 = 3.0;
-const LMR_HISTORY_DIVISOR: i32 = 8192;
-const DEEPER_MARGIN: i32 = 70;
-const SHALLOWER_MARGIN: i32 = 8;
 
 /// The search measures scores in units of 3/4 centipawn: its margins were set for an
 /// evaluation about 4/3 the size of Stockfish 18's centipawns.
@@ -142,6 +121,7 @@ impl SearchControl {
 #[derive(Copy, Clone)]
 pub struct SearchLimits {
     pub max_depth: usize,
+    pub params: SearchParams,
     /// `go infinite` / `go ponder`: never return before `stop` (or `ponderhit` sets a budget).
     pub wait_for_stop: bool,
 }
@@ -192,40 +172,40 @@ impl SearchThreads {
     }
 }
 
+/// Late-move reductions by depth and move number, built from the search parameters.
 struct LmrTables {
     quiet: [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
     capture: [[i32; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
 }
 
-static LMR_TABLES: OnceLock<LmrTables> = OnceLock::new();
-
-fn lmr_tables() -> &'static LmrTables {
-    LMR_TABLES.get_or_init(|| {
-        let mut tables = LmrTables {
+impl LmrTables {
+    fn new(params: &SearchParams) -> Self {
+        let ratio = |x100: i32| f64::from(x100) / 100.0;
+        let (quiet_base, quiet_divisor) = (ratio(params.lmr_quiet_base_x100), ratio(params.lmr_quiet_divisor_x100));
+        let (capture_base, capture_divisor) = (ratio(params.lmr_capture_base_x100), ratio(params.lmr_capture_divisor_x100));
+        let mut tables = Self {
             quiet: [[0; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
             capture: [[0; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
         };
         for depth in 1..LMR_TABLE_SIZE {
             for moves in 1..LMR_TABLE_SIZE {
                 let product = (depth as f64).ln() * (moves as f64).ln();
-                tables.quiet[depth][moves] = (LMR_QUIET_BASE + product / LMR_QUIET_DIVISOR) as i32;
-                tables.capture[depth][moves] =
-                    (LMR_CAPTURE_BASE + product / LMR_CAPTURE_DIVISOR) as i32;
+                tables.quiet[depth][moves] = (quiet_base + product / quiet_divisor) as i32;
+                tables.capture[depth][moves] = (capture_base + product / capture_divisor) as i32;
             }
         }
         tables
-    })
-}
+    }
 
-/// Base late-move reduction for the `moves_searched`-th move at `depth`.
-fn base_reduction(depth: i32, moves_searched: i32, is_quiet: bool) -> i32 {
-    let d = (depth.max(0) as usize).min(LMR_TABLE_SIZE - 1);
-    let m = (moves_searched.max(0) as usize).min(LMR_TABLE_SIZE - 1);
-    let tables = lmr_tables();
-    if is_quiet {
-        tables.quiet[d][m]
-    } else {
-        tables.capture[d][m]
+    /// Base reduction for the `moves_searched`-th move at `depth`.
+    fn base_reduction(&self, depth: i32, moves_searched: i32, is_quiet: bool) -> i32 {
+        let d = (depth.max(0) as usize).min(LMR_TABLE_SIZE - 1);
+        let m = (moves_searched.max(0) as usize).min(LMR_TABLE_SIZE - 1);
+        if is_quiet {
+            self.quiet[d][m]
+        } else {
+            self.capture[d][m]
+        }
     }
 }
 
@@ -352,6 +332,8 @@ struct Search<'a> {
     root_best: Option<(Move, i32)>,
     /// Nodes searched under each root move during this `go`.
     root_move_nodes: Vec<(Move, u64)>,
+    params: SearchParams,
+    lmr: LmrTables,
 }
 
 #[inline(always)]
@@ -708,7 +690,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         if m.capture && m.promotion.is_none() {
             let captured = s.board.piece_on[m.to as usize];
             if let Some(kind) = captured.kind()
-                && stand_pat + PIECE_VALUES[kind as usize] + DELTA_MARGIN < alpha
+                && stand_pat + PIECE_VALUES[kind as usize] + s.params.delta_margin < alpha
             {
                 continue;
             }
@@ -870,7 +852,7 @@ fn singular_extension(
         return Singularity::Extend(0);
     }
 
-    let singular_beta = tt_score - SINGULAR_BETA_PER_DEPTH * depth;
+    let singular_beta = tt_score - s.params.singular_beta_per_depth_x16 * depth / 16;
     let singular_depth = (depth - 1) / 2;
     s.stack[s.ply].excluded_move = Some(tt_move);
     let singular_score = negamax(s, singular_beta - 1, singular_beta, singular_depth, cut_node);
@@ -881,7 +863,7 @@ fn singular_extension(
 
     if singular_score < singular_beta {
         let double = !is_pv
-            && singular_score < singular_beta - DOUBLE_EXTENSION_MARGIN
+            && singular_score < singular_beta - s.params.double_extension_margin
             && s.stack[s.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
         Singularity::Extend(if double { 2 } else { 1 })
     } else if singular_beta >= beta {
@@ -979,14 +961,14 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     let improving = s.is_improving(corrected_eval);
 
     if !is_pv && let Some(eval) = eval {
-        if eval < alpha - RAZORING_MARGIN - RAZORING_DEPTH_SQ_MARGIN * depth * depth {
+        if eval < alpha - s.params.razor_margin - s.params.razor_depth_sq_margin * depth * depth {
             let q_score = quiesce(s, alpha, beta);
             if q_score < alpha {
                 return q_score;
             }
         }
 
-        if depth <= RFP_MAX_DEPTH && eval - RFP_MARGIN * (depth - i32::from(improving)) >= beta {
+        if depth <= s.params.rfp_max_depth && eval - s.params.rfp_margin * (depth - i32::from(improving)) >= beta {
             return eval;
         }
 
@@ -997,7 +979,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             && !previous_was_null
             && has_non_pawn_material(&s.board)
         {
-            let r = 4 + depth / 3 + ((eval - beta) / NMP_EVAL_DIVISOR).min(3);
+            let r = s.params.nmp_base_reduction
+                + depth / s.params.nmp_depth_divisor
+                + ((eval - beta) / s.params.nmp_eval_divisor).min(3);
             let undo = s.make_null_move();
             let null_score = -negamax(s, -beta, -beta + 1, depth - r, !cut_node);
             s.unmake_null_move(undo);
@@ -1017,7 +1001,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         && beta.abs() < MATE_THRESHOLD
         && let Some(static_eval) = corrected_eval
     {
-        let probcut_beta = beta + PROBCUT_MARGIN;
+        let probcut_beta = beta + s.params.probcut_margin;
         let tt_rules_out_probcut = tt_entry.is_some_and(|entry| {
             i32::from(entry.depth()) >= depth - 3
                 && score_from_tt(entry.score(), s.ply) < probcut_beta
@@ -1051,7 +1035,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     let mut tried_quiets: StackVec<Move, MAX_TRIED_MOVES> = StackVec::default();
     let mut tried_captures: StackVec<Move, MAX_TRIED_MOVES> = StackVec::default();
 
-    let lmp_limit = (3 + depth * depth) / (2 - i32::from(improving));
+    let lmp_limit = (s.params.lmp_base + depth * depth) / (2 - i32::from(improving));
     let mut quiets_seen = 0;
 
     loop {
@@ -1090,23 +1074,23 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                     continue;
                 }
                 if depth <= HISTORY_PRUNING_MAX_DEPTH
-                    && quiet_history < HISTORY_PRUNING_PER_DEPTH * depth
+                    && quiet_history < -s.params.history_pruning_margin * depth
                 {
                     continue;
                 }
                 if depth <= MOVE_PRUNING_MAX_DEPTH
-                    && eval + FUTILITY_BASE + FUTILITY_PER_DEPTH * depth <= alpha
+                    && eval + s.params.futility_base + s.params.futility_per_depth * depth <= alpha
                 {
                     picker.skip_quiets();
                     continue;
                 }
                 if depth <= MOVE_PRUNING_MAX_DEPTH
-                    && !see_ge(&s.board, m, SEE_QUIET_MARGIN * depth * depth)
+                    && !see_ge(&s.board, m, -s.params.see_quiet_margin * depth * depth)
                 {
                     continue;
                 }
             } else if depth <= MOVE_PRUNING_MAX_DEPTH
-                && !see_ge(&s.board, m, SEE_CAPTURE_MARGIN * depth)
+                && !see_ge(&s.board, m, -s.params.see_capture_margin * depth)
             {
                 continue;
             }
@@ -1140,13 +1124,13 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         } else {
             let reduction = if depth >= LMR_MIN_DEPTH && !in_check && (is_quiet || !is_pv) {
                 let gives_check = side_to_move_in_check(&s.board);
-                let mut r = base_reduction(depth, moves_searched, is_quiet);
+                let mut r = s.lmr.base_reduction(depth, moves_searched, is_quiet);
                 r += i32::from(!is_pv);
                 r += i32::from(cut_node);
                 r += i32::from(!improving);
                 r -= i32::from(is_killer_or_counter);
                 r -= i32::from(gives_check);
-                r -= quiet_history / LMR_HISTORY_DIVISOR;
+                r -= quiet_history / s.params.lmr_history_divisor;
                 r.clamp(0, (new_depth - 1).max(0))
             } else {
                 0
@@ -1155,8 +1139,8 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
             let mut search_score = -negamax(s, -alpha - 1, -alpha, reduced_depth, true);
             if search_score > alpha && reduction > 0 {
-                let deeper = search_score > best_score + DEEPER_MARGIN + 2 * new_depth;
-                let shallower = search_score < best_score + SHALLOWER_MARGIN;
+                let deeper = search_score > best_score + s.params.deeper_margin + 2 * new_depth;
+                let shallower = search_score < best_score + s.params.shallower_margin;
                 let research_depth = new_depth + i32::from(deeper) - i32::from(shallower);
                 if research_depth > reduced_depth {
                     search_score = -negamax(s, -alpha - 1, -alpha, research_depth, !cut_node);
@@ -1302,10 +1286,11 @@ fn iterative_deepening(
     board: &Board,
     tt: &SharedTransTable,
     td: &mut ThreadData,
-    max_depth: usize,
+    limits: SearchLimits,
     control: Arc<SearchControl>,
     is_main_thread: bool,
 ) -> (Option<Move>, u64) {
+    let params = limits.params;
     let mut search = Search {
         board: board.clone(),
         tt,
@@ -1317,13 +1302,15 @@ fn iterative_deepening(
         seldepth: 0,
         root_best: None,
         root_move_nodes: Vec::new(),
+        params,
+        lmr: LmrTables::new(&params),
     };
 
     let mut score = 0;
-    for depth in 1..=max_depth {
+    for depth in 1..=limits.max_depth {
         let previous_score = score;
         search.seldepth = 0;
-        let mut delta = ASPIRATION_DELTA;
+        let mut delta = search.params.aspiration_delta;
         let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
             ((score - delta).max(-INFINITY), (score + delta).min(INFINITY))
         } else {
@@ -1430,7 +1417,7 @@ pub fn search(
                     .name(format!("search-helper-{}", i + 1))
                     .stack_size(SEARCH_THREAD_STACK)
                     .spawn_scoped(scope, move || {
-                        iterative_deepening(board, tt, td, limits.max_depth, helper_control, false)
+                        iterative_deepening(board, tt, td, limits, helper_control, false)
                             .1
                     })
                     .ok()
@@ -1447,7 +1434,7 @@ pub fn search(
                     board,
                     tt,
                     main_td,
-                    limits.max_depth,
+                    limits,
                     Arc::clone(&main_control),
                     true,
                 );

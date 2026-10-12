@@ -5,6 +5,7 @@ use chess::eval;
 use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search::{SearchControl, SearchLimits, SearchThreads, search};
+use chess::search_params::SearchParams;
 use chess::sprt::SprtConfig;
 use chess::tournament::{self, TournamentConfig};
 use chess::time::TimeBudget;
@@ -437,6 +438,7 @@ fn self_play(fen_str: &str, rounds: usize, time_ms: u64, max_depth: usize, threa
 
             let control = SearchControl::new(Some(TimeBudget::fixed(time_ms)));
             let limits = SearchLimits {
+                params: SearchParams::default(),
                 max_depth,
                 wait_for_stop: false,
             };
@@ -575,6 +577,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
 
         let control = SearchControl::new(Some(TimeBudget::fixed(time_ms)));
         let limits = SearchLimits {
+            params: SearchParams::default(),
             max_depth,
             wait_for_stop: false,
         };
@@ -605,6 +608,7 @@ fn play_cli(b: &mut Board, time_ms: u64, max_depth: usize, threads_count: usize)
                 let ponder_control = SearchControl::new(None);
                 let thread_control = Arc::clone(&ponder_control);
                 let ponder_limits = SearchLimits {
+                    params: SearchParams::default(),
                     max_depth,
                     wait_for_stop: true,
                 };

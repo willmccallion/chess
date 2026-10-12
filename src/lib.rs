@@ -15,6 +15,7 @@ pub mod perft;
 pub mod polyglot_zobrist;
 pub mod pst;
 pub mod search;
+pub mod search_params;
 pub mod see;
 pub mod sprt;
 pub mod time;
