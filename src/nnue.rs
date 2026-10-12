@@ -238,6 +238,12 @@ pub fn evaluate(board: &Board) -> i32 {
     nn_value_to_centipawn(out)
 }
 
+/// HalfKP orients black's view by rotating the board, not by flipping ranks.
+#[inline(always)]
+const fn rotate_180(sq: usize) -> usize {
+    sq ^ 63
+}
+
 #[inline(always)]
 fn make_halfkp_index(
     is_white_pov: bool,
@@ -246,8 +252,8 @@ fn make_halfkp_index(
     piece: Piece,
     piece_color: Color,
 ) -> usize {
-    let oriented_sq = if is_white_pov { sq } else { sq ^ 56 };
-    let king_oriented = if is_white_pov { king_sq } else { king_sq ^ 56 };
+    let oriented_sq = if is_white_pov { sq } else { rotate_180(sq) };
+    let king_oriented = if is_white_pov { king_sq } else { rotate_180(king_sq) };
 
     let color_is_pov = (piece_color == Color::White) == is_white_pov;
     let color_offset = if color_is_pov { 0 } else { 1 };
@@ -505,4 +511,66 @@ fn nnue_relu(x: i32) -> i32 {
 fn nn_value_to_centipawn(nn_value: i32) -> i32 {
     let v = nn_value / 8;
     (v * 100) / 208
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ensure_model_loaded() {
+        match init() {
+            Ok(()) | Err(NnueError::AlreadyInitialized) => {}
+            Err(e) => panic!("failed to load NNUE: {e}"),
+        }
+    }
+
+    /// Rotates the board 180 degrees and swaps colors; castling and en passant are dropped.
+    fn rotated_color_swapped_fen(board: &Board) -> String {
+        let mut swapped = [Piece::Empty; 64];
+        for sq in 0..64 {
+            let piece = board.piece_on[sq];
+            if let (Some(kind), Some(color)) = (piece.kind(), piece.color()) {
+                swapped[sq ^ 63] = Piece::from_kind(kind, color.other());
+            }
+        }
+        let mut rows = Vec::with_capacity(8);
+        for rank in (0..8).rev() {
+            let mut row = String::new();
+            let mut empty_run = 0;
+            for file in 0..8 {
+                let piece = swapped[rank * 8 + file];
+                if piece.is_empty() {
+                    empty_run += 1;
+                    continue;
+                }
+                if empty_run > 0 {
+                    row.push_str(&empty_run.to_string());
+                    empty_run = 0;
+                }
+                row.push_str(&piece.to_string());
+            }
+            if empty_run > 0 {
+                row.push_str(&empty_run.to_string());
+            }
+            rows.push(row);
+        }
+        let side = if board.turn == Color::White { "b" } else { "w" };
+        format!("{} {side} - - 0 1", rows.join("/"))
+    }
+
+    #[test]
+    fn eval_is_invariant_under_rotation_and_color_swap() {
+        ensure_model_loaded();
+        let fens = [
+            "r1bq1rk1/ppp1nppp/4n3/3p3Q/3P4/1BP1B3/PP1N2PP/R4RK1 w - - 1 16",
+            "4k2r/1pb2ppp/1p2p3/1R1p4/3P4/2r1PN2/P4PPP/1R4K1 b - - 3 22",
+            "6k1/6p1/P6p/r1N5/5p2/7P/1b3PP1/4R1K1 w - - 0 1",
+            "2K5/p7/7P/5pR1/8/5k2/r7/8 w - - 0 1",
+        ];
+        for fen in fens {
+            let board = Board::from_fen(fen).unwrap();
+            let mirrored = Board::from_fen(&rotated_color_swapped_fen(&board)).unwrap();
+            assert_eq!(evaluate(&board), evaluate(&mirrored), "asymmetric eval for {fen}");
+        }
+    }
 }
