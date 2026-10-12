@@ -1,6 +1,6 @@
 use crate::board::Board;
 use crate::magics;
-use crate::types::{Move, Piece, PieceKind};
+use crate::types::{Bitboard, Color, Move, Piece, PieceKind};
 
 const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000]; // P, N, B, R, Q, K
 
@@ -152,4 +152,156 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     }
 
     gain[0]
+}
+
+fn kind_value(kind: PieceKind) -> i32 {
+    PIECE_VALUES[kind as usize]
+}
+
+fn pieces_of(b: &Board, kind: PieceKind) -> Bitboard {
+    b.piece_bb[Piece::from_kind(kind, Color::White).index()]
+        | b.piece_bb[Piece::from_kind(kind, Color::Black).index()]
+}
+
+fn color_pieces(b: &Board, color: Color) -> Bitboard {
+    match color {
+        Color::White => b.w_pieces,
+        Color::Black => b.b_pieces,
+    }
+}
+
+/// All pieces of both colors attacking `sq` given the occupancy `occupied`.
+fn attackers_to(b: &Board, sq: usize, occupied: Bitboard) -> Bitboard {
+    let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
+    let bishops_queens = pieces_of(b, PieceKind::Bishop) | pieces_of(b, PieceKind::Queen);
+    (magics::BLACK_PAWN_ATTACKS[sq] & b.piece_bb[Piece::WP.index()])
+        | (magics::WHITE_PAWN_ATTACKS[sq] & b.piece_bb[Piece::BP.index()])
+        | (magics::knight_attacks_from(sq) & pieces_of(b, PieceKind::Knight))
+        | (magics::king_attacks_from(sq) & pieces_of(b, PieceKind::King))
+        | (magics::get_rook_attacks(sq, occupied) & rooks_queens)
+        | (magics::get_bishop_attacks(sq, occupied) & bishops_queens)
+}
+
+const SEE_ORDER: [PieceKind; 6] = [
+    PieceKind::Pawn,
+    PieceKind::Knight,
+    PieceKind::Bishop,
+    PieceKind::Rook,
+    PieceKind::Queen,
+    PieceKind::King,
+];
+
+/// Whether the static exchange on the move's target square gains at least `threshold`
+/// for the side to move. Handles quiet moves and x-ray attackers; castling and
+/// promotions are treated as an exchange worth zero.
+pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
+    if m.castle || m.promotion.is_some() {
+        return 0 >= threshold;
+    }
+    let from = m.from as usize;
+    let to = m.to as usize;
+    let Some(mover_kind) = b.piece_on[from].kind() else {
+        return 0 >= threshold;
+    };
+
+    let captured_value = if m.en_passant {
+        kind_value(PieceKind::Pawn)
+    } else {
+        b.piece_on[to].kind().map_or(0, kind_value)
+    };
+    let mut swap = captured_value - threshold;
+    if swap < 0 {
+        return false;
+    }
+    swap = kind_value(mover_kind) - swap;
+    if swap <= 0 {
+        return true;
+    }
+
+    let mut occupied = b.all_pieces ^ (1u64 << from) ^ (1u64 << to);
+    if m.en_passant {
+        let captured_sq = if b.turn == Color::White { to - 8 } else { to + 8 };
+        occupied ^= 1u64 << captured_sq;
+    }
+    let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
+    let bishops_queens = pieces_of(b, PieceKind::Bishop) | pieces_of(b, PieceKind::Queen);
+
+    let mut side = b.turn;
+    let mut attackers = attackers_to(b, to, occupied);
+    let mut result = true;
+
+    loop {
+        side = side.other();
+        attackers &= occupied;
+        let side_attackers = attackers & color_pieces(b, side);
+        if side_attackers == 0 {
+            break;
+        }
+        result = !result;
+
+        let Some((kind, attacker_bb)) = SEE_ORDER
+            .iter()
+            .map(|&kind| (kind, side_attackers & pieces_of(b, kind)))
+            .find(|&(_, bb)| bb != 0)
+        else {
+            break;
+        };
+
+        if kind == PieceKind::King {
+            let opponent_still_attacks = attackers & color_pieces(b, side.other()) != 0;
+            return if opponent_still_attacks { !result } else { result };
+        }
+
+        swap = kind_value(kind) - swap;
+        if swap < i32::from(result) {
+            break;
+        }
+        occupied ^= attacker_bb & attacker_bb.wrapping_neg();
+
+        if matches!(kind, PieceKind::Pawn | PieceKind::Bishop | PieceKind::Queen) {
+            attackers |= magics::get_bishop_attacks(to, occupied) & bishops_queens;
+        }
+        if matches!(kind, PieceKind::Rook | PieceKind::Queen) {
+            attackers |= magics::get_rook_attacks(to, occupied) & rooks_queens;
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn see_value_bracket(fen: &str, uci: &str, expected: i32) {
+        let mut board = Board::from_fen(fen).unwrap();
+        let m = crate::uci_io::parse_uci_move(&mut board, uci).unwrap();
+        assert!(see_ge(&board, m, expected), "{uci} should gain at least {expected}");
+        assert!(!see_ge(&board, m, expected + 1), "{uci} should gain less than {}", expected + 1);
+    }
+
+    #[test]
+    fn undefended_pawn_capture_wins_a_pawn() {
+        see_value_bracket("1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", "e1e5", 100);
+    }
+
+    #[test]
+    fn queen_takes_defended_pawn_loses_queen_for_pawn() {
+        see_value_bracket("4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1", "d1d5", -800);
+    }
+
+    #[test]
+    fn quiet_move_onto_attacked_square_loses_the_piece() {
+        see_value_bracket("4k3/8/8/3p4/8/8/8/4RK2 w - - 0 1", "e1e4", -500);
+    }
+
+    #[test]
+    fn xray_rook_behind_recaptures() {
+        see_value_bracket("4k3/3r4/8/3p4/8/8/3R4/3RK3 w - - 0 1", "d2d5", 100);
+    }
+
+    #[test]
+    fn quiet_move_to_safe_square_is_even() {
+        see_value_bracket("4k3/8/8/8/8/8/8/R3K3 w - - 0 1", "a1a5", 0);
+    }
 }
