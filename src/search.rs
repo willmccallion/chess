@@ -31,7 +31,13 @@ const FUTILITY_PER_DEPTH: i32 = 100;
 const SEE_QUIET_MARGIN: i32 = -50;
 const SEE_CAPTURE_MARGIN: i32 = -90;
 const DELTA_MARGIN: i32 = 200;
-const ASPIRATION_WINDOW: i32 = 20;
+const ASPIRATION_DELTA: i32 = 25;
+const ASPIRATION_MIN_DEPTH: usize = 4;
+const SINGULAR_MIN_DEPTH: i32 = 8;
+const SINGULAR_TT_DEPTH_MARGIN: i32 = 3;
+const SINGULAR_BETA_PER_DEPTH: i32 = 2;
+const DOUBLE_EXTENSION_MARGIN: i32 = 20;
+const MAX_DOUBLE_EXTENSIONS: u8 = 6;
 
 const MAX_TRIED_MOVES: usize = 64;
 
@@ -266,6 +272,10 @@ struct StackEntry {
     current_move: Option<Move>,
     /// Piece that made `current_move`.
     moved_piece: Piece,
+    /// Move skipped by a singular-extension verification search at this ply.
+    excluded_move: Option<Move>,
+    /// Double extensions applied on the path to this ply's children.
+    double_extensions: u8,
 }
 
 impl Default for StackEntry {
@@ -274,6 +284,8 @@ impl Default for StackEntry {
             static_eval: None,
             current_move: None,
             moved_piece: Piece::Empty,
+            excluded_move: None,
+            double_extensions: 0,
         }
     }
 }
@@ -641,6 +653,59 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     best_score
 }
 
+enum Singularity {
+    /// Search the move this many plies deeper (negative: shallower).
+    Extend(i32),
+    /// Even without the TT move the node fails high; return this score.
+    MultiCut(i32),
+    Aborted,
+}
+
+/// Verifies whether the TT move is singular by searching the node without it.
+fn singular_extension(
+    s: &mut Search,
+    tt_move: Move,
+    tt_entry: Option<crate::tt::TTEntry>,
+    depth: i32,
+    beta: i32,
+    is_pv: bool,
+    cut_node: bool,
+) -> Singularity {
+    let Some(entry) = tt_entry else {
+        return Singularity::Extend(0);
+    };
+    let tt_score = score_from_tt(entry.score(), s.ply);
+    let reliable = depth >= SINGULAR_MIN_DEPTH
+        && i32::from(entry.depth()) >= depth - SINGULAR_TT_DEPTH_MARGIN
+        && entry.bound() != Bound::Upper
+        && tt_score.abs() < MATE_THRESHOLD;
+    if !reliable {
+        return Singularity::Extend(0);
+    }
+
+    let singular_beta = tt_score - SINGULAR_BETA_PER_DEPTH * depth;
+    let singular_depth = (depth - 1) / 2;
+    s.stack[s.ply].excluded_move = Some(tt_move);
+    let singular_score = negamax(s, singular_beta - 1, singular_beta, singular_depth, cut_node);
+    s.stack[s.ply].excluded_move = None;
+    if s.tm.check_hard_limit() {
+        return Singularity::Aborted;
+    }
+
+    if singular_score < singular_beta {
+        let double = !is_pv
+            && singular_score < singular_beta - DOUBLE_EXTENSION_MARGIN
+            && s.stack[s.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
+        Singularity::Extend(if double { 2 } else { 1 })
+    } else if singular_beta >= beta {
+        Singularity::MultiCut(singular_beta)
+    } else if tt_score >= beta {
+        Singularity::Extend(-1)
+    } else {
+        Singularity::Extend(0)
+    }
+}
+
 /// `cut_node`: a non-PV node expected to fail high.
 fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_node: bool) -> i32 {
     s.seldepth = s.seldepth.max(s.ply);
@@ -666,12 +731,21 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     let is_pv = beta - alpha > 1;
     let alpha_orig = alpha;
     let key = s.board.zobrist;
+    let excluded_move = s.stack[s.ply].excluded_move;
+    if excluded_move.is_none() {
+        s.stack[s.ply].double_extensions = if is_root {
+            0
+        } else {
+            s.stack[s.ply - 1].double_extensions
+        };
+    }
 
     let tt_entry = s.tt.probe(key);
     let tt_move = tt_entry.and_then(|e| e.best_move());
     if let Some(entry) = tt_entry {
         let tt_score = score_from_tt(entry.score(), s.ply);
         if !is_pv
+            && excluded_move.is_none()
             && i32::from(entry.depth()) >= depth
             && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta)
         {
@@ -721,6 +795,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
         let previous_was_null = !is_root && s.stack[s.ply - 1].current_move.is_none();
         if depth >= NMP_MIN_DEPTH
+            && excluded_move.is_none()
             && eval >= beta
             && !previous_was_null
             && has_non_pawn_material(&s.board)
@@ -738,7 +813,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
     }
 
-    if depth >= IIR_MIN_DEPTH && tt_move.is_none() {
+    if depth >= IIR_MIN_DEPTH && tt_move.is_none() && excluded_move.is_none() {
         depth -= 1;
     }
 
@@ -769,6 +844,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         let Some(m) = picker.next(&s.board, &ordering) else {
             break;
         };
+        if Some(m) == excluded_move {
+            continue;
+        }
         let is_quiet = !m.capture && m.promotion.is_none();
         if is_quiet {
             quiets_seen += 1;
@@ -812,11 +890,25 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         };
         let is_killer_or_counter =
             Some(m) == killer1 || Some(m) == killer2 || Some(m) == counter_move;
+
+        let extension = if Some(m) == tt_move && !is_root && excluded_move.is_none() {
+            match singular_extension(s, m, tt_entry, depth, beta, is_pv, cut_node) {
+                Singularity::Extend(plies) => plies,
+                Singularity::MultiCut(score) => return score,
+                Singularity::Aborted => return 0,
+            }
+        } else {
+            0
+        };
+        let node_ply = s.ply;
         let Some(undo) = s.make_move(m) else {
             continue;
         };
         moves_searched += 1;
-        let new_depth = depth - 1;
+        let new_depth = depth - 1 + extension;
+        if extension >= 2 {
+            s.stack[node_ply].double_extensions += 1;
+        }
 
         let score = if moves_searched == 1 {
             -negamax(s, -beta, -alpha, new_depth, !is_pv && !cut_node)
@@ -830,7 +922,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 r -= i32::from(is_killer_or_counter);
                 r -= i32::from(gives_check);
                 r -= quiet_history / LMR_HISTORY_DIVISOR;
-                r.clamp(0, new_depth - 1)
+                r.clamp(0, (new_depth - 1).max(0))
             } else {
                 0
             };
@@ -852,6 +944,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         };
 
         s.unmake_move(m, undo);
+        if extension >= 2 {
+            s.stack[node_ply].double_extensions -= 1;
+        }
 
         if s.tm.check_hard_limit() {
             return 0;
@@ -881,11 +976,16 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     }
 
     if moves_searched == 0 {
-        return if in_check {
+        return if excluded_move.is_some() {
+            alpha
+        } else if in_check {
             -MATE_SCORE + s.ply as i32
         } else {
             DRAW_SCORE
         };
+    }
+    if excluded_move.is_some() {
+        return best_score;
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
@@ -986,27 +1086,34 @@ fn iterative_deepening(
     let mut score = 0;
     for depth in 1..=max_depth {
         search.seldepth = 0;
-        let (mut alpha, mut beta) = if depth > 3 {
-            (score - ASPIRATION_WINDOW, score + ASPIRATION_WINDOW)
+        let mut delta = ASPIRATION_DELTA;
+        let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
+            ((score - delta).max(-INFINITY), (score + delta).min(INFINITY))
         } else {
             (-INFINITY, INFINITY)
         };
 
         let mut aborted = false;
+        let mut fail_highs = 0;
         loop {
-            let iteration_score = negamax(&mut search, alpha, beta, depth as i32, false);
+            let search_depth = (depth as i32 - fail_highs).max(1);
+            let iteration_score = negamax(&mut search, alpha, beta, search_depth, false);
             if search.tm.check_hard_limit() {
                 aborted = true;
                 break;
             }
             score = iteration_score;
             if score <= alpha {
-                alpha = -INFINITY;
+                beta = (alpha + beta) / 2;
+                alpha = (score - delta).max(-INFINITY);
+                fail_highs = 0;
             } else if score >= beta {
-                beta = INFINITY;
+                beta = (score + delta).min(INFINITY);
+                fail_highs += 1;
             } else {
                 break;
             }
+            delta += delta / 2;
         }
 
         if aborted {
