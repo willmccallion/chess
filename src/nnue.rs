@@ -11,7 +11,6 @@ use std::io::{BufReader, Cursor, Read, Seek};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-
 const SQUARE_NB: usize = 64;
 const FT_INPUT_DIM: usize = 41024;
 const HL1_INPUT_DIM: usize = 512;
@@ -140,60 +139,63 @@ fn perspective_half(acc: &mut Accumulator, perspective: Color) -> &mut [i16; NNU
 
 const MAX_REFRESH_FEATURES: usize = 32;
 const MAX_UPDATE_FEATURES: usize = 4;
+/// A move changes at most five piece-square entries (castling with a capture is impossible).
+pub const MAX_MOVE_UPDATES: usize = 5;
+
+/// The board state a from-scratch refresh needs.
+pub struct RefreshContext<'a> {
+    pub piece_on: &'a [Piece; 64],
+    pub non_king_pieces: Bitboard,
+    pub king_squares: [usize; 2],
+}
 
 /// Computes the accumulator from scratch for both perspectives.
 pub fn refresh_accumulator(board: &Board) -> Accumulator {
+    let ctx = board.refresh_context();
     let mut acc = Accumulator::default();
-    let non_king_pieces =
-        board.all_pieces & !board.piece_bb[Piece::WK.index()] & !board.piece_bb[Piece::BK.index()];
     for perspective in [Color::White, Color::Black] {
-        let king_sq = board.king_square(perspective) as usize;
-        refresh_perspective(&mut acc, perspective, king_sq, &board.piece_on, non_king_pieces);
+        refresh_perspective(perspective_half(&mut acc, perspective), perspective, &ctx);
     }
     acc
 }
 
-/// Recomputes one perspective from scratch; needed when that side's king moves.
-pub fn refresh_perspective(
-    acc: &mut Accumulator,
+fn refresh_perspective(
+    half: &mut [i16; NNUE_FEATURE_SIZE],
     perspective: Color,
-    king_sq: usize,
-    piece_on: &[Piece; 64],
-    non_king_pieces: Bitboard,
+    ctx: &RefreshContext,
 ) {
     let Some(model) = MODEL.get() else {
         return;
     };
     let is_white_pov = perspective == Color::White;
+    let king_sq = ctx.king_squares[perspective as usize];
     let mut features: StackVec<usize, MAX_REFRESH_FEATURES> = StackVec::default();
-    let mut pieces = non_king_pieces;
+    let mut pieces = ctx.non_king_pieces;
     while pieces != 0 {
         let sq = pieces.trailing_zeros() as usize;
         pieces &= pieces - 1;
-        let piece = piece_on[sq];
+        let piece = ctx.piece_on[sq];
         if let Some(color) = piece.color() {
             features.push(make_halfkp_index(is_white_pov, king_sq, sq, piece, color));
         }
     }
-
-    let half = perspective_half(acc, perspective);
     half.copy_from_slice(&model.ft_biases);
-    apply_features(half, &model.ft_weights, features.as_slice(), &[]);
+    let source = *half;
+    apply_features(&source, half, &model.ft_weights, features.as_slice(), &[]);
 }
 
-/// Applies piece additions/removals to one perspective. Kings are not HalfKP features.
-pub fn update_perspective(
-    acc: &mut Accumulator,
+/// HalfKP feature indices added and removed by a move, from one perspective.
+fn changed_features(
     perspective: Color,
     king_sq: usize,
     updates: &[UpdateBody],
+) -> (
+    StackVec<usize, MAX_UPDATE_FEATURES>,
+    StackVec<usize, MAX_UPDATE_FEATURES>,
 ) {
-    let Some(model) = MODEL.get() else {
-        return;
-    };
     let is_white_pov = perspective == Color::White;
-    let mut added: StackVec<usize, MAX_UPDATE_FEATURES> = StackVec::default();
-    let mut removed: StackVec<usize, MAX_UPDATE_FEATURES> = StackVec::default();
+    let mut added = StackVec::default();
+    let mut removed = StackVec::default();
     for u in updates {
         if u.piece.kind() == Some(PieceKind::King) {
             continue;
@@ -208,18 +210,14 @@ pub fn update_perspective(
             removed.push(idx);
         }
     }
-    apply_features(
-        perspective_half(acc, perspective),
-        &model.ft_weights,
-        added.as_slice(),
-        removed.as_slice(),
-    );
+    (added, removed)
 }
 
-/// Adds and subtracts feature-transformer rows in a single pass over the accumulator.
+/// Writes `source` plus the added rows minus the removed rows into `target` in one pass.
 #[inline(always)]
 fn apply_features(
-    half: &mut [i16; NNUE_FEATURE_SIZE],
+    source: &[i16; NNUE_FEATURE_SIZE],
+    target: &mut [i16; NNUE_FEATURE_SIZE],
     weights: &[i16],
     added: &[usize],
     removed: &[usize],
@@ -230,10 +228,10 @@ fn apply_features(
         const LANES: usize = 16;
         for chunk in 0..NNUE_FEATURE_SIZE / LANES {
             let offset = chunk * LANES;
-            // SAFETY: AVX2 is enabled at compile time; every access reads or writes LANES
-            // i16 values at `offset`, inside the 256-lane accumulator and each 256-lane row.
+            // SAFETY: AVX2 is enabled at compile time; every access touches LANES i16
+            // values at `offset`, inside the 256-lane accumulators and each 256-lane row.
             unsafe {
-                let mut v = _mm256_loadu_si256(half.as_ptr().add(offset).cast());
+                let mut v = _mm256_loadu_si256(source.as_ptr().add(offset).cast());
                 for &idx in added {
                     let w = _mm256_loadu_si256(row(idx).as_ptr().add(offset).cast());
                     v = _mm256_add_epi16(v, w);
@@ -242,34 +240,137 @@ fn apply_features(
                     let w = _mm256_loadu_si256(row(idx).as_ptr().add(offset).cast());
                     v = _mm256_sub_epi16(v, w);
                 }
-                _mm256_storeu_si256(half.as_mut_ptr().add(offset).cast(), v);
+                _mm256_storeu_si256(target.as_mut_ptr().add(offset).cast(), v);
             }
         }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
+        target.copy_from_slice(source);
         for &idx in added {
-            for (a, &w) in half.iter_mut().zip(row(idx)) {
+            for (a, &w) in target.iter_mut().zip(row(idx)) {
                 *a = a.wrapping_add(w);
             }
         }
         for &idx in removed {
-            for (a, &w) in half.iter_mut().zip(row(idx)) {
+            for (a, &w) in target.iter_mut().zip(row(idx)) {
                 *a = a.wrapping_sub(w);
             }
         }
     }
 }
 
-pub fn evaluate(board: &Board) -> i32 {
+#[derive(Clone)]
+struct AccumulatorEntry {
+    accumulator: Accumulator,
+    computed: [bool; 2],
+    updates: StackVec<UpdateBody, MAX_MOVE_UPDATES>,
+    /// Side whose king moved into this position; its perspective must be refreshed.
+    king_mover: Option<Color>,
+}
+
+impl AccumulatorEntry {
+    fn computed_root(accumulator: Accumulator) -> Self {
+        Self {
+            accumulator,
+            computed: [true; 2],
+            updates: StackVec::default(),
+            king_mover: None,
+        }
+    }
+}
+
+/// One accumulator per position along the current line, computed lazily when evaluated.
+#[derive(Clone)]
+pub struct AccumulatorStack {
+    entries: Vec<AccumulatorEntry>,
+    top: usize,
+}
+
+impl AccumulatorStack {
+    pub fn new(root: Accumulator) -> Self {
+        let mut entries = Vec::with_capacity(256);
+        entries.push(AccumulatorEntry::computed_root(root));
+        Self { entries, top: 0 }
+    }
+
+    /// Records the piece changes of a move; nothing is computed until evaluation.
+    pub fn push(&mut self, updates: &[UpdateBody], king_mover: Option<Color>) {
+        self.top += 1;
+        if self.entries.len() == self.top {
+            self.entries
+                .push(AccumulatorEntry::computed_root(Accumulator::default()));
+        }
+        let entry = &mut self.entries[self.top];
+        entry.computed = [false; 2];
+        entry.king_mover = king_mover;
+        entry.updates.clear();
+        for &update in updates {
+            entry.updates.push(update);
+        }
+    }
+
+    pub fn pop(&mut self) {
+        self.top = self.top.saturating_sub(1);
+    }
+
+    /// The accumulator of the current position, bringing both perspectives up to date.
+    pub fn current(&mut self, ctx: &RefreshContext) -> &Accumulator {
+        for perspective in [Color::White, Color::Black] {
+            self.ensure_computed(perspective, ctx);
+        }
+        &self.entries[self.top].accumulator
+    }
+
+    fn ensure_computed(&mut self, perspective: Color, ctx: &RefreshContext) {
+        let p = perspective as usize;
+        let mut base = self.top;
+        while !self.entries[base].computed[p] {
+            if self.entries[base].king_mover == Some(perspective) || base == 0 {
+                let entry = &mut self.entries[self.top];
+                refresh_perspective(
+                    perspective_half(&mut entry.accumulator, perspective),
+                    perspective,
+                    ctx,
+                );
+                entry.computed[p] = true;
+                return;
+            }
+            base -= 1;
+        }
+
+        let Some(model) = MODEL.get() else {
+            return;
+        };
+        let king_sq = ctx.king_squares[p];
+        for index in base + 1..=self.top {
+            let (before, from_index) = self.entries.split_at_mut(index);
+            let previous = &mut before[index - 1].accumulator;
+            let entry = &mut from_index[0];
+            let (added, removed) = changed_features(perspective, king_sq, entry.updates.as_slice());
+            apply_features(
+                perspective_half(previous, perspective),
+                perspective_half(&mut entry.accumulator, perspective),
+                &model.ft_weights,
+                added.as_slice(),
+                removed.as_slice(),
+            );
+            entry.computed[p] = true;
+        }
+    }
+}
+
+pub fn evaluate(board: &mut Board) -> i32 {
     let Some(model) = MODEL.get() else {
         return 0;
     };
 
-    let (acc_us, acc_them) = if board.turn == Color::White {
-        (&board.accumulator.white, &board.accumulator.black)
+    let turn = board.turn;
+    let accumulator = board.accumulator();
+    let (acc_us, acc_them) = if turn == Color::White {
+        (&accumulator.white, &accumulator.black)
     } else {
-        (&board.accumulator.black, &board.accumulator.white)
+        (&accumulator.black, &accumulator.white)
     };
 
     let mut transformed = AlignedBytes::<HL1_INPUT_DIM>::default();
@@ -487,16 +588,11 @@ pub(crate) mod tests {
         format!("{} {side} - - 0 1", rows.join("/"))
     }
 
-    fn assert_accumulator_matches_refresh(board: &Board, context: &str) {
+    fn assert_accumulator_matches_refresh(board: &mut Board, context: &str) {
         let fresh = refresh_accumulator(board);
-        assert_eq!(
-            board.accumulator.white, fresh.white,
-            "white half: {context}"
-        );
-        assert_eq!(
-            board.accumulator.black, fresh.black,
-            "black half: {context}"
-        );
+        let current = *board.accumulator();
+        assert_eq!(current.white, fresh.white, "white half: {context}");
+        assert_eq!(current.black, fresh.black, "black half: {context}");
     }
 
     /// Walks every legal move to `depth`, checking the accumulator before and after each.
@@ -527,6 +623,35 @@ pub(crate) mod tests {
         for fen in fens {
             let mut board = Board::from_fen(fen).unwrap();
             walk_and_check(&mut board, 2);
+        }
+    }
+
+    /// Makes moves to `depth` without evaluating in between, checking only the leaves,
+    /// so each check computes a chain of `depth` pending updates at once.
+    fn walk_and_check_leaves(board: &mut Board, depth: usize) {
+        if depth == 0 {
+            assert_accumulator_matches_refresh(board, &board.to_fen());
+            return;
+        }
+        let mut moves = crate::types::MoveList::new();
+        board.generate_legal_moves(&mut moves);
+        for &m in moves.as_slice() {
+            let undo = board.make_move(m);
+            walk_and_check_leaves(board, depth - 1);
+            board.unmake_move(m, undo);
+        }
+    }
+
+    #[test]
+    fn lazily_computed_accumulator_chains_match_refresh() {
+        ensure_model_loaded();
+        let fens = [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        ];
+        for fen in fens {
+            let mut board = Board::from_fen(fen).unwrap();
+            walk_and_check_leaves(&mut board, 3);
         }
     }
 
@@ -562,11 +687,11 @@ pub(crate) mod tests {
             "2K5/p7/7P/5pR1/8/5k2/r7/8 w - - 0 1",
         ];
         for fen in fens {
-            let board = Board::from_fen(fen).unwrap();
-            let mirrored = Board::from_fen(&rotated_color_swapped_fen(&board)).unwrap();
+            let mut board = Board::from_fen(fen).unwrap();
+            let mut mirrored = Board::from_fen(&rotated_color_swapped_fen(&board)).unwrap();
             assert_eq!(
-                evaluate(&board),
-                evaluate(&mirrored),
+                evaluate(&mut board),
+                evaluate(&mut mirrored),
                 "asymmetric eval for {fen}"
             );
         }

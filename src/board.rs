@@ -20,9 +20,24 @@ pub struct Board {
     pub plies_from_null: u32,
     pub history: Vec<ZKey>,
     pub zobrist: ZKey,
-    pub accumulator: Accumulator,
-    /// Accumulators of the positions before each move, restored on unmake.
-    accumulator_history: Vec<Accumulator>,
+    accumulators: nnue::AccumulatorStack,
+}
+
+fn refresh_context_from<'a>(
+    piece_on: &'a [Piece; 64],
+    piece_bb: &[Bitboard; 13],
+    all_pieces: Bitboard,
+) -> nnue::RefreshContext<'a> {
+    let white_king = piece_bb[Piece::WK.index()];
+    let black_king = piece_bb[Piece::BK.index()];
+    nnue::RefreshContext {
+        piece_on,
+        non_king_pieces: all_pieces & !white_king & !black_king,
+        king_squares: [
+            white_king.trailing_zeros() as usize,
+            black_king.trailing_zeros() as usize,
+        ],
+    }
 }
 
 impl Board {
@@ -41,8 +56,7 @@ impl Board {
             plies_from_null: 0,
             history: Vec::with_capacity(128),
             zobrist: 0,
-            accumulator: Accumulator::default(),
-            accumulator_history: Vec::with_capacity(128),
+            accumulators: nnue::AccumulatorStack::new(Accumulator::default()),
         }
     }
 
@@ -55,7 +69,7 @@ impl Board {
     #[inline]
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
         let mut b = fen::parse_fen(fen_str)?;
-        b.accumulator = nnue::refresh_accumulator(&b);
+        b.accumulators = nnue::AccumulatorStack::new(nnue::refresh_accumulator(&b));
         Ok(b)
     }
 
@@ -1364,33 +1378,21 @@ impl Board {
         self.turn = self.turn.other();
         self.history.push(self.zobrist);
 
-        self.accumulator_history.push(self.accumulator);
         let king_mover = moving.color().filter(|_| is_king_move);
-        self.update_accumulator(king_mover, &updates[..update_count]);
+        self.accumulators.push(&updates[..update_count], king_mover);
 
         undo
     }
 
-    /// Brings the accumulator up to date after a move. The moving side's perspective
-    /// is rebuilt when its king moved; HalfKP features are relative to that king.
-    fn update_accumulator(&mut self, king_mover: Option<Color>, updates: &[UpdateBody]) {
-        let non_king_pieces = self.all_pieces
-            & !self.piece_bb[Piece::WK.index()]
-            & !self.piece_bb[Piece::BK.index()];
-        for perspective in [Color::White, Color::Black] {
-            let king_sq = self.king_square(perspective) as usize;
-            if king_mover == Some(perspective) {
-                nnue::refresh_perspective(
-                    &mut self.accumulator,
-                    perspective,
-                    king_sq,
-                    &self.piece_on,
-                    non_king_pieces,
-                );
-            } else {
-                nnue::update_perspective(&mut self.accumulator, perspective, king_sq, updates);
-            }
-        }
+    /// What a from-scratch NNUE refresh of this position needs.
+    pub fn refresh_context(&self) -> nnue::RefreshContext<'_> {
+        refresh_context_from(&self.piece_on, &self.piece_bb, self.all_pieces)
+    }
+
+    /// The NNUE accumulator of this position, computed on demand.
+    pub fn accumulator(&mut self) -> &Accumulator {
+        let ctx = refresh_context_from(&self.piece_on, &self.piece_bb, self.all_pieces);
+        self.accumulators.current(&ctx)
     }
 
     #[inline]
@@ -1405,9 +1407,7 @@ impl Board {
             piece_on_to
         };
 
-        if let Some(previous) = self.accumulator_history.pop() {
-            self.accumulator = previous;
-        }
+        self.accumulators.pop();
 
         self.history.pop();
         self.zobrist = *self.history.last().unwrap_or(&0);

@@ -423,8 +423,8 @@ impl Search<'_> {
     }
 
     /// Static eval for the current node, reusing the TT's copy when it has one.
-    fn static_eval(&self, tt_eval: Option<i32>) -> i32 {
-        tt_eval.unwrap_or_else(|| evaluate(&self.board))
+    fn static_eval(&mut self, tt_eval: Option<i32>) -> i32 {
+        tt_eval.unwrap_or_else(|| evaluate(&mut self.board))
     }
 
     fn make_move(&mut self, m: Move) -> Option<Undo> {
@@ -529,7 +529,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         return 0;
     }
     if s.ply >= MAX_PLY - 1 {
-        return evaluate(&s.board);
+        return evaluate(&mut s.board);
     }
 
     let is_pv = beta - alpha > 1;
@@ -719,7 +719,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             return DRAW_SCORE;
         }
         if s.ply >= MAX_PLY - 1 {
-            return evaluate(&s.board);
+            return evaluate(&mut s.board);
         }
         alpha = alpha.max(-MATE_SCORE + s.ply as i32);
         beta = beta.min(MATE_SCORE - s.ply as i32 - 1);

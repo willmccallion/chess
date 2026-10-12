@@ -216,7 +216,7 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
     }
 }
 
-fn print_eval(board: &Board) {
+fn print_eval(board: &mut Board) {
     let score = nnue::evaluate(board);
     let side = if board.turn == crate::types::Color::White {
         "white"
@@ -299,7 +299,7 @@ pub fn run_uci() {
                 }
             }
             "stop" => stop_search(&mut active, &mut threads, options.threads),
-            "eval" => print_eval(&board),
+            "eval" => print_eval(&mut board),
             "quit" => break,
             _ => {}
         }

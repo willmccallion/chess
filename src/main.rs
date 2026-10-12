@@ -197,11 +197,11 @@ fn main() {
             self_play(&fen_str, rounds, time, depth, threads_count);
         }
         Cmd::Eval { fen } => {
-            let b = Board::from_fen(&fen).unwrap_or_else(|e| {
+            let mut b = Board::from_fen(&fen).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
                 std::process::exit(1);
             });
-            let score = nnue::evaluate(&b);
+            let score = nnue::evaluate(&mut b);
             let side = if b.turn == Color::White { "white" } else { "black" };
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
