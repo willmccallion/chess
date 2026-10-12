@@ -5,7 +5,6 @@
 //! the position. Each step reports the threats of and against the piece, plus the slider
 //! rays it opens (removal) or closes (placement).
 
-use crate::board::Board;
 use crate::magics;
 use crate::types::{Bitboard, Color, Move, Piece, PieceKind, StackVec};
 
@@ -45,9 +44,19 @@ impl ThreatDeltas {
 
 const MAX_OVERLAY: usize = 4;
 
+/// The parts of a position the replay reads; borrowed field by field so `Board::make_move`
+/// can fill its own accumulator stack.
+#[derive(Copy, Clone)]
+pub struct PositionView<'b> {
+    pub piece_on: &'b [Piece; 64],
+    pub piece_bb: &'b [Bitboard; 13],
+    pub occupied: Bitboard,
+    pub turn: Color,
+}
+
 /// The position part-way through a move: piece bitboards plus the squares changed so far.
 struct Replay<'b> {
-    board: &'b Board,
+    position: PositionView<'b>,
     piece_bb: [Bitboard; 13],
     occupied: Bitboard,
     overlay: [(u8, Piece); MAX_OVERLAY],
@@ -77,11 +86,11 @@ fn attacks_of(piece: Piece, sq: usize, occupied: Bitboard) -> Bitboard {
 }
 
 impl<'b> Replay<'b> {
-    fn new(board: &'b Board) -> Self {
+    fn new(position: PositionView<'b>) -> Self {
         Self {
-            board,
-            piece_bb: board.piece_bb,
-            occupied: board.all_pieces,
+            position,
+            piece_bb: *position.piece_bb,
+            occupied: position.occupied,
             overlay: [(0, Piece::Empty); MAX_OVERLAY],
             overlay_len: 0,
         }
@@ -92,7 +101,7 @@ impl<'b> Replay<'b> {
             .iter()
             .rev()
             .find(|&&(s, _)| usize::from(s) == sq)
-            .map_or(self.board.piece_on[sq], |&(_, piece)| piece)
+            .map_or(self.position.piece_on[sq], |&(_, piece)| piece)
     }
 
     fn set(&mut self, sq: usize, piece: Piece) {
@@ -190,17 +199,18 @@ fn delta(attacker: Piece, from: usize, attacked: Piece, to: usize, add: bool) ->
     }
 }
 
-/// Fills `out` with the threat changes `m` makes; `board` is the position before `m`.
-pub fn record_move(board: &Board, m: Move, out: &mut ThreatDeltas) {
+/// Fills `out` with the threat changes `m` makes; `position` is the position before `m`.
+pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
     out.clear();
     let from = m.from as usize;
     let to = m.to as usize;
-    let moving = board.piece_on[from];
-    let mut replay = Replay::new(board);
+    let moving = position.piece_on[from];
+    let turn = position.turn;
+    let mut replay = Replay::new(position);
 
     replay.remove(from, out);
     if m.capture {
-        let captured_sq = match (m.en_passant, board.turn) {
+        let captured_sq = match (m.en_passant, turn) {
             (true, Color::White) => to - 8,
             (true, Color::Black) => to + 8,
             (false, _) => to,
@@ -209,7 +219,7 @@ pub fn record_move(board: &Board, m: Move, out: &mut ThreatDeltas) {
             replay.remove(captured_sq, out);
         }
     }
-    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, board.turn));
+    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, turn));
     replay.put(to, placed, out);
 
     if m.castle {
@@ -223,6 +233,7 @@ pub fn record_move(board: &Board, m: Move, out: &mut ThreatDeltas) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Board;
     use crate::types::MoveList;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
@@ -293,7 +304,7 @@ mod tests {
                     promotions += usize::from(m.promotion.is_some());
                     let before = relations(&board);
                     let mut deltas = ThreatDeltas::default();
-                    record_move(&board, m, &mut deltas);
+                    record_move(board.position_view(), m, &mut deltas);
                     board.make_move(m);
 
                     assert!(!deltas.overflowed);

@@ -1,3 +1,4 @@
+use crate::eval::threat_delta::PositionView;
 use crate::fen;
 use crate::magics;
 use crate::nnue;
@@ -1386,6 +1387,15 @@ impl Board {
         self.accumulators.push(&updates[..update_count], king_mover);
 
         undo
+    }
+
+    pub fn position_view(&self) -> PositionView<'_> {
+        PositionView {
+            piece_on: &self.piece_on,
+            piece_bb: &self.piece_bb,
+            occupied: self.all_pieces,
+            turn: self.turn,
+        }
     }
 
     /// What a from-scratch NNUE refresh of this position needs.
