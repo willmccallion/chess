@@ -1,5 +1,7 @@
 use crate::board::Board;
-use crate::types::{Accumulator, Color, NNUE_FEATURE_SIZE, Piece, PieceKind, UpdateBody};
+use crate::types::{
+    Accumulator, Bitboard, Color, NNUE_FEATURE_SIZE, Piece, PieceKind, StackVec, UpdateBody,
+};
 use byteorder::{LittleEndian, ReadBytesExt};
 use once_cell::sync::OnceCell;
 use std::error::Error;
@@ -9,8 +11,6 @@ use std::io::{BufReader, Cursor, Read, Seek};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-#[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
 
 const SQUARE_NB: usize = 64;
 const FT_INPUT_DIM: usize = 41024;
@@ -138,37 +138,47 @@ fn perspective_half(acc: &mut Accumulator, perspective: Color) -> &mut [i16; NNU
     }
 }
 
+const MAX_REFRESH_FEATURES: usize = 32;
+const MAX_UPDATE_FEATURES: usize = 4;
+
 /// Computes the accumulator from scratch for both perspectives.
 pub fn refresh_accumulator(board: &Board) -> Accumulator {
     let mut acc = Accumulator::default();
-    refresh_perspective(board, Color::White, &mut acc);
-    refresh_perspective(board, Color::Black, &mut acc);
+    let non_king_pieces =
+        board.all_pieces & !board.piece_bb[Piece::WK.index()] & !board.piece_bb[Piece::BK.index()];
+    for perspective in [Color::White, Color::Black] {
+        let king_sq = board.king_square(perspective) as usize;
+        refresh_perspective(&mut acc, perspective, king_sq, &board.piece_on, non_king_pieces);
+    }
     acc
 }
 
 /// Recomputes one perspective from scratch; needed when that side's king moves.
-pub fn refresh_perspective(board: &Board, perspective: Color, acc: &mut Accumulator) {
+pub fn refresh_perspective(
+    acc: &mut Accumulator,
+    perspective: Color,
+    king_sq: usize,
+    piece_on: &[Piece; 64],
+    non_king_pieces: Bitboard,
+) {
     let Some(model) = MODEL.get() else {
         return;
     };
-    let half = perspective_half(acc, perspective);
-    half.copy_from_slice(&model.ft_biases);
-
     let is_white_pov = perspective == Color::White;
-    let king_sq = board.king_square(perspective) as usize;
-    let mut pieces =
-        board.all_pieces & !board.piece_bb[Piece::WK.index()] & !board.piece_bb[Piece::BK.index()];
-
+    let mut features: StackVec<usize, MAX_REFRESH_FEATURES> = StackVec::default();
+    let mut pieces = non_king_pieces;
     while pieces != 0 {
         let sq = pieces.trailing_zeros() as usize;
         pieces &= pieces - 1;
-        let piece = board.piece_on[sq];
-        let Some(color) = piece.color() else {
-            continue;
-        };
-        let idx = make_halfkp_index(is_white_pov, king_sq, sq, piece, color);
-        add_weight(half, &model.ft_weights, idx);
+        let piece = piece_on[sq];
+        if let Some(color) = piece.color() {
+            features.push(make_halfkp_index(is_white_pov, king_sq, sq, piece, color));
+        }
     }
+
+    let half = perspective_half(acc, perspective);
+    half.copy_from_slice(&model.ft_biases);
+    apply_features(half, &model.ft_weights, features.as_slice(), &[]);
 }
 
 /// Applies piece additions/removals to one perspective. Kings are not HalfKP features.
@@ -181,9 +191,9 @@ pub fn update_perspective(
     let Some(model) = MODEL.get() else {
         return;
     };
-    let half = perspective_half(acc, perspective);
     let is_white_pov = perspective == Color::White;
-
+    let mut added: StackVec<usize, MAX_UPDATE_FEATURES> = StackVec::default();
+    let mut removed: StackVec<usize, MAX_UPDATE_FEATURES> = StackVec::default();
     for u in updates {
         if u.piece.kind() == Some(PieceKind::King) {
             continue;
@@ -193,9 +203,60 @@ pub fn update_perspective(
         };
         let idx = make_halfkp_index(is_white_pov, king_sq, u.sq, u.piece, color);
         if u.add {
-            add_weight(half, &model.ft_weights, idx);
+            added.push(idx);
         } else {
-            sub_weight(half, &model.ft_weights, idx);
+            removed.push(idx);
+        }
+    }
+    apply_features(
+        perspective_half(acc, perspective),
+        &model.ft_weights,
+        added.as_slice(),
+        removed.as_slice(),
+    );
+}
+
+/// Adds and subtracts feature-transformer rows in a single pass over the accumulator.
+#[inline(always)]
+fn apply_features(
+    half: &mut [i16; NNUE_FEATURE_SIZE],
+    weights: &[i16],
+    added: &[usize],
+    removed: &[usize],
+) {
+    let row = |idx: usize| &weights[idx * NNUE_FEATURE_SIZE..(idx + 1) * NNUE_FEATURE_SIZE];
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    {
+        const LANES: usize = 16;
+        for chunk in 0..NNUE_FEATURE_SIZE / LANES {
+            let offset = chunk * LANES;
+            // SAFETY: AVX2 is enabled at compile time; every access reads or writes LANES
+            // i16 values at `offset`, inside the 256-lane accumulator and each 256-lane row.
+            unsafe {
+                let mut v = _mm256_loadu_si256(half.as_ptr().add(offset).cast());
+                for &idx in added {
+                    let w = _mm256_loadu_si256(row(idx).as_ptr().add(offset).cast());
+                    v = _mm256_add_epi16(v, w);
+                }
+                for &idx in removed {
+                    let w = _mm256_loadu_si256(row(idx).as_ptr().add(offset).cast());
+                    v = _mm256_sub_epi16(v, w);
+                }
+                _mm256_storeu_si256(half.as_mut_ptr().add(offset).cast(), v);
+            }
+        }
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+    {
+        for &idx in added {
+            for (a, &w) in half.iter_mut().zip(row(idx)) {
+                *a = a.wrapping_add(w);
+            }
+        }
+        for &idx in removed {
+            for (a, &w) in half.iter_mut().zip(row(idx)) {
+                *a = a.wrapping_sub(w);
+            }
         }
     }
 }
@@ -299,44 +360,6 @@ fn make_halfkp_index(
     oriented_sq + piece_idx + 641 * king_oriented
 }
 
-#[inline(always)]
-fn add_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        add_weight_avx2(acc, weights, idx)
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        add_weight_neon(acc, weights, idx)
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        let offset = idx * NNUE_FEATURE_SIZE;
-        for i in 0..NNUE_FEATURE_SIZE {
-            acc[i] = acc[i].wrapping_add(weights[offset + i]);
-        }
-    }
-}
-
-#[inline(always)]
-fn sub_weight(acc: &mut [i16], weights: &[i16], idx: usize) {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        sub_weight_avx2(acc, weights, idx)
-    }
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        sub_weight_neon(acc, weights, idx)
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        let offset = idx * NNUE_FEATURE_SIZE;
-        for i in 0..NNUE_FEATURE_SIZE {
-            acc[i] = acc[i].wrapping_sub(weights[offset + i]);
-        }
-    }
-}
-
 /// Dot product of activations (0..=127) and weights; exact for any length.
 #[inline(always)]
 fn dot_u8_i8(input: &[u8], weights: &[i8]) -> i32 {
@@ -359,8 +382,28 @@ fn dot_u8_i8_scalar(input: &[u8], weights: &[i8]) -> i32 {
         .sum()
 }
 
-/// `maddubs` sums adjacent u8*i8 pairs into i16; with inputs <= 127 the pair sum
-/// lies within ±32_512, so it never saturates and the result is exact.
+/// Multiplies 32 u8 activations by 32 i8 weights and adds groups of four to `acc`.
+///
+/// With AVX-VNNI this is one exact `dpbusd`. Otherwise `maddubs` sums adjacent pairs into
+/// i16; with activations <= 127 a pair lies within ±32_512, so it never saturates.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline(always)]
+fn dpbusd(acc: __m256i, x: __m256i, w: __m256i) -> __m256i {
+    #[cfg(target_feature = "avxvnni")]
+    {
+        // SAFETY: AVX-VNNI is enabled at compile time.
+        unsafe { _mm256_dpbusd_avx_epi32(acc, x, w) }
+    }
+    #[cfg(not(target_feature = "avxvnni"))]
+    {
+        // SAFETY: AVX2 is enabled at compile time.
+        unsafe {
+            let pairs = _mm256_maddubs_epi16(x, w);
+            _mm256_add_epi32(acc, _mm256_madd_epi16(pairs, _mm256_set1_epi16(1)))
+        }
+    }
+}
+
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn dot_u8_i8_avx2(input: &[u8], weights: &[i8]) -> i32 {
@@ -368,16 +411,14 @@ fn dot_u8_i8_avx2(input: &[u8], weights: &[i8]) -> i32 {
     let len = input.len().min(weights.len());
     let chunks = len / LANES;
     // SAFETY: AVX2 is enabled at compile time; every load reads LANES bytes inside
-    // both slices because i < chunks * LANES <= len.
+    // both slices because offset + LANES <= chunks * LANES <= len.
     let mut sum = unsafe {
-        let ones = _mm256_set1_epi16(1);
         let mut acc = _mm256_setzero_si256();
         for chunk in 0..chunks {
             let offset = chunk * LANES;
             let x = _mm256_loadu_si256(input.as_ptr().add(offset).cast());
             let w = _mm256_loadu_si256(weights.as_ptr().add(offset).cast());
-            let pairs = _mm256_maddubs_epi16(x, w);
-            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(pairs, ones));
+            acc = dpbusd(acc, x, w);
         }
         let lo = _mm256_castsi256_si128(acc);
         let hi = _mm256_extracti128_si256(acc, 1);
@@ -390,82 +431,6 @@ fn dot_u8_i8_avx2(input: &[u8], weights: &[i8]) -> i32 {
         sum += i32::from(input[i]) * i32::from(weights[i]);
     }
     sum
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn add_weight_avx2(acc: &mut [i16], weights: &[i16], idx: usize) {
-    let offset = idx * NNUE_FEATURE_SIZE;
-    let mut i = 0;
-    while i < NNUE_FEATURE_SIZE {
-        unsafe {
-            let acc_ptr = acc.as_mut_ptr().add(i);
-            let wt_ptr = weights.as_ptr().add(offset + i);
-            let acc_vec = _mm256_load_si256(acc_ptr as *const __m256i);
-            let wt_vec = _mm256_loadu_si256(wt_ptr as *const __m256i);
-            let res = _mm256_add_epi16(acc_vec, wt_vec);
-            _mm256_store_si256(acc_ptr as *mut __m256i, res);
-        }
-        i += 16;
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-unsafe fn sub_weight_avx2(acc: &mut [i16], weights: &[i16], idx: usize) {
-    let offset = idx * NNUE_FEATURE_SIZE;
-    let mut i = 0;
-    while i < NNUE_FEATURE_SIZE {
-        unsafe {
-            let acc_ptr = acc.as_mut_ptr().add(i);
-            let wt_ptr = weights.as_ptr().add(offset + i);
-            let acc_vec = _mm256_load_si256(acc_ptr as *const __m256i);
-            let wt_vec = _mm256_loadu_si256(wt_ptr as *const __m256i);
-            let res = _mm256_sub_epi16(acc_vec, wt_vec);
-            _mm256_store_si256(acc_ptr as *mut __m256i, res);
-        }
-        i += 16;
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn add_weight_neon(acc: &mut [i16], weights: &[i16], idx: usize) {
-    let offset = idx * NNUE_FEATURE_SIZE;
-    let mut i = 0;
-    while i < NNUE_FEATURE_SIZE {
-        let acc_ptr = acc.as_mut_ptr().add(i);
-        let wt_ptr = weights.as_ptr().add(offset + i);
-
-        let a0 = vld1q_s16(acc_ptr);
-        let a1 = vld1q_s16(acc_ptr.add(8));
-        let w0 = vld1q_s16(wt_ptr);
-        let w1 = vld1q_s16(wt_ptr.add(8));
-
-        vst1q_s16(acc_ptr, vaddq_s16(a0, w0));
-        vst1q_s16(acc_ptr.add(8), vaddq_s16(a1, w1));
-
-        i += 16;
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn sub_weight_neon(acc: &mut [i16], weights: &[i16], idx: usize) {
-    let offset = idx * NNUE_FEATURE_SIZE;
-    let mut i = 0;
-    while i < NNUE_FEATURE_SIZE {
-        let acc_ptr = acc.as_mut_ptr().add(i);
-        let wt_ptr = weights.as_ptr().add(offset + i);
-
-        let a0 = vld1q_s16(acc_ptr);
-        let a1 = vld1q_s16(acc_ptr.add(8));
-        let w0 = vld1q_s16(wt_ptr);
-        let w1 = vld1q_s16(wt_ptr.add(8));
-
-        vst1q_s16(acc_ptr, vsubq_s16(a0, w0));
-        vst1q_s16(acc_ptr.add(8), vsubq_s16(a1, w1));
-
-        i += 16;
-    }
 }
 
 #[inline]

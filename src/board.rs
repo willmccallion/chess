@@ -1374,16 +1374,23 @@ impl Board {
     /// Brings the accumulator up to date after a move. The moving side's perspective
     /// is rebuilt when its king moved; HalfKP features are relative to that king.
     fn update_accumulator(&mut self, king_mover: Option<Color>, updates: &[UpdateBody]) {
-        let mut acc = self.accumulator;
+        let non_king_pieces = self.all_pieces
+            & !self.piece_bb[Piece::WK.index()]
+            & !self.piece_bb[Piece::BK.index()];
         for perspective in [Color::White, Color::Black] {
+            let king_sq = self.king_square(perspective) as usize;
             if king_mover == Some(perspective) {
-                nnue::refresh_perspective(self, perspective, &mut acc);
+                nnue::refresh_perspective(
+                    &mut self.accumulator,
+                    perspective,
+                    king_sq,
+                    &self.piece_on,
+                    non_king_pieces,
+                );
             } else {
-                let king_sq = self.king_square(perspective) as usize;
-                nnue::update_perspective(&mut acc, perspective, king_sq, updates);
+                nnue::update_perspective(&mut self.accumulator, perspective, king_sq, updates);
             }
         }
-        self.accumulator = acc;
     }
 
     #[inline]
