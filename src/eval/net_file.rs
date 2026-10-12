@@ -4,6 +4,7 @@ use super::arch::{
     FC0_OUTPUTS, FC1_INPUTS_PADDED, FC1_OUTPUTS, LAYER_STACKS, PSQ_DIMENSIONS, PSQT_BUCKETS,
     THREAT_DIMENSIONS,
 };
+use super::simd::scramble_for_sparse;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::fmt;
 use std::fs::File;
@@ -45,6 +46,7 @@ fn format_error(msg: impl Into<String>) -> NetLoadError {
     NetLoadError::Format(msg.into())
 }
 
+
 /// Weights of the threat half of the big net's feature transformer.
 pub struct ThreatWeights {
     /// `[feature][neuron]`
@@ -65,8 +67,8 @@ pub struct FeatureTransformer {
 /// One of the eight output networks, selected by piece count.
 pub struct LayerStack {
     pub fc0_biases: [i32; FC0_OUTPUTS],
-    /// `[output][input]`, `half_dims` inputs per output.
-    pub fc0_weights: Vec<i8>,
+    /// First-layer weights in the layout `simd::sparse_affine_16` reads.
+    pub fc0_sparse: Vec<i8>,
     pub fc1_biases: [i32; FC1_OUTPUTS],
     /// `[output][input]`, padded input width.
     pub fc1_weights: [i8; FC1_OUTPUTS * FC1_INPUTS_PADDED],
@@ -298,9 +300,10 @@ fn read_layer_stack<R: Read>(reader: &mut R, kind: NetKind) -> Result<LayerStack
     let mut fc2_weights = [0i8; FC1_OUTPUTS];
     reader.read_i8_into(&mut fc2_weights)?;
 
+    let fc0_sparse = scramble_for_sparse(&fc0_weights, half_dims, FC0_OUTPUTS);
     Ok(LayerStack {
         fc0_biases,
-        fc0_weights,
+        fc0_sparse,
         fc1_biases,
         fc1_weights,
         fc2_bias,

@@ -8,7 +8,7 @@ use super::arch::{
 };
 use super::features::{active_psq_features, active_threat_features};
 use super::net_file::{FeatureTransformer, LayerStack, Network, ThreatWeights};
-use super::simd::dot_u8_i8;
+use super::simd::{dot_u8_i8, pairwise_clipped_product, sparse_affine_16};
 use super::threat_delta::PositionView;
 use crate::board::Board;
 use crate::types::Color;
@@ -122,16 +122,13 @@ pub fn transform(sums: &PerspectiveSums, side_to_move: Color, bucket: usize, out
         let psq = sums.psq[perspective as usize].values;
         let threat = sums.threats.as_ref().map(|t| t[perspective as usize].values);
         let clip = if threat.is_some() { BIG_NET_CLIP } else { SMALL_NET_CLIP };
-        for j in 0..pair {
-            let (mut first, mut second) = (psq[j], psq[j + pair]);
-            if let Some(threat) = threat {
-                first = first.wrapping_add(threat[j]);
-                second = second.wrapping_add(threat[j + pair]);
-            }
-            let first = i32::from(first.clamp(0, clip));
-            let second = i32::from(second.clamp(0, clip));
-            output[p * pair + j] = ((first * second) / 512) as u8;
-        }
+        pairwise_clipped_product(
+            &psq[..pair],
+            &psq[pair..half],
+            threat.map(|t| (&t[..pair], &t[pair..half])),
+            clip,
+            &mut output[p * pair..(p + 1) * pair],
+        );
     }
     psqt
 }
@@ -147,14 +144,7 @@ fn squared_clipped_relu(value: i32) -> u8 {
 impl LayerStack {
     /// Positional term (before output scaling) from the transformed features.
     pub fn propagate(&self, input: &[u8]) -> i32 {
-        let width = input.len();
-        let mut fc0 = [0i32; FC0_OUTPUTS];
-        for (out, (bias, row)) in fc0
-            .iter_mut()
-            .zip(self.fc0_biases.iter().zip(self.fc0_weights.chunks_exact(width)))
-        {
-            *out = bias + dot_u8_i8(input, row);
-        }
+        let fc0 = sparse_affine_16(input, &self.fc0_sparse, &self.fc0_biases);
 
         let mut hidden = [0u8; FC1_INPUTS_PADDED];
         for i in 0..FC0_HIDDEN {

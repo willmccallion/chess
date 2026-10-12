@@ -5,12 +5,15 @@ use super::arch::PSQT_BUCKETS;
 use super::features::{SfPiece, active_threat_features, king_square, psq_index, threat_index};
 use super::net_file::{FeatureTransformer, ThreatWeights};
 use super::network::{PerspectiveSums, SumsView};
-use super::threat_delta::{PositionView, ThreatDeltas};
+use super::simd::{update_rows, update_rows_from};
+use super::threat_delta::{MAX_THREAT_DELTAS, PositionView, ThreatDeltas};
 use crate::types::{Bitboard, Color, Piece, StackVec, UpdateBody};
 
 pub const BIG_HALF: usize = 1024;
 pub const SMALL_HALF: usize = 128;
 pub const MAX_PSQ_UPDATES: usize = 5;
+/// Pieces that can differ between a cached king-square entry and the board.
+const MAX_REFRESH_CHANGES: usize = 64;
 
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
@@ -37,47 +40,59 @@ impl<const N: usize> Accumulator<N> {
         self.psqt = [0; PSQT_BUCKETS];
     }
 
-    fn add_psq(&mut self, ft: &FeatureTransformer, feature: usize) {
-        let row = &ft.weights[feature * N..(feature + 1) * N];
-        for (value, &w) in self.values.iter_mut().zip(row) {
-            *value = value.wrapping_add(w);
-        }
-        let psqt = &ft.psqt[feature * PSQT_BUCKETS..(feature + 1) * PSQT_BUCKETS];
-        for (sum, &w) in self.psqt.iter_mut().zip(psqt) {
-            *sum += w;
-        }
+    fn apply_psq(&mut self, ft: &FeatureTransformer, adds: &[usize], subs: &[usize]) {
+        update_rows(&mut self.values, ft.weights.as_slice(), adds, subs);
+        apply_psqt(&mut self.psqt, &ft.psqt, adds, subs);
     }
 
-    fn sub_psq(&mut self, ft: &FeatureTransformer, feature: usize) {
-        let row = &ft.weights[feature * N..(feature + 1) * N];
-        for (value, &w) in self.values.iter_mut().zip(row) {
-            *value = value.wrapping_sub(w);
-        }
-        let psqt = &ft.psqt[feature * PSQT_BUCKETS..(feature + 1) * PSQT_BUCKETS];
-        for (sum, &w) in self.psqt.iter_mut().zip(psqt) {
-            *sum -= w;
-        }
+    fn apply_threats(&mut self, weights: &ThreatWeights, adds: &[usize], subs: &[usize]) {
+        update_rows(&mut self.values, weights.weights.as_slice(), adds, subs);
+        apply_psqt(&mut self.psqt, &weights.psqt, adds, subs);
     }
 
-    fn add_threat(&mut self, weights: &ThreatWeights, feature: usize) {
-        let row = &weights.weights[feature * N..(feature + 1) * N];
-        for (value, &w) in self.values.iter_mut().zip(row) {
-            *value = value.wrapping_add(i16::from(w));
-        }
-        let psqt = &weights.psqt[feature * PSQT_BUCKETS..(feature + 1) * PSQT_BUCKETS];
-        for (sum, &w) in self.psqt.iter_mut().zip(psqt) {
-            *sum += w;
-        }
+    /// `self = parent` plus the given piece-square changes.
+    fn psq_from(&mut self, parent: &Self, ft: &FeatureTransformer, adds: &[usize], subs: &[usize]) {
+        update_rows_from(&parent.values, &mut self.values, ft.weights.as_slice(), adds, subs);
+        self.psqt = parent.psqt;
+        apply_psqt(&mut self.psqt, &ft.psqt, adds, subs);
     }
 
-    fn sub_threat(&mut self, weights: &ThreatWeights, feature: usize) {
-        let row = &weights.weights[feature * N..(feature + 1) * N];
-        for (value, &w) in self.values.iter_mut().zip(row) {
-            *value = value.wrapping_sub(i16::from(w));
+    /// `self = parent` plus the given threat changes.
+    fn threats_from(&mut self, parent: &Self, weights: &ThreatWeights, adds: &[usize], subs: &[usize]) {
+        update_rows_from(&parent.values, &mut self.values, weights.weights.as_slice(), adds, subs);
+        self.psqt = parent.psqt;
+        apply_psqt(&mut self.psqt, &weights.psqt, adds, subs);
+    }
+}
+
+fn apply_psqt(psqt: &mut [i32; PSQT_BUCKETS], weights: &[i32], adds: &[usize], subs: &[usize]) {
+    for (&row, sign) in adds.iter().map(|r| (r, 1)).chain(subs.iter().map(|r| (r, -1))) {
+        if let Some(row) = weights.get(row * PSQT_BUCKETS..(row + 1) * PSQT_BUCKETS) {
+            for (sum, &w) in psqt.iter_mut().zip(row) {
+                *sum += sign * w;
+            }
         }
-        let psqt = &weights.psqt[feature * PSQT_BUCKETS..(feature + 1) * PSQT_BUCKETS];
-        for (sum, &w) in self.psqt.iter_mut().zip(psqt) {
-            *sum -= w;
+    }
+}
+
+/// Feature indices to add and remove in one accumulator update.
+#[derive(Default)]
+struct FeatureChanges<const N: usize> {
+    adds: StackVec<usize, N>,
+    subs: StackVec<usize, N>,
+}
+
+impl<const N: usize> FeatureChanges<N> {
+    fn clear(&mut self) {
+        self.adds.clear();
+        self.subs.clear();
+    }
+
+    fn push(&mut self, feature: usize, add: bool) {
+        if add {
+            self.adds.push(feature);
+        } else {
+            self.subs.push(feature);
         }
     }
 }
@@ -116,24 +131,21 @@ impl<const N: usize> RefreshCache<N> {
             entry.pieces = [0; 13];
             entry.valid = true;
         }
+        let mut changes = FeatureChanges::<MAX_REFRESH_CHANGES>::default();
         for (index, (&current, cached)) in position.piece_bb.iter().zip(entry.pieces.iter_mut()).enumerate() {
             let Some(piece) = PIECES_BY_INDEX[index].and_then(SfPiece::new) else {
                 continue;
             };
-            let mut added = current & !*cached;
-            while added != 0 {
-                let sq = added.trailing_zeros() as usize;
-                added &= added - 1;
-                entry.acc.add_psq(ft, psq_index(perspective, sq, piece, king_sq));
-            }
-            let mut removed = *cached & !current;
-            while removed != 0 {
-                let sq = removed.trailing_zeros() as usize;
-                removed &= removed - 1;
-                entry.acc.sub_psq(ft, psq_index(perspective, sq, piece, king_sq));
+            for (mut squares, add) in [(current & !*cached, true), (*cached & !current, false)] {
+                while squares != 0 {
+                    let sq = squares.trailing_zeros() as usize;
+                    squares &= squares - 1;
+                    changes.push(psq_index(perspective, sq, piece, king_sq), add);
+                }
             }
             *cached = current;
         }
+        entry.acc.apply_psq(ft, changes.adds.as_slice(), changes.subs.as_slice());
         *target = entry.acc;
     }
 }
@@ -158,9 +170,7 @@ fn refresh_threats<const N: usize>(weights: &ThreatWeights, position: PositionVi
     let mut features = Vec::with_capacity(128);
     active_threat_features(position, perspective, &mut features);
     *target = Accumulator::ZERO;
-    for feature in features {
-        target.add_threat(weights, feature);
-    }
+    target.apply_threats(weights, &features, &[]);
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -355,17 +365,18 @@ impl AccumulatorStack {
             return;
         };
         let king_sq = king_square(position, perspective);
+        let mut changes = FeatureChanges::default();
         for index in base + 1..=self.top {
             let (before, after) = self.plies.split_at_mut(index);
             let (previous, ply) = (&before[index - 1], &mut after[0]);
             match net {
                 PsqNet::Small => {
-                    ply.small_psq[p] = previous.small_psq[p];
-                    apply_psq(&mut ply.small_psq[p], ft, &ply.psq_updates, perspective, king_sq);
+                    psq_changes(&ply.psq_updates, perspective, king_sq, &mut changes);
+                    ply.small_psq[p].psq_from(&previous.small_psq[p], ft, changes.adds.as_slice(), changes.subs.as_slice());
                 }
                 PsqNet::Big => {
-                    ply.big_psq[p] = previous.big_psq[p];
-                    apply_psq(&mut ply.big_psq[p], ft, &ply.psq_updates, perspective, king_sq);
+                    psq_changes(&ply.psq_updates, perspective, king_sq, &mut changes);
+                    ply.big_psq[p].psq_from(&previous.big_psq[p], ft, changes.adds.as_slice(), changes.subs.as_slice());
                 }
             }
             ply.computed[part as usize][p] = true;
@@ -382,61 +393,46 @@ impl AccumulatorStack {
             return;
         };
         let king_sq = king_square(position, perspective);
+        let mut changes = FeatureChanges::default();
         for index in base + 1..=self.top {
             let (before, after) = self.plies.split_at_mut(index);
             let (previous, ply) = (&before[index - 1], &mut after[0]);
-            ply.big_threats[p] = previous.big_threats[p];
-            apply_threats(&mut ply.big_threats[p], weights, &ply.threats, perspective, king_sq);
+            threat_changes(&ply.threats, perspective, king_sq, &mut changes);
+            ply.big_threats[p].threats_from(&previous.big_threats[p], weights, changes.adds.as_slice(), changes.subs.as_slice());
             ply.computed[part][p] = true;
         }
     }
 }
 
-fn apply_psq<const N: usize>(
-    acc: &mut Accumulator<N>,
-    ft: &FeatureTransformer,
+fn psq_changes(
     updates: &StackVec<UpdateBody, MAX_PSQ_UPDATES>,
     perspective: Color,
     king_sq: usize,
+    changes: &mut FeatureChanges<MAX_PSQ_UPDATES>,
 ) {
+    changes.clear();
     for update in updates.as_slice() {
-        let Some(piece) = SfPiece::new(update.piece) else {
-            continue;
-        };
-        let feature = psq_index(perspective, update.sq, piece, king_sq);
-        if update.add {
-            acc.add_psq(ft, feature);
-        } else {
-            acc.sub_psq(ft, feature);
+        if let Some(piece) = SfPiece::new(update.piece) {
+            changes.push(psq_index(perspective, update.sq, piece, king_sq), update.add);
         }
     }
 }
 
-fn apply_threats<const N: usize>(
-    acc: &mut Accumulator<N>,
-    weights: &ThreatWeights,
+fn threat_changes(
     deltas: &ThreatDeltas,
     perspective: Color,
     king_sq: usize,
+    changes: &mut FeatureChanges<MAX_THREAT_DELTAS>,
 ) {
+    changes.clear();
     for delta in deltas.list.as_slice() {
         let (Some(attacker), Some(attacked)) = (SfPiece::new(delta.attacker), SfPiece::new(delta.attacked)) else {
             continue;
         };
-        let Some(feature) = threat_index(
-            perspective,
-            attacker,
-            usize::from(delta.from),
-            usize::from(delta.to),
-            attacked,
-            king_sq,
-        ) else {
-            continue;
-        };
-        if delta.add {
-            acc.add_threat(weights, feature);
-        } else {
-            acc.sub_threat(weights, feature);
+        let from = usize::from(delta.from);
+        let to = usize::from(delta.to);
+        if let Some(feature) = threat_index(perspective, attacker, from, to, attacked, king_sq) {
+            changes.push(feature, delta.add);
         }
     }
 }
