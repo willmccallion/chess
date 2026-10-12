@@ -546,6 +546,18 @@ impl Search<'_> {
         self.continuation_keys_at(self.ply)
     }
 
+    /// Credits a quiet TT move whose stored score still fails high.
+    fn reward_tt_cutoff_move(&mut self, m: Move, depth: i32) {
+        if m.capture || m.promotion.is_some() || !self.board.is_pseudo_legal(m) {
+            return;
+        }
+        let piece = self.board.piece_on[m.from as usize];
+        let continuations = self.continuation_keys();
+        self.td
+            .histories
+            .update_quiet(self.board.turn, m, piece, &continuations, stat_bonus(depth));
+    }
+
     /// The opponent's last move refuted everything here, so it was a good quiet move.
     fn reward_prior_quiet_move(&mut self, depth: i32) {
         let Some(parent_ply) = self.ply.checked_sub(1) else {
@@ -911,6 +923,11 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             && i32::from(entry.depth()) >= depth
             && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta)
         {
+            if tt_score >= beta
+                && let Some(m) = tt_move
+            {
+                s.reward_tt_cutoff_move(m, depth);
+            }
             return tt_score;
         }
     }
