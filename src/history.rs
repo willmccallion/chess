@@ -99,9 +99,66 @@ impl Histories {
     }
 }
 
+const CORRECTION_ENTRIES: usize = 16_384;
+const CORRECTION_GRAIN: i32 = 256;
+const CORRECTION_WEIGHT_SCALE: i32 = 256;
+const CORRECTION_MAX_WEIGHT: i32 = 16;
+const CORRECTION_LIMIT_CP: i32 = 128;
+
+/// Learned static-eval error per pawn structure, in 1/256 centipawn units.
+pub struct CorrectionHistory {
+    entries: Vec<[i32; CORRECTION_ENTRIES]>,
+}
+
+impl CorrectionHistory {
+    pub fn new() -> Self {
+        Self {
+            entries: vec![[0; CORRECTION_ENTRIES]; 2],
+        }
+    }
+
+    fn slot(pawn_key: u64) -> usize {
+        (pawn_key as usize) % CORRECTION_ENTRIES
+    }
+
+    /// Centipawns to add to the static eval of a position with this pawn structure.
+    pub fn correction(&self, color: Color, pawn_key: u64) -> i32 {
+        self.entries[color as usize][Self::slot(pawn_key)] / CORRECTION_GRAIN
+    }
+
+    /// Moves the stored correction toward `error` (search score minus corrected eval),
+    /// trusting deeper searches more.
+    pub fn update(&mut self, color: Color, pawn_key: u64, error: i32, depth: i32) {
+        let weight = (depth + 1).min(CORRECTION_MAX_WEIGHT);
+        let limit = CORRECTION_LIMIT_CP * CORRECTION_GRAIN;
+        let entry = &mut self.entries[color as usize][Self::slot(pawn_key)];
+        let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
+        let blended = (*entry * (CORRECTION_WEIGHT_SCALE - weight) + target * weight)
+            / CORRECTION_WEIGHT_SCALE;
+        *entry = blended.clamp(-limit, limit);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn correction_moves_toward_observed_error_and_stays_bounded() {
+        let mut correction = CorrectionHistory::new();
+        for _ in 0..200 {
+            correction.update(Color::White, 99, 80, 10);
+        }
+        let learned = correction.correction(Color::White, 99);
+        assert!((70..=80).contains(&learned), "{learned}");
+        assert_eq!(correction.correction(Color::Black, 99), 0);
+
+        for _ in 0..200 {
+            correction.update(Color::White, 99, 10_000, 20);
+        }
+        let saturated = correction.correction(Color::White, 99);
+        assert!((CORRECTION_LIMIT_CP - 2..=CORRECTION_LIMIT_CP).contains(&saturated), "{saturated}");
+    }
 
     #[test]
     fn gravity_keeps_entries_within_bounds() {

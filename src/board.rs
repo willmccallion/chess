@@ -60,6 +60,15 @@ impl Board {
         }
     }
 
+    /// Hash of the pawn structure (both colors).
+    #[inline(always)]
+    pub fn pawn_key(&self) -> u64 {
+        let white = self.piece_bb[Piece::WP.index()].wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let black = self.piece_bb[Piece::BP.index()].wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        let mixed = (white ^ black.rotate_left(31)) ^ ((white ^ black) >> 29);
+        mixed.wrapping_mul(0x1656_67B1_9E37_79F9)
+    }
+
     #[inline(always)]
     pub fn king_square(&self, c: Color) -> u32 {
         let king_piece = Piece::from_kind(PieceKind::King, c);

@@ -1,7 +1,7 @@
 use crate::board::Board;
 use crate::nnue::evaluate;
 use crate::legality::LegalityInfo;
-use crate::history::{ContinuationKey, Histories, captured_kind, stat_bonus};
+use crate::history::{ContinuationKey, CorrectionHistory, Histories, captured_kind, stat_bonus};
 use crate::movepicker::{MovePicker, OrderingContext};
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
@@ -132,6 +132,7 @@ pub struct SearchResult {
 /// Move-ordering statistics one search thread keeps between `go` commands.
 pub struct ThreadData {
     histories: Histories,
+    correction: CorrectionHistory,
     counter_moves: [[[Option<Move>; 64]; 13]; 2],
 }
 
@@ -139,6 +140,7 @@ impl ThreadData {
     fn new() -> Box<Self> {
         Box::new(Self {
             histories: Histories::new(),
+            correction: CorrectionHistory::new(),
             counter_moves: [[[None; 64]; 13]; 2],
         })
     }
@@ -368,6 +370,17 @@ fn tt_score_refines_eval(bound: Bound, tt_score: i32, eval: i32) -> bool {
     }
 }
 
+/// Whether a search result says something about the eval's error: a fail-high above
+/// the eval, a fail-low below it, or an exact score.
+#[inline(always)]
+fn search_disagrees_with_eval(bound: Bound, best_score: i32, static_eval: i32) -> bool {
+    match bound {
+        Bound::Exact => true,
+        Bound::Lower => best_score > static_eval,
+        Bound::Upper => best_score < static_eval,
+    }
+}
+
 #[inline(always)]
 fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
     if best_score <= alpha_orig {
@@ -424,6 +437,15 @@ impl Search<'_> {
     /// Static eval for the current node, reusing the TT's copy when it has one.
     fn static_eval(&mut self, tt_eval: Option<i32>) -> i32 {
         tt_eval.unwrap_or_else(|| evaluate(&mut self.board))
+    }
+
+    /// Static eval adjusted by what searches have learned about this pawn structure.
+    fn corrected_eval(&self, raw_eval: i32) -> i32 {
+        let correction = self
+            .td
+            .correction
+            .correction(self.board.turn, self.board.pawn_key());
+        (raw_eval + correction).clamp(-MATE_THRESHOLD + 1, MATE_THRESHOLD - 1)
     }
 
     /// Makes `m` (pseudo-legal in the current position) unless it leaves the king in check.
@@ -551,13 +573,18 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     }
 
     let raw_eval = s.static_eval(tt_entry.and_then(|e| e.eval()));
+    let corrected_eval = s.corrected_eval(raw_eval);
     let stand_pat = match tt_entry {
         Some(entry)
-            if tt_score_refines_eval(entry.bound(), score_from_tt(entry.score(), s.ply), raw_eval) =>
+            if tt_score_refines_eval(
+                entry.bound(),
+                score_from_tt(entry.score(), s.ply),
+                corrected_eval,
+            ) =>
         {
             score_from_tt(entry.score(), s.ply)
         }
-        _ => raw_eval,
+        _ => corrected_eval,
     };
     if stand_pat >= beta {
         if tt_entry.is_none() {
@@ -775,17 +802,18 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     } else {
         Some(s.static_eval(tt_entry.and_then(|e| e.eval())))
     };
-    s.stack[s.ply].static_eval = raw_eval;
-    let eval = match (raw_eval, tt_entry) {
+    let corrected_eval = raw_eval.map(|raw| s.corrected_eval(raw));
+    s.stack[s.ply].static_eval = corrected_eval;
+    let eval = match (corrected_eval, tt_entry) {
         (Some(raw), Some(entry))
             if tt_score_refines_eval(entry.bound(), score_from_tt(entry.score(), s.ply), raw) =>
         {
             Some(score_from_tt(entry.score(), s.ply))
         }
-        _ => raw_eval,
+        _ => corrected_eval,
     };
 
-    let improving = s.is_improving(raw_eval);
+    let improving = s.is_improving(corrected_eval);
 
     if !is_pv && let Some(eval) = eval {
         if eval < alpha - RAZORING_MARGIN - RAZORING_DEPTH_SQ_MARGIN * depth * depth {
@@ -995,6 +1023,15 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
+    if let Some(static_eval) = corrected_eval
+        && best_move.is_none_or(|m| !m.capture)
+        && best_score.abs() < MATE_THRESHOLD
+        && search_disagrees_with_eval(bound, best_score, static_eval)
+    {
+        let pawn_key = s.board.pawn_key();
+        s.td.correction
+            .update(s.board.turn, pawn_key, best_score - static_eval, depth);
+    }
     s.tt.store(
         key,
         depth as i16,
