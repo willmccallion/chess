@@ -465,6 +465,7 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             s.board.unmake_move(m, undo);
             continue;
         }
+        s.tt.prefetch(s.board.zobrist);
 
         s.ply += 1;
         s.prev_move[s.ply] = Some(m);
@@ -576,7 +577,8 @@ fn negamax(s: &mut Search, mut alpha: i32, beta: i32, mut depth: i32) -> i32 {
             score_to_store -= s.ply as i32;
         }
     }
-    s.tt.store(key, depth as i16, score_to_store, bound, best_move);
+    s.tt
+        .store(key, depth as i16, score_to_store, None, bound, best_move);
     best_score
 }
 
