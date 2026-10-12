@@ -25,13 +25,14 @@ pub struct Board {
 
 fn refresh_context_from<'a>(
     piece_on: &'a [Piece; 64],
-    piece_bb: &[Bitboard; 13],
+    piece_bb: &'a [Bitboard; 13],
     all_pieces: Bitboard,
 ) -> nnue::RefreshContext<'a> {
     let white_king = piece_bb[Piece::WK.index()];
     let black_king = piece_bb[Piece::BK.index()];
     nnue::RefreshContext {
         piece_on,
+        piece_bb,
         non_king_pieces: all_pieces & !white_king & !black_king,
         king_squares: [
             white_king.trailing_zeros() as usize,

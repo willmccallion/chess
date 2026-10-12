@@ -145,6 +145,7 @@ pub const MAX_MOVE_UPDATES: usize = 5;
 /// The board state a from-scratch refresh needs.
 pub struct RefreshContext<'a> {
     pub piece_on: &'a [Piece; 64],
+    pub piece_bb: &'a [Bitboard; 13],
     pub non_king_pieces: Bitboard,
     pub king_squares: [usize; 2],
 }
@@ -260,6 +261,96 @@ fn apply_features(
     }
 }
 
+const NON_KING_PIECES: [Piece; 10] = [
+    Piece::WP,
+    Piece::WN,
+    Piece::WB,
+    Piece::WR,
+    Piece::WQ,
+    Piece::BP,
+    Piece::BN,
+    Piece::BB,
+    Piece::BR,
+    Piece::BQ,
+];
+
+#[derive(Clone)]
+struct RefreshCacheEntry {
+    half: [i16; NNUE_FEATURE_SIZE],
+    pieces: [Bitboard; 13],
+    valid: bool,
+}
+
+/// Last accumulator seen per (perspective, king square); a king-move refresh only
+/// applies the pieces that differ from it ("Finny table").
+#[derive(Clone)]
+struct RefreshCache {
+    entries: Vec<RefreshCacheEntry>,
+}
+
+impl RefreshCache {
+    fn new() -> Self {
+        let empty = RefreshCacheEntry {
+            half: [0; NNUE_FEATURE_SIZE],
+            pieces: [0; 13],
+            valid: false,
+        };
+        Self {
+            entries: vec![empty; 2 * 64],
+        }
+    }
+
+    fn refresh(
+        &mut self,
+        target: &mut [i16; NNUE_FEATURE_SIZE],
+        perspective: Color,
+        ctx: &RefreshContext,
+    ) {
+        let Some(model) = MODEL.get() else {
+            return;
+        };
+        let is_white_pov = perspective == Color::White;
+        let king_sq = ctx.king_squares[perspective as usize];
+        let entry = &mut self.entries[perspective as usize * 64 + king_sq];
+        if !entry.valid {
+            entry.half.copy_from_slice(&model.ft_biases);
+            entry.pieces = [0; 13];
+            entry.valid = true;
+        }
+
+        let mut added: StackVec<usize, MAX_REFRESH_FEATURES> = StackVec::default();
+        let mut removed: StackVec<usize, MAX_REFRESH_FEATURES> = StackVec::default();
+        for piece in NON_KING_PIECES {
+            let Some(color) = piece.color() else {
+                continue;
+            };
+            let current = ctx.piece_bb[piece.index()];
+            let cached = entry.pieces[piece.index()];
+            for (changed, list) in [
+                (current & !cached, &mut added),
+                (cached & !current, &mut removed),
+            ] {
+                let mut squares = changed;
+                while squares != 0 {
+                    let sq = squares.trailing_zeros() as usize;
+                    squares &= squares - 1;
+                    list.push(make_halfkp_index(is_white_pov, king_sq, sq, piece, color));
+                }
+            }
+            entry.pieces[piece.index()] = current;
+        }
+
+        apply_features(
+            &entry.half,
+            target,
+            &model.ft_weights,
+            added.as_slice(),
+            removed.as_slice(),
+        );
+        entry.half.copy_from_slice(target);
+    }
+}
+
 #[derive(Clone)]
 struct AccumulatorEntry {
     accumulator: Accumulator,
@@ -285,13 +376,18 @@ impl AccumulatorEntry {
 pub struct AccumulatorStack {
     entries: Vec<AccumulatorEntry>,
     top: usize,
+    refresh_cache: RefreshCache,
 }
 
 impl AccumulatorStack {
     pub fn new(root: Accumulator) -> Self {
         let mut entries = Vec::with_capacity(256);
         entries.push(AccumulatorEntry::computed_root(root));
-        Self { entries, top: 0 }
+        Self {
+            entries,
+            top: 0,
+            refresh_cache: RefreshCache::new(),
+        }
     }
 
     /// Records the piece changes of a move; nothing is computed until evaluation.
@@ -328,7 +424,7 @@ impl AccumulatorStack {
         while !self.entries[base].computed[p] {
             if self.entries[base].king_mover == Some(perspective) || base == 0 {
                 let entry = &mut self.entries[self.top];
-                refresh_perspective(
+                self.refresh_cache.refresh(
                     perspective_half(&mut entry.accumulator, perspective),
                     perspective,
                     ctx,
