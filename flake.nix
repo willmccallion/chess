@@ -59,11 +59,29 @@
             }
           );
 
+          stockfishNet =
+            name: sha256:
+            pkgs.fetchurl {
+              url = "https://tests.stockfishchess.org/api/nn/${name}";
+              inherit sha256;
+            };
+
+          nets = pkgs.linkFarm "stockfish-18-nets" [
+            {
+              name = "big.nnue";
+              path = stockfishNet "nn-c288c895ea92.nnue" "19z48cxrxrspgvzmkix4lgr007rw5dmz7qwjj3m2ji4jxaawi262";
+            }
+            {
+              name = "small.nnue";
+              path = stockfishNet "nn-37f18f62d772.nnue" "17c9b9ij1jmvbxaycqxbya33q30kij4s7b3a3mz11wvjsxi8zw9p";
+            }
+          ];
+
           rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         in
         {
           packages = {
-            inherit openings baronBook;
+            inherit openings baronBook nets;
           };
 
           devShell = pkgs.mkShell {
@@ -79,6 +97,8 @@
             STOCKFISH = "${pkgs.stockfish}/bin/stockfish";
             CHESS_BOOK_UHO = "${openings}/UHO_Lichess_4852_v1.epd";
             CHESS_BOOK_BALANCED = "${openings}/noob_3moves.epd";
+            CHESS_NNUE_BIG = "${nets}/big.nnue";
+            CHESS_NNUE_SMALL = "${nets}/small.nnue";
 
             shellHook = ''
               mkdir -p moves
