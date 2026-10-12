@@ -296,6 +296,9 @@ struct StackEntry {
     excluded_move: Option<Move>,
     /// Double extensions applied on the path to this ply's children.
     double_extensions: u8,
+    /// Beta cutoffs at this ply since the node two plies up started (counting double
+    /// when there was no TT move).
+    cutoff_count: u8,
 }
 
 impl Default for StackEntry {
@@ -306,6 +309,7 @@ impl Default for StackEntry {
             moved_piece: Piece::Empty,
             excluded_move: None,
             double_extensions: 0,
+            cutoff_count: 0,
         }
     }
 }
@@ -902,6 +906,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
     let tt_entry = s.tt.probe(key);
     let tt_move = tt_entry.and_then(|e| e.best_move());
+    let tt_capture = tt_move.is_some_and(|m| m.capture);
     if let Some(entry) = tt_entry {
         let tt_score = score_from_tt(entry.score(), s.ply);
         if !is_pv
@@ -932,6 +937,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
     s.tm.nodes += 1;
     s.killers[(s.ply + 1).min(MAX_PLY - 1)] = [None; 2];
+    s.stack[(s.ply + 2).min(MAX_PLY)].cutoff_count = 0;
 
     let raw_eval = if in_check {
         None
@@ -1122,6 +1128,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 r_1024 += if improving { 0 } else { p.lmr_not_improving_x1024 };
                 r_1024 -= if is_killer_or_counter { p.lmr_killer_or_counter_x1024 } else { 0 };
                 r_1024 -= if gives_check { p.lmr_gives_check_x1024 } else { 0 };
+                r_1024 += if tt_capture { p.lmr_tt_capture_x1024 } else { 0 };
+                let child_cutoffs = i32::from(s.stack[node_ply + 1].cutoff_count);
+                r_1024 += if child_cutoffs > p.child_cutoff_threshold { p.lmr_child_cutoffs_x1024 } else { 0 };
                 let r = r_1024 / 1024 - quiet_history / p.lmr_history_divisor;
                 r.clamp(0, (new_depth - 1).max(0))
             } else {
@@ -1167,6 +1176,8 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 alpha = score;
                 if alpha >= beta {
                     s.update_cutoff_stats(m, depth, tried_quiets.as_slice(), tried_captures.as_slice());
+                    let entry = &mut s.stack[s.ply];
+                    entry.cutoff_count = entry.cutoff_count.saturating_add(1 + u8::from(tt_move.is_none()));
                     break;
                 }
             }

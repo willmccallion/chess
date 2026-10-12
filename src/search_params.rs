@@ -93,6 +93,9 @@ search_params! {
     history_bonus_constant: "HistoryBonusConstant" = 16, -64..=96, step 6;
     history_bonus_max: "HistoryBonusMax" = 1500, 500..=3000, step 100;
     correction_max_weight: "CorrectionMaxWeight" = 16, 4..=48, step 2;
+    lmr_tt_capture_x1024: "LmrTtCapture" = 1024, 0..=2048, step 64;
+    lmr_child_cutoffs_x1024: "LmrChildCutoffs" = 1024, 0..=2048, step 64;
+    child_cutoff_threshold: "ChildCutoffThreshold" = 3, 1..=8, step 1;
 }
 
 impl ParamSpec {
