@@ -228,6 +228,31 @@ pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
         replay.remove(rook_from, out);
         replay.put(rook_to, rook, out);
     }
+    cancel_opposites(out);
+}
+
+/// Drops relations that the replay both removed and re-added (or the reverse).
+fn cancel_opposites(deltas: &mut ThreatDeltas) {
+    let list = deltas.list.as_mut_slice();
+    let mut len = list.len();
+    let mut i = 0;
+    while i < len {
+        let d = list[i];
+        let opposite = (i + 1..len).find(|&j| {
+            let o = list[j];
+            o.add != d.add && o.from == d.from && o.to == d.to && o.attacker == d.attacker && o.attacked == d.attacked
+        });
+        match opposite {
+            Some(j) => {
+                list[j] = list[len - 1];
+                len -= 1;
+                list[i] = list[len - 1];
+                len -= 1;
+            }
+            None => i += 1,
+        }
+    }
+    deltas.list.truncate(len);
 }
 
 #[cfg(test)]

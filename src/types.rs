@@ -310,6 +310,12 @@ impl<T: Copy, const N: usize> StackVec<T, N> {
         self.len = 0;
     }
 
+    /// Keeps the first `len` items; a larger `len` changes nothing.
+    #[inline(always)]
+    pub fn truncate(&mut self, len: usize) {
+        self.len = self.len.min(len);
+    }
+
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
