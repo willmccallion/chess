@@ -56,6 +56,11 @@ const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
 const NO_DEADLINE: u64 = u64::MAX;
 const TIME_CHECK_INTERVAL: u64 = 2048;
 const NEW_ITERATION_FRACTION: f64 = 0.6;
+const NODE_SHARE_PIVOT: f64 = 1.6;
+const NODE_SHARE_MIN_SCALE: f64 = 0.6;
+const NODE_SHARE_MAX_SCALE: f64 = 1.6;
+const SCORE_DROP_CAP: i32 = 100;
+const SCORE_DROP_DIVISOR: f64 = 200.0;
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// Shared between the UCI loop and all search threads of one `go`.
@@ -241,7 +246,8 @@ impl TimeManager {
     }
 
     /// Decides after a completed iteration whether another one is worth starting.
-    fn should_stop_iterating(&mut self, depth: usize, best_move: Option<Move>) -> bool {
+    fn should_stop_iterating(&mut self, depth: usize, iteration: &IterationSummary) -> bool {
+        let best_move = iteration.best_move;
         if best_move == self.previous_best_move {
             self.best_move_stability += 1;
         } else {
@@ -260,11 +266,33 @@ impl TimeManager {
         } else {
             1.0
         };
-        let target = self.control.soft_deadline_ms() as f64 * stability_scale;
+        let target = self.control.soft_deadline_ms() as f64
+            * stability_scale
+            * node_share_scale(iteration.best_move_node_share)
+            * score_drop_scale(iteration.score_drop);
         let elapsed = self.control.elapsed_ms();
         elapsed as f64 >= target * NEW_ITERATION_FRACTION
             || elapsed >= self.control.hard_deadline_ms()
     }
+}
+
+/// What iterative deepening learned from the iteration that just finished.
+struct IterationSummary {
+    best_move: Option<Move>,
+    /// Fraction of all root nodes so far that went into the best move's subtree.
+    best_move_node_share: f64,
+    /// How far the score fell since the previous iteration (0 if it rose).
+    score_drop: i32,
+}
+
+/// Spend less time when one move absorbs most of the search, more when it is contested.
+fn node_share_scale(best_move_node_share: f64) -> f64 {
+    (NODE_SHARE_PIVOT - best_move_node_share).clamp(NODE_SHARE_MIN_SCALE, NODE_SHARE_MAX_SCALE)
+}
+
+/// Spend more time when the evaluation is falling.
+fn score_drop_scale(score_drop: i32) -> f64 {
+    1.0 + f64::from(score_drop.clamp(0, SCORE_DROP_CAP)) / SCORE_DROP_DIVISOR
 }
 
 /// What the search knows about one ply of the current line.
@@ -304,6 +332,8 @@ struct Search<'a> {
     seldepth: usize,
     /// Best root move found so far; only moves that raised alpha in a finished subtree.
     root_best: Option<(Move, i32)>,
+    /// Nodes searched under each root move during this `go`.
+    root_move_nodes: Vec<(Move, u64)>,
 }
 
 #[inline(always)]
@@ -423,6 +453,27 @@ impl Search<'_> {
                 _ => true,
             },
             None => true,
+        }
+    }
+
+    fn record_root_move_nodes(&mut self, m: Move, nodes: u64) {
+        match self.root_move_nodes.iter_mut().find(|(root_move, _)| *root_move == m) {
+            Some((_, total)) => *total += nodes,
+            None => self.root_move_nodes.push((m, nodes)),
+        }
+    }
+
+    fn root_move_node_share(&self, m: Move) -> f64 {
+        let total: u64 = self.root_move_nodes.iter().map(|&(_, n)| n).sum();
+        let best = self
+            .root_move_nodes
+            .iter()
+            .find(|(root_move, _)| *root_move == m)
+            .map_or(0, |&(_, n)| n);
+        if total == 0 {
+            0.0
+        } else {
+            best as f64 / total as f64
         }
     }
 
@@ -935,6 +986,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             0
         };
         let node_ply = s.ply;
+        let nodes_before = s.tm.nodes;
         let Some(undo) = s.make_move(m, &legality) else {
             continue;
         };
@@ -980,6 +1032,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         s.unmake_move(m, undo);
         if extension >= 2 {
             s.stack[node_ply].double_extensions -= 1;
+        }
+        if is_root {
+            s.record_root_move_nodes(m, s.tm.nodes - nodes_before);
         }
 
         if s.tm.check_hard_limit() {
@@ -1119,10 +1174,12 @@ fn iterative_deepening(
         ply: 0,
         seldepth: 0,
         root_best: None,
+        root_move_nodes: Vec::new(),
     };
 
     let mut score = 0;
     for depth in 1..=max_depth {
+        let previous_score = score;
         search.seldepth = 0;
         let mut delta = ASPIRATION_DELTA;
         let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
@@ -1162,7 +1219,12 @@ fn iterative_deepening(
         if is_main_thread && let Some(m) = best_move {
             print_iteration_info(&search, depth, m, score);
         }
-        if search.tm.should_stop_iterating(depth, best_move) {
+        let summary = IterationSummary {
+            best_move,
+            best_move_node_share: best_move.map_or(0.0, |m| search.root_move_node_share(m)),
+            score_drop: if depth > 1 { previous_score - score } else { 0 },
+        };
+        if search.tm.should_stop_iterating(depth, &summary) {
             break;
         }
         if score.abs() > MATE_THRESHOLD {
