@@ -9,6 +9,11 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
+try:
+    import chess
+except ImportError:
+    chess = None
+
 class Colors:
     GREEN = '\033[92m'
     RED = '\033[91m'
@@ -116,6 +121,10 @@ def plausible_fen(fen: str) -> bool:
             return False
         # EP square must be "-" or like "e3"/"e6"
         if ep != '-' and not _ep_square.match(ep):
+            return False
+        # Positions where the side not to move is in check are illegal; engines may
+        # legitimately reject them, so they say nothing about move generation.
+        if chess is not None and not chess.Board(fen).is_valid():
             return False
         return True
     # If anything odd happens, treat as implausible
