@@ -1,11 +1,12 @@
 use crate::board::Board;
 use crate::nnue::evaluate;
+use crate::legality::LegalityInfo;
 use crate::history::{ContinuationKey, Histories, captured_kind, stat_bonus};
 use crate::movepicker::{MovePicker, OrderingContext};
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable};
-use crate::types::{MAX_MOVES, Move, MoveList, Piece, PieceKind, StackVec, Undo};
+use crate::types::{MAX_MOVES, Move, MoveList, Piece, StackVec, Undo};
 use crate::uci_io::format_uci;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -309,12 +310,10 @@ fn side_to_move_in_check(board: &Board) -> bool {
     board.is_square_attacked(king_sq, board.turn.other())
 }
 
-/// True when the side that just moved left its own king attacked.
-#[inline(always)]
-fn mover_left_king_in_check(board: &Board) -> bool {
-    let mover = board.turn.other();
-    let king_bb = board.piece_bb[Piece::from_kind(PieceKind::King, mover).index()];
-    king_bb != 0 && board.is_square_attacked(king_bb.trailing_zeros() as i32, board.turn)
+/// Makes `m` if it is legal in `pos`.
+fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
+    let info = pos.legality_info()?;
+    (pos.is_pseudo_legal(m) && pos.is_legal(m, &info)).then(|| pos.make_move(m))
 }
 
 /// Piece-index for the counter-move table: the piece that made `prev` now stands on `prev.to`.
@@ -427,13 +426,13 @@ impl Search<'_> {
         tt_eval.unwrap_or_else(|| evaluate(&mut self.board))
     }
 
-    fn make_move(&mut self, m: Move) -> Option<Undo> {
-        let moved_piece = self.board.piece_on[m.from as usize];
-        let undo = self.board.make_move(m);
-        if mover_left_king_in_check(&self.board) {
-            self.board.unmake_move(m, undo);
+    /// Makes `m` (pseudo-legal in the current position) unless it leaves the king in check.
+    fn make_move(&mut self, m: Move, legality: &LegalityInfo) -> Option<Undo> {
+        if !self.board.is_legal(m, legality) {
             return None;
         }
+        let moved_piece = self.board.piece_on[m.from as usize];
+        let undo = self.board.make_move(m);
         self.tt.prefetch(self.board.zobrist);
         self.stack[self.ply].current_move = Some(m);
         self.stack[self.ply].moved_piece = moved_piece;
@@ -543,9 +542,12 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         }
     }
 
-    let in_check = side_to_move_in_check(&s.board);
-    if in_check {
-        return quiesce_evasions(s, alpha, beta);
+    let Some(legality) = s.board.legality_info() else {
+        // Unreachable from a parsed FEN: every position has both kings.
+        return DRAW_SCORE;
+    };
+    if legality.in_check() {
+        return quiesce_evasions(s, alpha, beta, &legality);
     }
 
     let raw_eval = s.static_eval(tt_entry.and_then(|e| e.eval()));
@@ -581,7 +583,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
             continue;
         }
 
-        let Some(undo) = s.make_move(m) else {
+        let Some(undo) = s.make_move(m, &legality) else {
             continue;
         };
         let score = -quiesce(s, -beta, -alpha);
@@ -609,7 +611,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
 }
 
 /// Quiescence when in check: every evasion is searched so mates are found.
-fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
+fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &LegalityInfo) -> i32 {
     let mut move_list = MoveList::new();
     s.board.generate_pseudo_legal_moves(&mut move_list);
 
@@ -630,7 +632,7 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         scores.swap(i, best_idx);
 
         let m = move_list.get(i);
-        let Some(undo) = s.make_move(m) else {
+        let Some(undo) = s.make_move(m, legality) else {
             continue;
         };
         let score = -quiesce(s, -beta, -alpha);
@@ -753,7 +755,11 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
     }
 
-    let in_check = side_to_move_in_check(&s.board);
+    let Some(legality) = s.board.legality_info() else {
+        // Unreachable from a parsed FEN: every position has both kings.
+        return DRAW_SCORE;
+    };
+    let in_check = legality.in_check();
     if in_check {
         depth += 1;
     }
@@ -901,7 +907,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             0
         };
         let node_ply = s.ply;
-        let Some(undo) = s.make_move(m) else {
+        let Some(undo) = s.make_move(m, &legality) else {
             continue;
         };
         moves_searched += 1;
@@ -1007,12 +1013,7 @@ pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> 
         let Some(m) = tt.probe(pos.zobrist).and_then(|e| e.best_move()) else {
             break;
         };
-        if !pos.is_pseudo_legal(m) {
-            break;
-        }
-        let undo = pos.make_move(m);
-        if mover_left_king_in_check(&pos) {
-            pos.unmake_move(m, undo);
+        if make_if_legal(&mut pos, m).is_none() {
             break;
         }
         pv.push(m);

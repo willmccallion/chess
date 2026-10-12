@@ -216,23 +216,17 @@ impl Board {
     }
 
     #[inline]
-    pub fn generate_legal_moves(&mut self, out: &mut MoveList) {
+    pub fn generate_legal_moves(&self, out: &mut MoveList) {
         let mut pseudo = MoveList::new();
         self.generate_pseudo_legal_moves(&mut pseudo);
         out.clear();
+        let Some(info) = self.legality_info() else {
+            return;
+        };
         for &m in pseudo.as_slice() {
-            let u = self.make_move(m);
-            let us = self.turn.other();
-            let our_king_bb = self.piece_bb[Piece::from_kind(PieceKind::King, us).index()];
-            if our_king_bb == 0 {
-                self.unmake_move(m, u);
-                continue;
-            }
-            let king_sq = our_king_bb.trailing_zeros() as i32;
-            if !self.is_square_attacked(king_sq, self.turn) {
+            if self.is_legal(m, &info) {
                 out.push(m);
             }
-            self.unmake_move(m, u);
         }
     }
 

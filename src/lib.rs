@@ -4,6 +4,7 @@ pub mod compare;
 pub mod fen;
 pub mod game_runner;
 pub mod history;
+pub mod legality;
 pub mod magics;
 pub mod movepicker;
 pub mod nnue;
