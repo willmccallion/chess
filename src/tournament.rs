@@ -1,6 +1,8 @@
 use crate::game_runner::{play_game, GameConfig, GameEndReason, GameResult};
+use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::uci_client::UciEngine;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -15,6 +17,19 @@ pub struct TournamentConfig {
     pub rounds: usize,
     pub concurrency: usize,
     pub start_fen: Option<String>,
+    /// Start positions; game pair `p` plays `openings[p % len]` with colors swapped.
+    pub openings: Vec<String>,
+    pub sprt: Option<SprtConfig>,
+}
+
+impl TournamentConfig {
+    fn start_fen_for_game(&self, game_idx: usize) -> Option<String> {
+        if self.openings.is_empty() {
+            return self.start_fen.clone();
+        }
+        let pair_idx = game_idx / 2;
+        Some(self.openings[pair_idx % self.openings.len()].clone())
+    }
 }
 
 struct Score {
@@ -45,6 +60,11 @@ struct Score {
     total_plies: usize,
     shortest_game: usize,
     longest_game: usize,
+
+    // Game-pair statistics (pair = same opening, colors swapped)
+    penta: Pentanomial,
+    unpaired_e1_points: HashMap<usize, f64>,
+    sprt_decision: Option<SprtDecision>,
 }
 
 impl Score {
@@ -71,6 +91,25 @@ impl Score {
             total_plies: 0,
             shortest_game: usize::MAX,
             longest_game: 0,
+            penta: Pentanomial::default(),
+            unpaired_e1_points: HashMap::new(),
+            sprt_decision: None,
+        }
+    }
+
+    /// Records engine 1's points for a game; returns true when this completes a pair.
+    fn record_pair_game(&mut self, game_idx: usize, e1_points: f64) -> bool {
+        let pair_idx = game_idx / 2;
+        match self.unpaired_e1_points.remove(&pair_idx) {
+            Some(partner_points) => {
+                self.penta
+                    .add(PairScore::from_game_points(partner_points, e1_points));
+                true
+            }
+            None => {
+                self.unpaired_e1_points.insert(pair_idx, e1_points);
+                false
+            }
         }
     }
 }
@@ -144,7 +183,10 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     let e1_score = s.e1_wins as f64 + s.draws as f64 * 0.5;
     let e2_score = s.e2_wins as f64 + s.draws as f64 * 0.5;
     let elo = format_elo(s.e1_wins, s.e2_wins, s.draws);
-    let err = elo_error_95(s.e1_wins, s.e2_wins, s.draws);
+    let err = match s.penta.elo() {
+        Some((_, pair_error)) => Some(pair_error),
+        None => elo_error_95(s.e1_wins, s.e2_wins, s.draws),
+    };
     let draw_rate = if total > 0 {
         s.draws as f64 / total as f64 * 100.0
     } else {
@@ -178,6 +220,26 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         "  Games: {}    Draw rate: {:.1}%",
         total, draw_rate
     );
+    if s.penta.pairs() > 0 {
+        let [ll, ld, even, wd, ww] = s.penta.counts();
+        println!(
+            "  Pairs: {}    Pentanomial [LL LD DD/WL WD WW]: [{} {} {} {} {}]",
+            s.penta.pairs(),
+            ll,
+            ld,
+            even,
+            wd,
+            ww
+        );
+    }
+    if let Some(decision) = s.sprt_decision {
+        let verdict = match decision {
+            SprtDecision::AcceptH1 => "H1 accepted (engine1 is stronger)",
+            SprtDecision::AcceptH0 => "H0 accepted (no gain shown)",
+            SprtDecision::Continue => "inconclusive (game limit reached)",
+        };
+        println!("  SPRT:  {verdict}");
+    }
     if elapsed > 0.0 {
         let gps = total as f64 / elapsed;
         println!(
@@ -292,7 +354,12 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     println!("=================================================================");
 }
 
-pub fn run_tournament(config: TournamentConfig) {
+pub fn run_tournament(mut config: TournamentConfig) {
+    if config.rounds % 2 == 1 {
+        config.rounds += 1;
+        println!("Rounding games up to {} so every opening is played twice.", config.rounds);
+    }
+
     if !std::path::Path::new(&config.engine1_path).exists() {
         eprintln!("Error: engine1 path '{}' not found", config.engine1_path);
         std::process::exit(1);
@@ -322,20 +389,35 @@ pub fn run_tournament(config: TournamentConfig) {
         "Rounds: {}, Concurrency: {}",
         config.rounds, config.concurrency
     );
-    if let Some(ref fen) = config.start_fen {
+    if !config.openings.is_empty() {
+        println!("Openings: {} positions, each played as a color-swapped pair", config.openings.len());
+    } else if let Some(ref fen) = config.start_fen {
         println!("Start FEN: {}", fen);
+    }
+    if let Some(sprt) = config.sprt {
+        println!(
+            "SPRT: elo0={} elo1={} alpha={} beta={} bounds=[{:.2}, {:.2}]",
+            sprt.elo0,
+            sprt.elo1,
+            sprt.alpha,
+            sprt.beta,
+            sprt.lower_bound(),
+            sprt.upper_bound()
+        );
     }
     println!("---");
 
     let start_time = Instant::now();
     let next_game = Arc::new(AtomicUsize::new(0));
     let score = Arc::new(Mutex::new(Score::new()));
+    let stop = Arc::new(AtomicBool::new(false));
     let config = Arc::new(config);
     let mut handles = Vec::new();
 
     for _ in 0..config.concurrency {
         let next_game = Arc::clone(&next_game);
         let score = Arc::clone(&score);
+        let stop = Arc::clone(&stop);
         let config = Arc::clone(&config);
 
         let handle = thread::spawn(move || {
@@ -366,6 +448,9 @@ pub fn run_tournament(config: TournamentConfig) {
                 .unwrap_or(&config.engine2_path);
 
             loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
                 let game_idx = next_game.fetch_add(1, Ordering::Relaxed);
                 if game_idx >= config.rounds {
                     break;
@@ -375,7 +460,7 @@ pub fn run_tournament(config: TournamentConfig) {
                     base_time_ms: config.base_time_ms,
                     increment_ms: config.increment_ms,
                     max_moves: 300,
-                    start_fen: config.start_fen.clone(),
+                    start_fen: config.start_fen_for_game(game_idx),
                 };
 
                 let e1_is_white = game_idx % 2 == 0;
@@ -457,6 +542,15 @@ pub fn run_tournament(config: TournamentConfig) {
                     s.longest_game = outcome.move_count;
                 }
 
+                let e1_points = if e1_win {
+                    1.0
+                } else if e2_win {
+                    0.0
+                } else {
+                    0.5
+                };
+                let pair_completed = s.record_pair_game(game_idx, e1_points);
+
                 let e1_score = s.e1_wins as f64 + s.draws as f64 * 0.5;
                 let e2_score = s.e2_wins as f64 + s.draws as f64 * 0.5;
                 let elo = format_elo(s.e1_wins, s.e2_wins, s.draws);
@@ -476,6 +570,25 @@ pub fn run_tournament(config: TournamentConfig) {
                     e2_name,
                     elo,
                 );
+
+                if pair_completed
+                    && let Some(sprt) = config.sprt
+                    && s.sprt_decision.is_none()
+                {
+                    let llr = sprt.llr(&s.penta);
+                    println!(
+                        "  SPRT: LLR {:.2} [{:.2}, {:.2}] after {} pairs",
+                        llr,
+                        sprt.lower_bound(),
+                        sprt.upper_bound(),
+                        s.penta.pairs()
+                    );
+                    let decision = sprt.decide(llr);
+                    if decision != SprtDecision::Continue {
+                        s.sprt_decision = Some(decision);
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                }
 
                 // If an engine crashed, try to respawn it
                 if outcome.reason == GameEndReason::EngineCrash {
@@ -505,7 +618,10 @@ pub fn run_tournament(config: TournamentConfig) {
 
     let elapsed = start_time.elapsed().as_secs_f64();
 
-    let s = score.lock().unwrap();
+    let mut s = score.lock().unwrap();
+    if config.sprt.is_some() && s.sprt_decision.is_none() {
+        s.sprt_decision = Some(SprtDecision::Continue);
+    }
     let e1_name = config
         .engine1_path
         .rsplit('/')

@@ -1,8 +1,10 @@
 use chess::bench;
 use chess::board::Board;
 use chess::nnue;
+use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search::{best_move_timed, get_pv_from_tt};
+use chess::sprt::SprtConfig;
 use chess::tournament::{self, TournamentConfig};
 use chess::tt::SharedTransTable;
 use chess::types::{Color, Move, MoveList, Piece, PieceKind, START_FEN};
@@ -92,6 +94,15 @@ enum Cmd {
         /// Starting FEN (default: standard start position)
         #[arg(long)]
         fen: Option<String>,
+        /// EPD opening suite; each sampled opening is played twice with colors swapped
+        #[arg(long)]
+        openings: Option<String>,
+        /// Seed for sampling and ordering openings
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// Stop early via SPRT: "elo0,elo1" or "elo0,elo1,alpha,beta" (logistic Elo)
+        #[arg(long)]
+        sprt: Option<String>,
     },
     Uci,
 }
@@ -179,6 +190,9 @@ fn main() {
             rounds,
             concurrency,
             fen,
+            openings,
+            seed,
+            sprt,
         } => {
             let e1_opts: Vec<_> = e1_options
                 .iter()
@@ -194,6 +208,20 @@ fn main() {
                     std::process::exit(1);
                 }))
                 .collect();
+            let pair_count = rounds.div_ceil(2);
+            let openings = match openings {
+                Some(path) => openings::sample_openings(&path, pair_count, seed).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }),
+                None => Vec::new(),
+            };
+            let sprt = sprt.map(|spec| {
+                SprtConfig::parse(&spec).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                })
+            });
             tournament::run_tournament(TournamentConfig {
                 engine1_path: engine1,
                 engine2_path: engine2,
@@ -204,6 +232,8 @@ fn main() {
                 rounds,
                 concurrency,
                 start_fen: fen,
+                openings,
+                sprt,
             });
         }
         Cmd::Uci => uci::run_uci(),
