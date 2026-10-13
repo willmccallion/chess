@@ -4,14 +4,14 @@ use crate::uci_client::UciEngine;
 use crate::uci_io::parse_uci_move;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameResult {
     WhiteWin,
     BlackWin,
     Draw,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameEndReason {
     Checkmate,
     Stalemate,
@@ -64,6 +64,42 @@ fn report_rejected_move(engine: &str, bestmove: &str, board: &Board) {
     eprintln!("{engine} played illegal move '{bestmove}' in {}", board.to_fen());
 }
 
+/// The result if the game is over in `board` by the rules: mate, stalemate, threefold
+/// repetition, the 50-move rule or insufficient mating material.
+pub fn position_outcome(board: &Board) -> Option<(GameResult, GameEndReason)> {
+    let mut legal = MoveList::new();
+    board.generate_legal_moves(&mut legal);
+    if legal.is_empty() {
+        let king = Piece::from_kind(PieceKind::King, board.turn);
+        let king_sq = board.piece_bb[king.index()].trailing_zeros();
+        let in_check =
+            king_sq < 64 && board.is_square_attacked(king_sq as i32, board.turn.other());
+        return Some(if in_check {
+            (win_for(board.turn.other()), GameEndReason::Checkmate)
+        } else {
+            (GameResult::Draw, GameEndReason::Stalemate)
+        });
+    }
+    let draw_reason = if board.is_draw_by_repetition() {
+        GameEndReason::Repetition
+    } else if board.halfmove_clock >= 100 {
+        GameEndReason::FiftyMoveRule
+    } else if board.has_insufficient_material() {
+        GameEndReason::InsufficientMaterial
+    } else {
+        return None;
+    };
+    Some((GameResult::Draw, draw_reason))
+}
+
+/// The result when `winner` wins.
+pub const fn win_for(winner: Color) -> GameResult {
+    match winner {
+        Color::White => GameResult::WhiteWin,
+        Color::Black => GameResult::BlackWin,
+    }
+}
+
 pub fn play_game(
     white: &mut UciEngine,
     black: &mut UciEngine,
@@ -105,49 +141,9 @@ pub fn play_game(
             };
         }
 
-        // Check legal moves for the side to move
-        let mut legal = MoveList::new();
-        board.generate_legal_moves(&mut legal);
-
-        if legal.is_empty() {
-            let king = Piece::from_kind(PieceKind::King, board.turn);
-            let king_sq = board.piece_bb[king.index()].trailing_zeros();
-            let in_check = king_sq < 64
-                && board.is_square_attacked(king_sq as i32, board.turn.other());
-
-            if in_check {
-                let result = if board.turn == Color::White {
-                    GameResult::BlackWin
-                } else {
-                    GameResult::WhiteWin
-                };
-                return GameOutcome {
-                    result,
-                    reason: GameEndReason::Checkmate,
-                    move_count: ply,
-                };
-            } else {
-                return GameOutcome {
-                    result: GameResult::Draw,
-                    reason: GameEndReason::Stalemate,
-                    move_count: ply,
-                };
-            }
-        }
-
-        // Check draw conditions
-        let draw_reason = if board.is_draw_by_repetition() {
-            Some(GameEndReason::Repetition)
-        } else if board.halfmove_clock >= 100 {
-            Some(GameEndReason::FiftyMoveRule)
-        } else if board.has_insufficient_material() {
-            Some(GameEndReason::InsufficientMaterial)
-        } else {
-            None
-        };
-        if let Some(reason) = draw_reason {
+        if let Some((result, reason)) = position_outcome(&board) {
             return GameOutcome {
-                result: GameResult::Draw,
+                result,
                 reason,
                 move_count: ply,
             };
