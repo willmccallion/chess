@@ -58,6 +58,10 @@ impl std::fmt::Display for GameEndReason {
     }
 }
 
+fn report_rejected_move(engine: &str, bestmove: &str, board: &Board) {
+    eprintln!("{engine} played illegal move '{bestmove}' in {}", board.to_fen());
+}
+
 pub fn play_game(
     white: &mut UciEngine,
     black: &mut UciEngine,
@@ -206,6 +210,7 @@ pub fn play_game(
 
         // Handle "(none)" or "0000"
         if bestmove == "(none)" || bestmove == "0000" {
+            report_rejected_move(&engine.name, &bestmove, &board);
             let result = if board.turn == Color::White {
                 GameResult::BlackWin
             } else {
@@ -227,6 +232,7 @@ pub fn play_game(
                 ply += 1;
             }
             None => {
+                report_rejected_move(&engine.name, &bestmove, &board);
                 let result = if board.turn == Color::White {
                     GameResult::BlackWin
                 } else {
