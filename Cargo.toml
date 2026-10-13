@@ -4,6 +4,11 @@ version = "6.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
+[features]
+default = ["stockfish-nnue"]
+# Stockfish 18's networks and the code that evaluates them.
+stockfish-nnue = []
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"

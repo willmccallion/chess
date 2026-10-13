@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn bench_node_count_is_deterministic() {
-        crate::eval::ensure_built_in_loaded().unwrap();
+        crate::eval::EvalOptions::built_in().load().unwrap();
 
         let first = run(5, BENCH_HASH_MB).unwrap();
         let second = run(5, BENCH_HASH_MB).unwrap();

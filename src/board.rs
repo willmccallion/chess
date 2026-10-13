@@ -1,5 +1,4 @@
-use crate::eval::accumulator::{AccumulatorStack, PlyRecord};
-use crate::eval::threat_delta::{self, PositionView};
+use crate::eval::{EvalState, IncrementalState, PositionView};
 use crate::fen;
 use crate::magics;
 use crate::types::*;
@@ -21,35 +20,7 @@ pub struct Board {
     pub plies_from_null: u32,
     pub history: Vec<ZKey>,
     pub zobrist: ZKey,
-    accumulators: AccumulatorStack,
-}
-
-/// Piece-square changes of `m` in `position` (before the move), in removal-then-add order.
-fn record_piece_changes(position: PositionView, m: Move, record: &mut PlyRecord) {
-    let from = m.from as usize;
-    let to = m.to as usize;
-    let moving = position.piece_on[from];
-    let updates = &mut *record.psq_updates;
-    updates.push(UpdateBody { piece: moving, sq: from, add: false });
-    if m.capture {
-        let cap_sq = match (m.en_passant, position.turn) {
-            (true, Color::White) => to - 8,
-            (true, Color::Black) => to + 8,
-            (false, _) => to,
-        };
-        let captured = position.piece_on[cap_sq];
-        if !captured.is_empty() {
-            updates.push(UpdateBody { piece: captured, sq: cap_sq, add: false });
-        }
-    }
-    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, position.turn));
-    updates.push(UpdateBody { piece: placed, sq: to, add: true });
-    if m.castle {
-        let (rook_from, rook_to) = if to > from { (to + 1, to - 1) } else { (to - 2, to + 1) };
-        let rook = position.piece_on[rook_from];
-        updates.push(UpdateBody { piece: rook, sq: rook_from, add: false });
-        updates.push(UpdateBody { piece: rook, sq: rook_to, add: true });
-    }
+    eval_state: EvalState,
 }
 
 impl Board {
@@ -68,7 +39,7 @@ impl Board {
             plies_from_null: 0,
             history: Vec::with_capacity(128),
             zobrist: 0,
-            accumulators: AccumulatorStack::new(),
+            eval_state: EvalState::for_active(),
         }
     }
 
@@ -90,7 +61,7 @@ impl Board {
     #[inline]
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
         let mut b = fen::parse_fen(fen_str)?;
-        b.accumulators.reset();
+        b.eval_state.reset();
         Ok(b)
     }
 
@@ -117,7 +88,7 @@ impl Board {
             }
         }
         self.all_pieces = self.w_pieces | self.b_pieces;
-        self.accumulators.reset();
+        self.eval_state.reset();
     }
 
     #[inline]
@@ -1211,20 +1182,15 @@ impl Board {
         let from = m.from as usize;
         let to = m.to as usize;
         let moving = self.piece_on[from];
-        let is_king_move = moving.kind() == Some(PieceKind::King);
 
         let position = PositionView {
             piece_on: &self.piece_on,
             piece_bb: &self.piece_bb,
             occupied: self.all_pieces,
             turn: self.turn,
+            halfmove_clock: self.halfmove_clock,
         };
-        let mut record = self.accumulators.push();
-        threat_delta::record_move(position, m, record.threats);
-        record_piece_changes(position, m, &mut record);
-        if is_king_move {
-            record.king_moved(self.turn, from, to);
-        }
+        self.eval_state.push_move(position, m);
 
         if m.capture {
             let cap_sq = if m.en_passant {
@@ -1374,23 +1340,25 @@ impl Board {
             piece_bb: &self.piece_bb,
             occupied: self.all_pieces,
             turn: self.turn,
+            halfmove_clock: self.halfmove_clock,
         }
     }
 
-    /// Drops the accumulators of earlier positions; the current one is recomputed on demand.
-    pub fn forget_accumulator_history(&mut self) {
-        self.accumulators.reset();
+    /// Drops the evaluation state of earlier positions; the current one is recomputed on demand.
+    pub fn forget_eval_history(&mut self) {
+        self.eval_state.reset();
     }
 
-    /// The NNUE accumulators and the position they describe, borrowed together.
-    pub fn accumulators_and_view(&mut self) -> (&mut AccumulatorStack, PositionView<'_>) {
+    /// The evaluation state and the position it describes, borrowed together.
+    pub fn eval_state_and_view(&mut self) -> (&mut EvalState, PositionView<'_>) {
         let position = PositionView {
             piece_on: &self.piece_on,
             piece_bb: &self.piece_bb,
             occupied: self.all_pieces,
             turn: self.turn,
+            halfmove_clock: self.halfmove_clock,
         };
-        (&mut self.accumulators, position)
+        (&mut self.eval_state, position)
     }
 
     #[inline]
@@ -1405,7 +1373,7 @@ impl Board {
             piece_on_to
         };
 
-        self.accumulators.pop();
+        self.eval_state.pop_move();
 
         self.history.pop();
         self.zobrist = *self.history.last().unwrap_or(&0);

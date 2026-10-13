@@ -13,7 +13,6 @@ use chess::tui;
 use chess::types::{Color, START_FEN};
 use chess::uci;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::io;
 
 #[derive(Parser)]
 #[command(
@@ -62,6 +61,7 @@ enum Cmd {
         fen: String,
     },
     /// Print the Stockfish 18 network's per-bucket contributions, as Stockfish's `eval` does
+    #[cfg(feature = "stockfish-nnue")]
     EvalTrace {
         /// Position to trace; reads one FEN per line from stdin when omitted
         fen: Option<String>,
@@ -236,7 +236,7 @@ impl SideChoice {
 
 /// Loads the networks baked in at build time, or exits: nothing can be evaluated without them.
 fn require_networks() {
-    if let Err(e) = eval::ensure_built_in_loaded() {
+    if let Err(e) = eval::EvalOptions::built_in().load() {
         exit_with_error(&format!("failed to load NNUE: {e}"));
     }
 }
@@ -301,27 +301,29 @@ fn main() {
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
         }
+        #[cfg(feature = "stockfish-nnue")]
         Cmd::EvalTrace { fen, big, small } => {
-            let built_in = eval::NetPaths::built_in();
+            use eval::stockfish::{NetPaths, ensure_loaded, trace_text};
+            let built_in = NetPaths::built_in();
             let paths = match (big, small, built_in) {
-                (Some(big), Some(small), _) => eval::NetPaths { big: big.into(), small: small.into() },
-                (big, small, Some(defaults)) => eval::NetPaths {
+                (Some(big), Some(small), _) => NetPaths { big: big.into(), small: small.into() },
+                (big, small, Some(defaults)) => NetPaths {
                     big: big.map_or(defaults.big, Into::into),
                     small: small.map_or(defaults.small, Into::into),
                 },
                 _ => exit_with_error("no networks: pass --big and --small or build inside the dev shell"),
             };
-            if let Err(e) = eval::ensure_loaded(&paths) {
+            if let Err(e) = ensure_loaded(&paths) {
                 exit_with_error(&format!("failed to load NNUE: {e}"));
             }
             let fens: Vec<String> = match fen {
                 Some(fen) => vec![fen],
-                None => io::stdin().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect(),
+                None => std::io::stdin().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect(),
             };
             for fen in fens {
-                let mut board = Board::from_fen(&fen)
+                let board = Board::from_fen(&fen)
                     .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error in {fen}: {e}")));
-                print!("{}", eval::trace_text(&mut board).unwrap_or_default());
+                print!("{}", trace_text(&board).unwrap_or_default());
             }
         }
         Cmd::Bench { depth, hash } => {

@@ -1,301 +1,212 @@
-//! Stockfish 18 NNUE evaluation.
+//! Static evaluation. Each backend implements [`Evaluator`]; a board carries the backend's
+//! incremental state in an [`EvalState`] and updates it on every make and unmake.
 
-pub mod accumulator;
-mod arch;
-pub mod features;
-pub mod net_file;
-pub mod network;
-pub mod simd;
-pub mod threat_delta;
-pub mod trace;
+#[cfg(feature = "stockfish-nnue")]
+pub mod stockfish;
 
 use crate::board::Board;
-use crate::types::{Color, Piece};
-use accumulator::AccumulatorStack;
-use arch::OUTPUT_SCALE;
-use net_file::{BigNetwork, NetKind, NetLoadError, Network, load_big_network, load_small_network};
-use network::{NetOutput, PerspectiveSums, bucket_for, transform};
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use threat_delta::PositionView;
+use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody};
 
-/// Network path baked in at build time from the dev shell's `CHESS_NNUE_BIG`/`CHESS_NNUE_SMALL`.
-pub fn default_net_path(kind: NetKind) -> Option<&'static str> {
-    match kind {
-        NetKind::Big => option_env!("CHESS_NNUE_BIG"),
-        NetKind::Small => option_env!("CHESS_NNUE_SMALL"),
-    }
+/// Most piece-square changes one move makes: castling moves two pieces.
+pub const MAX_PIECE_CHANGES: usize = 5;
+
+/// The parts of a position an evaluator reads, borrowed field by field so a board can
+/// update its evaluation state while lending them.
+#[derive(Copy, Clone)]
+pub struct PositionView<'b> {
+    pub piece_on: &'b [Piece; 64],
+    pub piece_bb: &'b [Bitboard; 13],
+    pub occupied: Bitboard,
+    pub turn: Color,
+    pub halfmove_clock: i32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NetPaths {
-    pub big: PathBuf,
-    pub small: PathBuf,
-}
-
-impl NetPaths {
-    pub fn built_in() -> Option<Self> {
-        Some(Self {
-            big: PathBuf::from(default_net_path(NetKind::Big)?),
-            small: PathBuf::from(default_net_path(NetKind::Small)?),
-        })
-    }
-}
-
-pub struct Networks {
-    big: BigNetwork,
-    small: Network,
-    paths: NetPaths,
-}
-
-static NETWORKS: OnceLock<Networks> = OnceLock::new();
-
-fn load_error(path: &Path, error: NetLoadError) -> String {
-    format!("{}: {error}", path.display())
-}
-
-/// Loads the networks on first use. They cannot be replaced afterwards, so asking for
-/// different files once loaded is an error.
-pub fn ensure_loaded(paths: &NetPaths) -> Result<(), String> {
-    if let Some(loaded) = NETWORKS.get() {
-        return if loaded.paths == *paths {
-            Ok(())
-        } else {
-            Err(format!(
-                "networks already loaded from {} and {}",
-                loaded.paths.big.display(),
-                loaded.paths.small.display()
-            ))
+/// Piece-square changes of `m` in `position` (before the move), in removal-then-add order.
+pub fn record_piece_changes(position: PositionView, m: Move, out: &mut StackVec<UpdateBody, MAX_PIECE_CHANGES>) {
+    let from = m.from as usize;
+    let to = m.to as usize;
+    let moving = position.piece_on[from];
+    out.push(UpdateBody { piece: moving, sq: from, add: false });
+    if m.capture {
+        let cap_sq = match (m.en_passant, position.turn) {
+            (true, Color::White) => to - 8,
+            (true, Color::Black) => to + 8,
+            (false, _) => to,
         };
-    }
-    let big = load_big_network(&paths.big).map_err(|e| load_error(&paths.big, e))?;
-    let small = load_small_network(&paths.small).map_err(|e| load_error(&paths.small, e))?;
-    let _ = NETWORKS.set(Networks {
-        big,
-        small,
-        paths: paths.clone(),
-    });
-    Ok(())
-}
-
-/// Loads the networks baked in at build time.
-pub fn ensure_built_in_loaded() -> Result<(), String> {
-    let paths = NetPaths::built_in()
-        .ok_or("no network paths were set at build time; build inside the dev shell")?;
-    ensure_loaded(&paths)
-}
-
-fn run_net(net: &Network, sums: &PerspectiveSums, side_to_move: Color, bucket: usize) -> NetOutput {
-    let mut transformed = [0u8; accumulator::BIG_HALF];
-    let transformed = &mut transformed[..net.transformer.half_dims];
-    let psqt = transform(sums, side_to_move, bucket, transformed);
-    let positional = net.stacks[bucket].propagate(transformed);
-    NetOutput {
-        psqt: psqt / OUTPUT_SCALE,
-        positional: positional / OUTPUT_SCALE,
-    }
-}
-
-const PAWN_VALUE: i32 = 208;
-const NON_PAWN_VALUES: [(Piece, Piece, i32); 4] = [
-    (Piece::WN, Piece::BN, 781),
-    (Piece::WB, Piece::BB, 825),
-    (Piece::WR, Piece::BR, 1276),
-    (Piece::WQ, Piece::BQ, 2538),
-];
-
-fn count(position: PositionView, piece: Piece) -> i32 {
-    position.piece_bb[piece.index()].count_ones() as i32
-}
-
-/// Non-pawn material of (white, black) in Stockfish's units.
-fn non_pawn_material(position: PositionView) -> (i32, i32) {
-    NON_PAWN_VALUES
-        .iter()
-        .fold((0, 0), |(white, black), &(wp, bp, value)| {
-            (white + value * count(position, wp), black + value * count(position, bp))
-        })
-}
-
-/// Material balance for the side to move, which picks the small net in lopsided positions.
-fn simple_eval(position: PositionView) -> i32 {
-    let (white_npm, black_npm) = non_pawn_material(position);
-    let white = PAWN_VALUE * count(position, Piece::WP) + white_npm;
-    let black = PAWN_VALUE * count(position, Piece::BP) + black_npm;
-    match position.turn {
-        Color::White => white - black,
-        Color::Black => black - white,
-    }
-}
-
-const SMALL_NET_THRESHOLD: i32 = 962;
-const SMALL_NET_RECHECK: i32 = 277;
-
-/// Stockfish 18's `Eval::evaluate` with zero optimism, in its internal units.
-fn stockfish_eval(nets: &Networks, board: &mut Board) -> i32 {
-    let halfmove_clock = board.halfmove_clock;
-    let (stack, position) = board.accumulators_and_view();
-    let bucket = bucket_for(position);
-    let side_to_move = position.turn;
-
-    let big = |stack: &mut AccumulatorStack| {
-        let sums = stack.big(&nets.big.net.transformer, &nets.big.threats, position);
-        run_net(&nets.big.net, &sums, side_to_move, bucket)
-    };
-    let blend = |out: NetOutput| (125 * out.psqt + 131 * out.positional) / 128;
-
-    let use_small = simple_eval(position).abs() > SMALL_NET_THRESHOLD;
-    let mut output = if use_small {
-        let sums = stack.small(&nets.small.transformer, position);
-        run_net(&nets.small, &sums, side_to_move, bucket)
-    } else {
-        big(stack)
-    };
-    if use_small && blend(output).abs() < SMALL_NET_RECHECK {
-        output = big(stack);
-    }
-
-    let mut nnue = i64::from(blend(output));
-    let complexity = i64::from((output.psqt - output.positional).abs());
-    nnue -= nnue * complexity / 18_236;
-
-    let (white_npm, black_npm) = non_pawn_material(position);
-    let pawns = count(position, Piece::WP) + count(position, Piece::BP);
-    let material = i64::from(534 * pawns + white_npm + black_npm);
-    let mut value = nnue * (77_871 + material) / 77_871;
-    value -= value * i64::from(halfmove_clock) / 199;
-    value as i32
-}
-
-/// Static evaluation in centipawns for the side to move; 0 if no networks are loaded.
-pub fn evaluate(board: &mut Board) -> i32 {
-    let Some(nets) = NETWORKS.get() else {
-        return 0;
-    };
-    let internal = stockfish_eval(nets, board);
-    trace::to_cp(internal, board)
-}
-
-/// The big net's per-bucket table and the final evaluation, as Stockfish's `eval` prints them.
-pub fn trace_text(board: &mut Board) -> Option<String> {
-    let nets = NETWORKS.get()?;
-    let mut text = trace::format_trace(&nets.big, board);
-    let internal = stockfish_eval(nets, board);
-    let white_relative = if board.turn == Color::White { internal } else { -internal };
-    text.push_str(&format!(
-        "Final evaluation       {:+.2} (white side)\n",
-        0.01 * f64::from(trace::to_cp(white_relative, board))
-    ));
-    Some(text)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::MoveList;
-    use network::{Accumulation, SumsView, refresh_psq, refresh_threats};
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-
-    fn nets() -> &'static Networks {
-        ensure_built_in_loaded().unwrap();
-        NETWORKS.get().unwrap()
-    }
-
-    fn assert_same(view: SumsView, expected: &Accumulation, what: &str, fen: &str) {
-        assert_eq!(view.values, expected.values.as_slice(), "{what} values differ in {fen}");
-        assert_eq!(view.psqt, &expected.psqt, "{what} psqt differs in {fen}");
-    }
-
-    fn assert_incremental_matches_refresh(board: &mut Board) {
-        let nets = nets();
-        let fen = board.to_fen();
-        let position = board.position_view();
-        let colors = [Color::White, Color::Black];
-        let big_psq = colors.map(|c| refresh_psq(&nets.big.net.transformer, position, c));
-        let big_threats = colors.map(|c| refresh_threats(&nets.big.threats, 1024, position, c));
-        let small_psq = colors.map(|c| refresh_psq(&nets.small.transformer, position, c));
-
-        let (stack, position) = board.accumulators_and_view();
-        let big = stack.big(&nets.big.net.transformer, &nets.big.threats, position);
-        let threats = big.threats.as_ref().unwrap();
-        for p in 0..2 {
-            assert_same(big.psq[p], &big_psq[p], "big psq", &fen);
-            assert_same(threats[p], &big_threats[p], "big threats", &fen);
+        let captured = position.piece_on[cap_sq];
+        if !captured.is_empty() {
+            out.push(UpdateBody { piece: captured, sq: cap_sq, add: false });
         }
-        let small = stack.small(&nets.small.transformer, position);
-        for p in 0..2 {
-            assert_same(small.psq[p], &small_psq[p], "small psq", &fen);
+    }
+    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, position.turn));
+    out.push(UpdateBody { piece: placed, sq: to, add: true });
+    if m.castle {
+        let (rook_from, rook_to) = if to > from { (to + 1, to - 1) } else { (to - 2, to + 1) };
+        let rook = position.piece_on[rook_from];
+        out.push(UpdateBody { piece: rook, sq: rook_from, add: false });
+        out.push(UpdateBody { piece: rook, sq: rook_to, add: true });
+    }
+}
+
+/// What a board keeps between moves so an evaluator need not start from scratch.
+pub trait IncrementalState {
+    /// Records `m`, about to be made in `before`.
+    fn push_move(&mut self, before: PositionView, m: Move);
+    /// Returns to the position before the last recorded move.
+    fn pop_move(&mut self);
+    /// Forgets all recorded moves; the current position is evaluated from scratch.
+    fn reset(&mut self);
+}
+
+/// A static evaluation function.
+pub trait Evaluator {
+    type State: IncrementalState + Clone;
+
+    fn new_state(&self) -> Self::State;
+
+    /// Centipawns for the side to move in `position`, which `state` describes.
+    fn evaluate(&self, state: &mut Self::State, position: PositionView) -> i32;
+}
+
+/// Which evaluator to load and from which files, set from UCI options or the command line.
+#[derive(Clone, Debug)]
+pub struct EvalOptions {
+    #[cfg(feature = "stockfish-nnue")]
+    stockfish_nets: stockfish::NetPaths,
+}
+
+impl EvalOptions {
+    /// The networks baked in at build time.
+    pub fn built_in() -> Self {
+        Self {
+            #[cfg(feature = "stockfish-nnue")]
+            stockfish_nets: stockfish::NetPaths::built_in_or_empty(),
         }
     }
 
-    fn random_move(board: &mut Board, rng: &mut StdRng) -> Option<crate::types::Move> {
-        let mut moves = MoveList::new();
-        board.generate_legal_moves(&mut moves);
-        (moves.len() > 0).then(|| moves.get(rng.gen_range(0..moves.len())))
+    /// UCI `option` lines for these settings.
+    pub fn uci_options(&self) -> Vec<String> {
+        #[cfg_attr(not(feature = "stockfish-nnue"), expect(unused_mut))]
+        let mut lines = Vec::new();
+        #[cfg(feature = "stockfish-nnue")]
+        {
+            let nets = &self.stockfish_nets;
+            lines.push(format!("option name EvalFile type string default {}", nets.big.display()));
+            lines.push(format!("option name EvalFileSmall type string default {}", nets.small.display()));
+        }
+        lines
     }
 
-    fn walk(board: &mut Board, depth: usize, rng: &mut StdRng) {
-        if rng.gen_bool(0.4) {
-            assert_incremental_matches_refresh(board);
-        }
-        if depth == 0 {
-            return;
-        }
-        for _ in 0..3 {
-            let Some(m) = random_move(board, rng) else {
-                return;
-            };
-            let undo = board.make_move(m);
-            walk(board, depth - 1, rng);
-            board.unmake_move(m, undo);
-        }
-    }
-
-    #[test]
-    fn incremental_accumulators_match_a_full_refresh() {
-        let starts = [
-            crate::types::START_FEN,
-            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
-            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
-            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
-        ];
-        let mut rng = StdRng::seed_from_u64(11);
-        for fen in starts {
-            let mut board = Board::from_fen(fen).unwrap();
-            walk(&mut board, 4, &mut rng);
-
-            for _game in 0..6 {
-                let mut board = Board::from_fen(fen).unwrap();
-                for _ply in 0..150 {
-                    if rng.gen_bool(0.3) {
-                        assert_incremental_matches_refresh(&mut board);
-                    }
-                    let Some(m) = random_move(&mut board, &mut rng) else {
-                        break;
-                    };
-                    board.make_move(m);
-                }
-                assert_incremental_matches_refresh(&mut board);
+    /// Applies `setoption name <name> value <value>`; false if `name` is not one of these.
+    pub fn set_uci_option(&mut self, name: &str, value: &str) -> bool {
+        #[cfg(feature = "stockfish-nnue")]
+        {
+            if name.eq_ignore_ascii_case("EvalFile") {
+                self.stockfish_nets.big = value.into();
+                return true;
+            }
+            if name.eq_ignore_ascii_case("EvalFileSmall") {
+                self.stockfish_nets.small = value.into();
+                return true;
             }
         }
+        let _ = (name, value);
+        false
     }
 
-    #[test]
-    fn evaluation_is_symmetric_under_color_flip() {
-        nets();
-        let pairs = [
-            (
-                "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
-                "rnbqk2r/pppp1ppp/5n2/2b1p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R b KQkq - 4 4",
-            ),
-            ("8/5k2/8/3K4/8/8/1P6/8 b - - 0 1", "8/1p6/8/8/3k4/8/5K2/8 w - - 0 1"),
-        ];
-        for (fen, flipped) in pairs {
-            let a = evaluate(&mut Board::from_fen(fen).unwrap());
-            let b = evaluate(&mut Board::from_fen(flipped).unwrap());
-            assert_eq!(a, b, "{fen} vs {flipped}");
+    /// Loads the evaluator. It cannot be replaced afterwards.
+    pub fn load(&self) -> Result<(), String> {
+        #[cfg(feature = "stockfish-nnue")]
+        return stockfish::ensure_loaded(&self.stockfish_nets);
+        #[cfg(not(feature = "stockfish-nnue"))]
+        Err("this build has no evaluator".to_string())
+    }
+}
+
+/// The evaluator in use; chosen once, when its networks load.
+#[derive(Clone, Copy)]
+enum Active {
+    #[cfg(feature = "stockfish-nnue")]
+    Stockfish(&'static stockfish::Networks),
+}
+
+fn active() -> Option<Active> {
+    #[cfg(feature = "stockfish-nnue")]
+    if let Some(nets) = stockfish::loaded() {
+        return Some(Active::Stockfish(nets));
+    }
+    None
+}
+
+/// The incremental state of whichever evaluator a board was created for.
+#[derive(Clone)]
+pub enum EvalState {
+    /// Created before any evaluator was loaded; replaced on first evaluation.
+    Unset,
+    #[cfg(feature = "stockfish-nnue")]
+    Stockfish(stockfish::accumulator::AccumulatorStack),
+}
+
+impl EvalState {
+    /// State for the evaluator in use.
+    pub fn for_active() -> Self {
+        match active() {
+            #[cfg(feature = "stockfish-nnue")]
+            Some(Active::Stockfish(nets)) => Self::Stockfish(nets.new_state()),
+            None => Self::Unset,
         }
+    }
+
+    fn matches(&self, active: Active) -> bool {
+        match (self, active) {
+            #[cfg(feature = "stockfish-nnue")]
+            (Self::Stockfish(_), Active::Stockfish(_)) => true,
+            #[cfg(feature = "stockfish-nnue")]
+            (Self::Unset, _) => false,
+        }
+    }
+}
+
+impl IncrementalState for EvalState {
+    #[inline]
+    fn push_move(&mut self, before: PositionView, m: Move) {
+        match self {
+            Self::Unset => {}
+            #[cfg(feature = "stockfish-nnue")]
+            Self::Stockfish(stack) => stack.push_move(before, m),
+        }
+    }
+
+    #[inline]
+    fn pop_move(&mut self) {
+        match self {
+            Self::Unset => {}
+            #[cfg(feature = "stockfish-nnue")]
+            Self::Stockfish(stack) => stack.pop_move(),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Self::Unset => {}
+            #[cfg(feature = "stockfish-nnue")]
+            Self::Stockfish(stack) => stack.reset(),
+        }
+    }
+}
+
+/// Static evaluation in centipawns for the side to move; 0 if no evaluator is loaded.
+pub fn evaluate(board: &mut Board) -> i32 {
+    let Some(active) = active() else {
+        return 0;
+    };
+    let (state, position) = board.eval_state_and_view();
+    if !state.matches(active) {
+        *state = EvalState::for_active();
+    }
+    match (active, state) {
+        #[cfg(feature = "stockfish-nnue")]
+        (Active::Stockfish(nets), EvalState::Stockfish(stack)) => nets.evaluate(stack, position),
+        _ => 0,
     }
 }

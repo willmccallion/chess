@@ -1,7 +1,7 @@
 //! Input feature indices: HalfKAv2_hm (piece-square) and FullThreats (attacker-target pairs).
 
 use super::arch::{PSQ_DIMENSIONS, THREAT_DIMENSIONS};
-use super::threat_delta::PositionView;
+use crate::eval::PositionView;
 use crate::magics;
 use crate::types::{Bitboard, Color, Piece, PieceKind};
 use std::sync::OnceLock;

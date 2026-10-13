@@ -3,15 +3,16 @@
 use super::net_file::BigNetwork;
 use super::network::{NetOutput, bucket_for, evaluate_all_buckets};
 use crate::board::Board;
+use crate::eval::PositionView;
 use crate::types::{Color, Piece};
 use std::fmt::Write;
 
 /// Stockfish's WDL-model scale `a` for the material on the board.
-fn win_rate_scale(board: &Board) -> f64 {
+fn win_rate_scale(position: PositionView) -> f64 {
     let count = |pieces: [Piece; 2]| {
         pieces
             .iter()
-            .map(|p| board.piece_bb[p.index()].count_ones() as i32)
+            .map(|p| position.piece_bb[p.index()].count_ones() as i32)
             .sum::<i32>()
     };
     let material = count([Piece::WP, Piece::BP])
@@ -25,8 +26,8 @@ fn win_rate_scale(board: &Board) -> f64 {
 }
 
 /// Internal units to the centipawns Stockfish prints.
-pub fn to_cp(value: i32, board: &Board) -> i32 {
-    (100.0 * f64::from(value) / win_rate_scale(board)).round() as i32
+pub fn to_cp(value: i32, position: PositionView) -> i32 {
+    (100.0 * f64::from(value) / win_rate_scale(position)).round() as i32
 }
 
 fn aligned_pawns(value: i32, board: &Board) -> String {
@@ -35,7 +36,7 @@ fn aligned_pawns(value: i32, board: &Board) -> String {
         1 => '+',
         _ => ' ',
     };
-    let pawns = (0.01 * f64::from(to_cp(value, board))).abs();
+    let pawns = (0.01 * f64::from(to_cp(value, board.position_view()))).abs();
     format!("{sign}{pawns:6.2}")
 }
 
@@ -65,7 +66,7 @@ pub fn format_trace(big: &BigNetwork, board: &Board) -> String {
     let _ = writeln!(
         out,
         "NNUE evaluation        {:+.2} (white side)",
-        0.01 * f64::from(to_cp(white_relative, board))
+        0.01 * f64::from(to_cp(white_relative, board.position_view()))
     );
     out
 }

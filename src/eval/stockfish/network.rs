@@ -9,7 +9,7 @@ use super::arch::{
 use super::features::{active_psq_features, active_threat_features};
 use super::net_file::{FeatureTransformer, LayerStack, Network, ThreatWeights};
 use super::simd::{dot_u8_i8, pairwise_clipped_product, sparse_affine_16};
-use super::threat_delta::PositionView;
+use crate::eval::PositionView;
 use crate::board::Board;
 use crate::types::Color;
 

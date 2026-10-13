@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::eval::{self, NetPaths};
+use crate::eval::{self, EvalOptions};
 use crate::opening_book::get_book_move;
 use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
@@ -84,28 +84,19 @@ struct Options {
     threads: usize,
     own_book: bool,
     move_overhead_ms: i64,
-    eval_file: String,
-    eval_file_small: String,
+    eval: EvalOptions,
     search_params: SearchParams,
 }
 
-fn built_in_net_path(kind: eval::net_file::NetKind) -> String {
-    eval::default_net_path(kind).unwrap_or_default().to_string()
-}
-
-/// Loads the networks named by the options, or exits: the engine cannot play without them.
+/// Loads the evaluator named by the options, or exits: the engine cannot play without it.
 fn require_networks(options: &Options) {
-    let paths = NetPaths {
-        big: options.eval_file.clone().into(),
-        small: options.eval_file_small.clone().into(),
-    };
-    if let Err(e) = eval::ensure_loaded(&paths) {
+    if let Err(e) = options.eval.load() {
         send(&format!("info string ERROR: {e}"));
         std::process::exit(1);
     }
 }
 
-fn print_options() {
+fn print_options(options: &Options) {
     send(&format!(
         "option name Hash type spin default {DEFAULT_HASH_MB} min 1 max {MAX_HASH_MB}"
     ));
@@ -117,14 +108,9 @@ fn print_options() {
     send(&format!(
         "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD_MS} min 0 max {MAX_MOVE_OVERHEAD_MS}"
     ));
-    send(&format!(
-        "option name EvalFile type string default {}",
-        built_in_net_path(eval::net_file::NetKind::Big)
-    ));
-    send(&format!(
-        "option name EvalFileSmall type string default {}",
-        built_in_net_path(eval::net_file::NetKind::Small)
-    ));
+    for line in options.eval.uci_options() {
+        send(&line);
+    }
 }
 
 fn parse_position(rest: &str) -> Board {
@@ -148,7 +134,7 @@ fn parse_position(rest: &str) -> Board {
             };
             board.make_move(mv);
         }
-        board.forget_accumulator_history();
+        board.forget_eval_history();
     }
     board
 }
@@ -243,11 +229,9 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
         if let Ok(ms) = value.parse::<i64>() {
             options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
         }
-    } else if name.eq_ignore_ascii_case("EvalFile") {
-        options.eval_file = value.to_string();
-    } else if name.eq_ignore_ascii_case("EvalFileSmall") {
-        options.eval_file_small = value.to_string();
-    } else if let Ok(number) = value.parse::<i32>() {
+    } else if !options.eval.set_uci_option(name, value)
+        && let Ok(number) = value.parse::<i32>()
+    {
         // Tunable search parameters are accepted by name but not advertised.
         options.search_params.set(name, number);
     }
@@ -272,8 +256,7 @@ pub fn run_uci() {
         threads: DEFAULT_THREADS,
         own_book: true,
         move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
-        eval_file: built_in_net_path(eval::net_file::NetKind::Big),
-        eval_file_small: built_in_net_path(eval::net_file::NetKind::Small),
+        eval: EvalOptions::built_in(),
         search_params: SearchParams::default(),
     };
     let mut tt = SharedTransTable::new(options.hash_mb);
@@ -295,7 +278,7 @@ pub fn run_uci() {
             "uci" => {
                 send("id name chess");
                 send("id author Will");
-                print_options();
+                print_options(&options);
                 send("uciok");
             }
             "isready" => {

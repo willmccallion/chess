@@ -5,6 +5,7 @@
 //! the position. Each step reports the threats of and against the piece, plus the slider
 //! rays it opens (removal) or closes (placement).
 
+use crate::eval::PositionView;
 use crate::magics;
 use crate::types::{Bitboard, Color, Move, Piece, PieceKind, StackVec};
 
@@ -43,16 +44,6 @@ impl ThreatDeltas {
 }
 
 const MAX_OVERLAY: usize = 4;
-
-/// The parts of a position the replay reads; borrowed field by field so `Board::make_move`
-/// can fill its own accumulator stack.
-#[derive(Copy, Clone)]
-pub struct PositionView<'b> {
-    pub piece_on: &'b [Piece; 64],
-    pub piece_bb: &'b [Bitboard; 13],
-    pub occupied: Bitboard,
-    pub turn: Color,
-}
 
 /// The position part-way through a move: piece bitboards plus the squares changed so far.
 struct Replay<'b> {
