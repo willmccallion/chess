@@ -2,6 +2,7 @@ use chess::bench;
 use chess::board::Board;
 use chess::compare::{CompareConfig, run_compare};
 use chess::eval;
+use chess::game_runner::GameClock;
 use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search::{SearchControl, SearchLimits, SearchThreads, search};
@@ -100,6 +101,12 @@ enum Cmd {
         /// Increment in milliseconds per move
         #[arg(long, default_value_t = 50)]
         inc: u64,
+        /// Base time for engine 2 when it gets a different clock (time odds); defaults to --time
+        #[arg(long = "e2-time")]
+        e2_time: Option<u64>,
+        /// Increment for engine 2; defaults to --inc
+        #[arg(long = "e2-inc")]
+        e2_inc: Option<u64>,
         /// Number of games to play
         #[arg(long, default_value_t = 10)]
         rounds: usize,
@@ -306,6 +313,8 @@ fn main() {
             e2_options,
             time,
             inc,
+            e2_time,
+            e2_inc,
             rounds,
             concurrency,
             fen,
@@ -346,8 +355,14 @@ fn main() {
                 engine2_path: engine2,
                 e1_options: e1_opts,
                 e2_options: e2_opts,
-                base_time_ms: time,
-                increment_ms: inc,
+                e1_clock: GameClock {
+                    base_ms: time,
+                    increment_ms: inc,
+                },
+                e2_clock: GameClock {
+                    base_ms: e2_time.unwrap_or(time),
+                    increment_ms: e2_inc.unwrap_or(inc),
+                },
                 rounds,
                 concurrency,
                 start_fen: fen,

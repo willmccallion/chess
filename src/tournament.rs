@@ -1,4 +1,4 @@
-use crate::game_runner::{play_game, GameConfig, GameEndReason, GameResult};
+use crate::game_runner::{play_game, GameClock, GameConfig, GameEndReason, GameResult};
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::uci_client::UciEngine;
 use std::collections::HashMap;
@@ -12,8 +12,8 @@ pub struct TournamentConfig {
     pub engine2_path: String,
     pub e1_options: Vec<(String, String)>,
     pub e2_options: Vec<(String, String)>,
-    pub base_time_ms: u64,
-    pub increment_ms: u64,
+    pub e1_clock: GameClock,
+    pub e2_clock: GameClock,
     pub rounds: usize,
     pub concurrency: usize,
     pub start_fen: Option<String>,
@@ -363,6 +363,10 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     println!("=================================================================");
 }
 
+fn format_clock(clock: GameClock) -> String {
+    format!("{}ms + {}ms/move", clock.base_ms, clock.increment_ms)
+}
+
 pub fn run_tournament(mut config: TournamentConfig) {
     if config.rounds % 2 == 1 {
         config.rounds += 1;
@@ -390,10 +394,17 @@ pub fn run_tournament(mut config: TournamentConfig) {
         .unwrap_or(&config.engine2_path);
 
     println!("Tournament: {} vs {}", e1_name, e2_name);
-    println!(
-        "Time control: {}ms + {}ms/move",
-        config.base_time_ms, config.increment_ms
-    );
+    if config.e1_clock == config.e2_clock {
+        println!("Time control: {}", format_clock(config.e1_clock));
+    } else {
+        println!(
+            "Time control: {} {}, {} {}",
+            e1_name,
+            format_clock(config.e1_clock),
+            e2_name,
+            format_clock(config.e2_clock)
+        );
+    }
     println!(
         "Rounds: {}, Concurrency: {}",
         config.rounds, config.concurrency
@@ -465,14 +476,19 @@ pub fn run_tournament(mut config: TournamentConfig) {
                     break;
                 }
 
+                let e1_is_white = game_idx % 2 == 0;
+                let (white_clock, black_clock) = if e1_is_white {
+                    (config.e1_clock, config.e2_clock)
+                } else {
+                    (config.e2_clock, config.e1_clock)
+                };
                 let game_config = GameConfig {
-                    base_time_ms: config.base_time_ms,
-                    increment_ms: config.increment_ms,
+                    white_clock,
+                    black_clock,
                     max_moves: 300,
                     start_fen: config.start_fen_for_game(game_idx),
                 };
 
-                let e1_is_white = game_idx % 2 == 0;
                 let (white, black) = if e1_is_white {
                     (&mut e1, &mut e2)
                 } else {

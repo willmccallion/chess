@@ -29,9 +29,16 @@ pub struct GameOutcome {
     pub move_count: usize,
 }
 
-pub struct GameConfig {
-    pub base_time_ms: u64,
+/// One side's clock: starting time and the increment added after each move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameClock {
+    pub base_ms: u64,
     pub increment_ms: u64,
+}
+
+pub struct GameConfig {
+    pub white_clock: GameClock,
+    pub black_clock: GameClock,
     pub max_moves: usize,
     pub start_fen: Option<String>,
 }
@@ -76,8 +83,9 @@ pub fn play_game(
     };
 
     let is_startpos = config.start_fen.is_none();
-    let mut wtime = config.base_time_ms as i64;
-    let mut btime = config.base_time_ms as i64;
+    let mut wtime = config.white_clock.base_ms as i64;
+    let mut btime = config.black_clock.base_ms as i64;
+    let (winc, binc) = (config.white_clock.increment_ms, config.black_clock.increment_ms);
     let mut moves: Vec<String> = Vec::new();
     let mut ply = 0usize;
 
@@ -158,7 +166,7 @@ pub fn play_game(
 
         // Send go and measure time
         let start = Instant::now();
-        let bestmove = match engine.go(wtime, btime, config.increment_ms, config.increment_ms) {
+        let bestmove = match engine.go(wtime, btime, winc, binc) {
             Ok(m) => m,
             Err(_) => {
                 let result = if board.turn == Color::White {
@@ -176,10 +184,10 @@ pub fn play_game(
         let elapsed_ms = start.elapsed().as_millis() as i64;
 
         // Deduct time
-        let clock = if board.turn == Color::White {
-            &mut wtime
+        let (clock, increment_ms) = if board.turn == Color::White {
+            (&mut wtime, winc)
         } else {
-            &mut btime
+            (&mut btime, binc)
         };
         *clock -= elapsed_ms;
         if *clock <= 0 {
@@ -194,7 +202,7 @@ pub fn play_game(
                 move_count: ply,
             };
         }
-        *clock += config.increment_ms as i64;
+        *clock += increment_ms as i64;
 
         // Handle "(none)" or "0000"
         if bestmove == "(none)" || bestmove == "0000" {

@@ -5,7 +5,7 @@
 //! Workers run pairs concurrently and update the shared estimate as results arrive
 //! (the schedule and step sizes follow OpenBench).
 
-use crate::game_runner::{GameConfig, GameEndReason, GameResult, play_game};
+use crate::game_runner::{GameClock, GameConfig, GameEndReason, GameResult, play_game};
 use crate::search_params::{PARAM_SPECS, ParamSpec};
 use crate::tournament::spawn_and_init_pinned;
 use crate::uci_client::UciEngine;
@@ -204,9 +204,13 @@ fn play_pair(
 ) -> Result<Option<(i32, [GameResult; 2])>, String> {
     set_params(plus, &job.plus)?;
     set_params(minus, &job.minus)?;
-    let game = GameConfig {
-        base_time_ms: config.base_time_ms,
+    let clock = GameClock {
+        base_ms: config.base_time_ms,
         increment_ms: config.increment_ms,
+    };
+    let game = GameConfig {
+        white_clock: clock,
+        black_clock: clock,
         max_moves: MAX_MOVES,
         start_fen: Some(job.opening.clone()),
     };
