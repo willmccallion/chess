@@ -51,6 +51,7 @@ struct Score {
     stalemates: usize,
     repetitions: usize,
     fifty_move: usize,
+    insufficient_material: usize,
     flag_falls: usize,
     move_limits: usize,
     illegal_moves: usize,
@@ -84,6 +85,7 @@ impl Score {
             stalemates: 0,
             repetitions: 0,
             fifty_move: 0,
+            insufficient_material: 0,
             flag_falls: 0,
             move_limits: 0,
             illegal_moves: 0,
@@ -327,6 +329,7 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         ("Stalemate", s.stalemates),
         ("Repetition", s.repetitions),
         ("50-move rule", s.fifty_move),
+        ("Insufficient material", s.insufficient_material),
         ("Flag fall", s.flag_falls),
         ("Move limit", s.move_limits),
         ("Illegal move", s.illegal_moves),
@@ -335,7 +338,7 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     for (name, count) in &reasons {
         if *count > 0 {
             println!(
-                "    {:<14} {:>4}  ({})",
+                "    {:<21} {:>4}  ({})",
                 name,
                 count,
                 format_pct(*count, total),
@@ -552,6 +555,7 @@ pub fn run_tournament(mut config: TournamentConfig) {
                     GameEndReason::Stalemate => s.stalemates += 1,
                     GameEndReason::Repetition => s.repetitions += 1,
                     GameEndReason::FiftyMoveRule => s.fifty_move += 1,
+                    GameEndReason::InsufficientMaterial => s.insufficient_material += 1,
                     GameEndReason::FlagFall => s.flag_falls += 1,
                     GameEndReason::MoveLimitExceeded => s.move_limits += 1,
                     GameEndReason::IllegalMove => s.illegal_moves += 1,

@@ -158,6 +158,22 @@ impl Board {
         self.count_repetitions() >= 2
     }
 
+    /// Neither side can ever mate: bare kings plus at most one minor piece, or only
+    /// bishops that all stand on squares of one color.
+    pub fn has_insufficient_material(&self) -> bool {
+        const LIGHT_SQUARES: u64 = 0x55AA_55AA_55AA_55AA;
+        let bb = |p: Piece| self.piece_bb[p.index()];
+        let mating_material = bb(Piece::WP) | bb(Piece::BP) | bb(Piece::WR) | bb(Piece::BR) | bb(Piece::WQ) | bb(Piece::BQ);
+        if mating_material != 0 {
+            return false;
+        }
+        let knights = bb(Piece::WN) | bb(Piece::BN);
+        let bishops = bb(Piece::WB) | bb(Piece::BB);
+        let minor_count = (knights | bishops).count_ones();
+        let bishops_share_a_color = bishops & LIGHT_SQUARES == 0 || bishops & !LIGHT_SQUARES == 0;
+        minor_count <= 1 || (knights == 0 && bishops_share_a_color)
+    }
+
     /// Repetition draw inside search: any repeat of a position reached after the root,
     /// or a threefold repetition involving positions before the root.
     #[inline]
@@ -1610,6 +1626,29 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insufficient_material_covers_lone_minors_and_same_colored_bishops() {
+        let dead = [
+            "8/2k5/4K3/8/8/8/8/8 w - - 0 1",
+            "8/2k5/4K3/8/8/8/8/2N5 w - - 1 126",
+            "8/8/2kb4/8/8/8/2K5/8 b - - 1 123",
+            "8/8/2kb4/8/8/8/2K5/4B3 w - - 0 1",
+        ];
+        let alive = [
+            "8/8/2kb4/8/8/8/2K5/3B4 w - - 0 1",
+            "8/8/2kn4/8/8/8/2K5/3N4 w - - 0 1",
+            "8/8/2k5/8/8/8/2K5/2NN4 w - - 0 1",
+            "8/8/2k5/8/8/8/2KP4/8 w - - 0 1",
+            "8/8/2k5/8/8/8/2K5/7R w - - 0 1",
+        ];
+        for fen in dead {
+            assert!(Board::from_fen(fen).unwrap().has_insufficient_material(), "{fen}");
+        }
+        for fen in alive {
+            assert!(!Board::from_fen(fen).unwrap().has_insufficient_material(), "{fen}");
+        }
+    }
 
     fn move_key(m: &Move) -> (u8, u8, bool, bool, bool, bool, Option<PieceKind>) {
         (m.from, m.to, m.capture, m.en_passant, m.double_push, m.castle, m.promotion)

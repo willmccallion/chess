@@ -17,6 +17,7 @@ pub enum GameEndReason {
     Stalemate,
     Repetition,
     FiftyMoveRule,
+    InsufficientMaterial,
     MoveLimitExceeded,
     IllegalMove,
     EngineCrash,
@@ -50,6 +51,7 @@ impl std::fmt::Display for GameEndReason {
             Self::Stalemate => write!(f, "stalemate"),
             Self::Repetition => write!(f, "repetition"),
             Self::FiftyMoveRule => write!(f, "50-move rule"),
+            Self::InsufficientMaterial => write!(f, "insufficient material"),
             Self::MoveLimitExceeded => write!(f, "move limit"),
             Self::IllegalMove => write!(f, "illegal move"),
             Self::EngineCrash => write!(f, "engine crash"),
@@ -134,12 +136,16 @@ pub fn play_game(
         }
 
         // Check draw conditions
-        if board.is_draw_by_repetition() || board.halfmove_clock >= 100 {
-            let reason = if board.is_draw_by_repetition() {
-                GameEndReason::Repetition
-            } else {
-                GameEndReason::FiftyMoveRule
-            };
+        let draw_reason = if board.is_draw_by_repetition() {
+            Some(GameEndReason::Repetition)
+        } else if board.halfmove_clock >= 100 {
+            Some(GameEndReason::FiftyMoveRule)
+        } else if board.has_insufficient_material() {
+            Some(GameEndReason::InsufficientMaterial)
+        } else {
+            None
+        };
+        if let Some(reason) = draw_reason {
             return GameOutcome {
                 result: GameResult::Draw,
                 reason,
