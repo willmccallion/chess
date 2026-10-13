@@ -1253,40 +1253,73 @@ pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> 
     pv
 }
 
-fn format_score(score: i32) -> String {
-    if score.abs() > MATE_THRESHOLD {
-        let mate_in = (MATE_SCORE - score.abs() + 1) / 2;
-        format!("mate {}", if score > 0 { mate_in } else { -mate_in })
-    } else {
-        format!("cp {}", search_units_to_cp(score))
+/// A search score as reported to the user: centipawns, or moves until mate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Score {
+    Centipawns(i32),
+    /// Positive when the side to move mates, negative when it is mated.
+    MateIn(i32),
+}
+
+impl Score {
+    const fn from_search(score: i32) -> Self {
+        if score.abs() > MATE_THRESHOLD {
+            let mate_in = (MATE_SCORE - score.abs() + 1) / 2;
+            Self::MateIn(if score > 0 { mate_in } else { -mate_in })
+        } else {
+            Self::Centipawns(search_units_to_cp(score))
+        }
     }
 }
 
-fn print_iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) {
-    let elapsed_ms = s.tm.control.elapsed_ms();
-    let nps = if elapsed_ms > 0 {
-        s.tm.nodes * 1000 / elapsed_ms
-    } else {
-        0
+/// What the main thread reports after each completed iteration.
+#[derive(Clone, Debug)]
+pub struct IterationInfo {
+    pub depth: usize,
+    pub seldepth: usize,
+    /// From the point of view of the side to move at the root.
+    pub score: Score,
+    pub hashfull_permill: u32,
+    pub nodes: u64,
+    pub nps: u64,
+    pub time_ms: u64,
+    pub pv: Vec<Move>,
+}
+
+/// Receives each completed iteration from the main search thread.
+pub type InfoReporter<'a> = &'a (dyn Fn(&IterationInfo) + Sync);
+
+/// Prints an iteration as a UCI `info` line.
+pub fn print_uci_info(info: &IterationInfo) {
+    let score = match info.score {
+        Score::Centipawns(cp) => format!("cp {cp}"),
+        Score::MateIn(moves) => format!("mate {moves}"),
     };
-    let mut after_best = s.board.clone();
-    after_best.make_move(best_move);
-    let pv_str = std::iter::once(best_move)
-        .chain(get_pv_from_tt(after_best, s.tt, depth.saturating_sub(1)))
-        .map(format_uci)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let pv = info.pv.iter().map(|&m| format_uci(m)).collect::<Vec<_>>().join(" ");
     println!(
         "info depth {} seldepth {} score {} hashfull {} nodes {} nps {} time {} pv {}",
-        depth,
-        s.seldepth,
-        format_score(score),
-        s.tt.hashfull_permill(),
-        s.tm.nodes,
-        nps,
-        elapsed_ms,
-        pv_str
+        info.depth, info.seldepth, score, info.hashfull_permill, info.nodes, info.nps, info.time_ms, pv
     );
+}
+
+fn iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) -> IterationInfo {
+    let elapsed_ms = s.tm.control.elapsed_ms();
+    let nps = (s.tm.nodes * 1000).checked_div(elapsed_ms).unwrap_or(0);
+    let mut after_best = s.board.clone();
+    after_best.make_move(best_move);
+    let pv = std::iter::once(best_move)
+        .chain(get_pv_from_tt(after_best, s.tt, depth.saturating_sub(1)))
+        .collect();
+    IterationInfo {
+        depth,
+        seldepth: s.seldepth,
+        score: Score::from_search(score),
+        hashfull_permill: s.tt.hashfull_permill(),
+        nodes: s.tm.nodes,
+        nps,
+        time_ms: elapsed_ms,
+        pv,
+    }
 }
 
 fn legal_moves(board: &Board) -> MoveList {
@@ -1302,8 +1335,9 @@ fn iterative_deepening(
     td: &mut ThreadData,
     limits: SearchLimits,
     control: Arc<SearchControl>,
-    is_main_thread: bool,
+    reporter: Option<InfoReporter>,
 ) -> (Option<Move>, u64) {
+    let is_main_thread = reporter.is_some();
     let params = limits.params;
     let mut search = Search {
         board: board.clone(),
@@ -1359,8 +1393,8 @@ fn iterative_deepening(
         }
 
         let best_move = search.root_best.map(|(m, _)| m);
-        if is_main_thread && let Some(m) = best_move {
-            print_iteration_info(&search, depth, m, score);
+        if let (Some(report), Some(m)) = (reporter, best_move) {
+            report(&iteration_info(&search, depth, m, score));
         }
         let summary = IterationSummary {
             best_move,
@@ -1390,14 +1424,26 @@ fn wait_until_released(control: &SearchControl) {
     }
 }
 
-/// Runs a Lazy-SMP search with one thread per entry of `threads`; thread 0 reports
-/// and manages time.
+/// Runs a Lazy-SMP search with one thread per entry of `threads`; thread 0 prints UCI
+/// `info` lines and manages time.
 pub fn search(
     board: &Board,
     tt: &SharedTransTable,
     limits: SearchLimits,
     threads: &mut SearchThreads,
     control: &Arc<SearchControl>,
+) -> SearchResult {
+    search_reporting(board, tt, limits, threads, control, &print_uci_info)
+}
+
+/// Like [`search`], but hands each completed iteration to `reporter` instead of printing it.
+pub fn search_reporting(
+    board: &Board,
+    tt: &SharedTransTable,
+    limits: SearchLimits,
+    threads: &mut SearchThreads,
+    control: &Arc<SearchControl>,
+    reporter: InfoReporter,
 ) -> SearchResult {
     tt.tick_age();
 
@@ -1431,7 +1477,7 @@ pub fn search(
                     .name(format!("search-helper-{}", i + 1))
                     .stack_size(SEARCH_THREAD_STACK)
                     .spawn_scoped(scope, move || {
-                        iterative_deepening(board, tt, td, limits, helper_control, false)
+                        iterative_deepening(board, tt, td, limits, helper_control, None)
                             .1
                     })
                     .ok()
@@ -1450,7 +1496,7 @@ pub fn search(
                     main_td,
                     limits,
                     Arc::clone(&main_control),
-                    true,
+                    Some(reporter),
                 );
                 if limits.wait_for_stop {
                     wait_until_released(&main_control);
