@@ -32,6 +32,18 @@ You can interact with the engine in several ways:
 
 ---
 
+## Strength
+
+Roughly **3650–3750 Elo on the CCRL Blitz scale** (single thread). This is an estimate from local 200-game matches at 60+0.6, not an official rating:
+
+| Opponent (CCRL Blitz) | Result | Implied rating |
+| --- | --- | --- |
+| Carp 3.0.1 (3526) | 143–57, +160 ± 30 | ≈3690 |
+| Sirius 9.0 (3529) | 148.5–51.5, +184 ± 32 | ≈3710 |
+| Stockfish 18, 1 thread (3772) | 76.5–123.5, −83 ± 21 | ≈3690 |
+
+---
+
 ## Building
 
 The repository ships a Nix flake. With [direnv](https://direnv.net/) and nix-direnv, run `direnv allow` once; otherwise use `nix develop`. The dev shell provides:
