@@ -10,6 +10,7 @@ rand = "0.8"
 num_cpus = "1.16.0"
 byteorder = "1.4"
 once_cell = "*"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
 
 [profile.dev]
 opt-level = 2

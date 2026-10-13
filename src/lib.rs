@@ -22,6 +22,7 @@ pub mod sprt;
 pub mod time;
 pub mod tournament;
 pub mod tt;
+pub mod tui;
 pub mod types;
 pub mod uci;
 pub mod uci_client;

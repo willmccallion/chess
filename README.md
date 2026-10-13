@@ -4,8 +4,8 @@ This is a chess engine written in Rust. It’s designed to be simple, correct, a
 
 You can interact with the engine in several ways:
 
-- Play a game against it directly in your terminal.
-- Let it play games against itself.
+- Play it in your terminal with the mouse, with its evaluation shown or hidden.
+- Watch it play itself.
 - Connect it to a graphical chess program (Arena, Scid vs. PC, Cute Chess, etc.) and use a visual board via UCI.
 
 ---
@@ -74,27 +74,22 @@ perf record -g target/profiling/chess bench 16
 
 All examples below assume you’re running commands from the project root.
 
-### Playing a Game in the Terminal
+### Playing in the Terminal
 
-To play against the engine, use the `play-cli` command and specify how much time (in milliseconds) the engine may think for each move:
-
-```bash
-# Start a game where the engine thinks for up to 5 seconds per move
-cargo run --release -- play-cli --time 5000
-```
-
-Enter moves in UCI-style coordinate notation, for example: `e2e4`, `g1f3`, etc.
-
----
-
-### Watching the Engine Play Itself
-
-You can have the engine play a series of games against itself, which is useful for testing changes or just watching it in action:
+`play` opens a board in the terminal. Click or drag pieces with the mouse, or press Enter and type a move (`e2e4`, `Nf3`, `O-O`). To castle, move the king two squares or onto its rook.
 
 ```bash
-# The engine will play 5 games against itself, thinking 1 second per move
-cargo run --release -- self-play --rounds 5 --time 1000
+# Casual: the engine's evaluation, analysis of your position and takebacks are available
+cargo run --release -- play
+
+# A real game: no engine output and no takebacks until it ends, 5 minutes + 3 seconds each
+cargo run --release -- play --mode game --clock 5+3 --side black
+
+# Watch the engine play itself
+cargo run --release -- play --mode watch --movetime 1000
 ```
+
+Without `--clock` the engine thinks for `--movetime` milliseconds per move (default 3000). `--threads` and `--hash` set the engine's resources, and `--fen` starts from another position. Press `?` for the keys. You can hide the engine panel (`e`) and the move list (`l`), turn analysis on your turn on or off (`a`), flip the board (`f`), and switch the pieces between pictures, symbols and letters (`p`). On quitting, the game's moves and final position are printed.
 
 ---
 
