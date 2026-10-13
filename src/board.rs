@@ -1625,6 +1625,32 @@ impl Board {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn played_games_keep_the_same_legal_moves_as_a_board_read_from_their_fen() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+        let mut rng = StdRng::seed_from_u64(7);
+        for _ in 0..300 {
+            let mut board = Board::from_fen(crate::types::START_FEN).unwrap();
+            for _ in 0..120 {
+                let mut played = MoveList::new();
+                board.generate_legal_moves(&mut played);
+                let mut fresh_moves = MoveList::new();
+                Board::from_fen(&board.to_fen()).unwrap().generate_legal_moves(&mut fresh_moves);
+                let mut ours: Vec<_> = played.as_slice().iter().map(|m| (m.from, m.to, m.promotion)).collect();
+                let mut fresh: Vec<_> = fresh_moves.as_slice().iter().map(|m| (m.from, m.to, m.promotion)).collect();
+                ours.sort_unstable_by_key(|&(f, t, p)| (f, t, p.map(|k| k as u8)));
+                fresh.sort_unstable_by_key(|&(f, t, p)| (f, t, p.map(|k| k as u8)));
+                assert_eq!(ours, fresh, "{}", board.to_fen());
+                if played.is_empty() {
+                    break;
+                }
+                let m = played.get(rng.gen_range(0..played.len()));
+                board.make_move(m);
+            }
+        }
+    }
     use super::*;
 
     #[test]
