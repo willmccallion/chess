@@ -37,6 +37,33 @@ enum Cmd {
         #[arg(long)]
         divide: bool,
     },
+    /// Generate training positions from self-play, as `<FEN> | <score> | <result>` lines
+    Datagen {
+        /// File to create; an existing file is never overwritten
+        #[arg(long)]
+        out: std::path::PathBuf,
+        /// Stop after writing this many positions
+        #[arg(long, default_value_t = 1_000_000)]
+        positions: u64,
+        /// Games played in parallel (defaults to all logical CPUs)
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Nodes after which no new iteration starts
+        #[arg(long, default_value_t = 5000)]
+        soft_nodes: u64,
+        /// Nodes at which a search stops at once (defaults to 8x --soft-nodes)
+        #[arg(long)]
+        hard_nodes: Option<u64>,
+        /// Random moves from the start position before the engine plays (one more in half the games)
+        #[arg(long, default_value_t = 8)]
+        random_plies: usize,
+        /// Seed for the random openings (defaults to the clock)
+        #[arg(long)]
+        seed: Option<u64>,
+        /// Hash table per game in MB
+        #[arg(long, default_value_t = 16)]
+        hash: usize,
+    },
     /// Play the engine in an interactive terminal board, or watch it play itself
     Play {
         /// casual: engine evaluation, analysis and takebacks; game: no help until the game
@@ -263,6 +290,45 @@ fn main() {
             } else {
                 let n = perft(&mut b, depth);
                 println!("perft({depth}) = {n}");
+            }
+        }
+        Cmd::Datagen {
+            out,
+            positions,
+            threads,
+            soft_nodes,
+            hard_nodes,
+            random_plies,
+            seed,
+            hash,
+        } => {
+            require_networks(cli.eval);
+            let seed = seed.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos() as u64)
+            });
+            let config = chess::datagen::DatagenConfig {
+                output: out,
+                positions,
+                threads: threads.unwrap_or_else(num_cpus::get).max(1),
+                nodes: chess::search::NodeLimit {
+                    soft: soft_nodes.max(1),
+                    hard: hard_nodes.unwrap_or(soft_nodes.saturating_mul(8)).max(soft_nodes.max(1)),
+                },
+                random_plies,
+                seed,
+                hash_mb: hash.max(1),
+            };
+            eprintln!("datagen with the {} evaluator, seed {seed}", cli.eval.name());
+            match chess::datagen::run(&config) {
+                Ok(summary) => println!(
+                    "{} positions from {} games in {:.0}s",
+                    summary.positions,
+                    summary.games,
+                    summary.elapsed.as_secs_f64()
+                ),
+                Err(e) => exit_with_error(&format!("datagen failed: {e}")),
             }
         }
         Cmd::Play {

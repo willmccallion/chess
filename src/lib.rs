@@ -1,6 +1,7 @@
 pub mod bench;
 pub mod board;
 pub mod compare;
+pub mod datagen;
 pub mod eval;
 pub mod fen;
 pub mod game_runner;
