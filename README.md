@@ -202,3 +202,7 @@ python3 tools/nnue_check.py --stockfish "$STOCKFISH" --epd "$CHESS_BOOK_UHO" --c
 * **Stockfish**
   The networks are Stockfish's, and the network format, input features and evaluation
   follow the [Stockfish](https://github.com/official-stockfish/Stockfish) 18 source (GPLv3).
+
+## License
+
+This program is free software, released under the GNU General Public License version 3 or (at your option) any later version. See [LICENSE](LICENSE).
