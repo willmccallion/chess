@@ -1,11 +1,14 @@
 //! Static evaluation. Each backend implements [`Evaluator`]; a board carries the backend's
 //! incremental state in an [`EvalState`] and updates it on every make and unmake.
 
+pub mod bootstrap;
 #[cfg(feature = "stockfish-nnue")]
 pub mod stockfish;
 
 use crate::board::Board;
 use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody};
+use bootstrap::{Bootstrap, NoState};
+use std::sync::OnceLock;
 
 /// Most piece-square changes one move makes: castling moves two pieces.
 pub const MAX_PIECE_CHANGES: usize = 5;
@@ -68,26 +71,75 @@ pub trait Evaluator {
     fn evaluate(&self, state: &mut Self::State, position: PositionView) -> i32;
 }
 
+/// The evaluators this build can use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvalKind {
+    /// Stockfish 18's networks.
+    #[cfg(feature = "stockfish-nnue")]
+    Stockfish,
+    /// The hand-written evaluation that plays the first training games.
+    Bootstrap,
+}
+
+impl EvalKind {
+    pub const ALL: &[Self] = &[
+        #[cfg(feature = "stockfish-nnue")]
+        Self::Stockfish,
+        Self::Bootstrap,
+    ];
+
+    #[cfg(feature = "stockfish-nnue")]
+    pub const DEFAULT: Self = Self::Stockfish;
+    #[cfg(not(feature = "stockfish-nnue"))]
+    pub const DEFAULT: Self = Self::Bootstrap;
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            #[cfg(feature = "stockfish-nnue")]
+            Self::Stockfish => "stockfish",
+            Self::Bootstrap => "bootstrap",
+        }
+    }
+}
+
+impl std::str::FromStr for EvalKind {
+    type Err = String;
+
+    fn from_str(name: &str) -> Result<Self, String> {
+        Self::ALL.iter().copied().find(|kind| kind.name().eq_ignore_ascii_case(name)).ok_or_else(|| {
+            let names: Vec<&str> = Self::ALL.iter().map(|kind| kind.name()).collect();
+            format!("unknown evaluator '{name}'; expected one of: {}", names.join(", "))
+        })
+    }
+}
+
 /// Which evaluator to load and from which files, set from UCI options or the command line.
 #[derive(Clone, Debug)]
 pub struct EvalOptions {
+    pub kind: EvalKind,
     #[cfg(feature = "stockfish-nnue")]
     stockfish_nets: stockfish::NetPaths,
 }
 
 impl EvalOptions {
-    /// The networks baked in at build time.
+    /// The default evaluator, with the networks baked in at build time.
     pub fn built_in() -> Self {
         Self {
+            kind: EvalKind::DEFAULT,
             #[cfg(feature = "stockfish-nnue")]
             stockfish_nets: stockfish::NetPaths::built_in_or_empty(),
         }
     }
 
+    pub fn with_kind(kind: EvalKind) -> Self {
+        Self { kind, ..Self::built_in() }
+    }
+
     /// UCI `option` lines for these settings.
     pub fn uci_options(&self) -> Vec<String> {
+        let kinds: String = EvalKind::ALL.iter().map(|kind| format!(" var {}", kind.name())).collect();
         #[cfg_attr(not(feature = "stockfish-nnue"), expect(unused_mut))]
-        let mut lines = Vec::new();
+        let mut lines = vec![format!("option name Evaluator type combo default {}{kinds}", self.kind.name())];
         #[cfg(feature = "stockfish-nnue")]
         {
             let nets = &self.stockfish_nets;
@@ -99,6 +151,12 @@ impl EvalOptions {
 
     /// Applies `setoption name <name> value <value>`; false if `name` is not one of these.
     pub fn set_uci_option(&mut self, name: &str, value: &str) -> bool {
+        if name.eq_ignore_ascii_case("Evaluator") {
+            if let Ok(kind) = value.parse() {
+                self.kind = kind;
+            }
+            return true;
+        }
         #[cfg(feature = "stockfish-nnue")]
         {
             if name.eq_ignore_ascii_case("EvalFile") {
@@ -110,39 +168,56 @@ impl EvalOptions {
                 return true;
             }
         }
-        let _ = (name, value);
         false
     }
 
     /// Loads the evaluator. It cannot be replaced afterwards.
     pub fn load(&self) -> Result<(), String> {
-        #[cfg(feature = "stockfish-nnue")]
-        return stockfish::ensure_loaded(&self.stockfish_nets);
-        #[cfg(not(feature = "stockfish-nnue"))]
-        Err("this build has no evaluator".to_string())
+        if let Some(loaded) = ACTIVE.get() {
+            return if loaded.kind() == self.kind {
+                Ok(())
+            } else {
+                Err(format!("the {} evaluator is already loaded", loaded.kind().name()))
+            };
+        }
+        let active = match self.kind {
+            #[cfg(feature = "stockfish-nnue")]
+            EvalKind::Stockfish => {
+                stockfish::ensure_loaded(&self.stockfish_nets)?;
+                Active::Stockfish(stockfish::loaded().ok_or("the Stockfish networks did not load")?)
+            }
+            EvalKind::Bootstrap => Active::Bootstrap,
+        };
+        let _ = ACTIVE.set(active);
+        Ok(())
     }
 }
 
-/// The evaluator in use; chosen once, when its networks load.
+/// The evaluator in use.
 #[derive(Clone, Copy)]
 enum Active {
     #[cfg(feature = "stockfish-nnue")]
     Stockfish(&'static stockfish::Networks),
+    Bootstrap,
 }
 
-fn active() -> Option<Active> {
-    #[cfg(feature = "stockfish-nnue")]
-    if let Some(nets) = stockfish::loaded() {
-        return Some(Active::Stockfish(nets));
+impl Active {
+    const fn kind(self) -> EvalKind {
+        match self {
+            #[cfg(feature = "stockfish-nnue")]
+            Self::Stockfish(_) => EvalKind::Stockfish,
+            Self::Bootstrap => EvalKind::Bootstrap,
+        }
     }
-    None
 }
+
+static ACTIVE: OnceLock<Active> = OnceLock::new();
 
 /// The incremental state of whichever evaluator a board was created for.
 #[derive(Clone)]
 pub enum EvalState {
-    /// Created before any evaluator was loaded; replaced on first evaluation.
-    Unset,
+    /// Nothing kept: the evaluator needs no state, or none was loaded when the board was made.
+    Stateless,
     #[cfg(feature = "stockfish-nnue")]
     Stockfish(stockfish::accumulator::AccumulatorStack),
 }
@@ -150,19 +225,10 @@ pub enum EvalState {
 impl EvalState {
     /// State for the evaluator in use.
     pub fn for_active() -> Self {
-        match active() {
+        match ACTIVE.get() {
             #[cfg(feature = "stockfish-nnue")]
             Some(Active::Stockfish(nets)) => Self::Stockfish(nets.new_state()),
-            None => Self::Unset,
-        }
-    }
-
-    fn matches(&self, active: Active) -> bool {
-        match (self, active) {
-            #[cfg(feature = "stockfish-nnue")]
-            (Self::Stockfish(_), Active::Stockfish(_)) => true,
-            #[cfg(feature = "stockfish-nnue")]
-            (Self::Unset, _) => false,
+            Some(Active::Bootstrap) | None => Self::Stateless,
         }
     }
 }
@@ -171,7 +237,7 @@ impl IncrementalState for EvalState {
     #[inline]
     fn push_move(&mut self, before: PositionView, m: Move) {
         match self {
-            Self::Unset => {}
+            Self::Stateless => NoState.push_move(before, m),
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(stack) => stack.push_move(before, m),
         }
@@ -180,7 +246,7 @@ impl IncrementalState for EvalState {
     #[inline]
     fn pop_move(&mut self) {
         match self {
-            Self::Unset => {}
+            Self::Stateless => {}
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(stack) => stack.pop_move(),
         }
@@ -188,7 +254,7 @@ impl IncrementalState for EvalState {
 
     fn reset(&mut self) {
         match self {
-            Self::Unset => {}
+            Self::Stateless => {}
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(stack) => stack.reset(),
         }
@@ -197,16 +263,21 @@ impl IncrementalState for EvalState {
 
 /// Static evaluation in centipawns for the side to move; 0 if no evaluator is loaded.
 pub fn evaluate(board: &mut Board) -> i32 {
-    let Some(active) = active() else {
+    let Some(&active) = ACTIVE.get() else {
         return 0;
     };
-    let (state, position) = board.eval_state_and_view();
-    if !state.matches(active) {
-        *state = EvalState::for_active();
-    }
-    match (active, state) {
+    match active {
+        Active::Bootstrap => Bootstrap.evaluate(&mut NoState, board.position_view()),
         #[cfg(feature = "stockfish-nnue")]
-        (Active::Stockfish(nets), EvalState::Stockfish(stack)) => nets.evaluate(stack, position),
-        _ => 0,
+        Active::Stockfish(nets) => {
+            let (state, position) = board.eval_state_and_view();
+            if let EvalState::Stockfish(stack) = state {
+                return nets.evaluate(stack, position);
+            }
+            let mut stack = nets.new_state();
+            let score = nets.evaluate(&mut stack, position);
+            *state = EvalState::Stockfish(stack);
+            score
+        }
     }
 }

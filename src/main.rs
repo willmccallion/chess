@@ -21,6 +21,9 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "Chess engine with perft/uci/play modes"
 )]
 struct Cli {
+    /// Evaluation to use: stockfish (when built in) or bootstrap
+    #[arg(long, global = true, default_value = eval::EvalKind::DEFAULT.name())]
+    eval: eval::EvalKind,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -235,21 +238,21 @@ impl SideChoice {
 }
 
 /// Loads the networks baked in at build time, or exits: nothing can be evaluated without them.
-fn require_networks() {
-    if let Err(e) = eval::EvalOptions::built_in().load() {
-        exit_with_error(&format!("failed to load NNUE: {e}"));
+fn require_networks(kind: eval::EvalKind) {
+    if let Err(e) = eval::EvalOptions::with_kind(kind).load() {
+        exit_with_error(&format!("failed to load the {} evaluator: {e}", kind.name()));
     }
 }
 
 fn main() {
-    let cli = Cli::parse();
-    match cli.cmd.unwrap_or(Cmd::Uci) {
+    let mut cli = Cli::parse();
+    match cli.cmd.take().unwrap_or(Cmd::Uci) {
         Cmd::Perft {
             depth,
             fen,
             divide: div,
         } => {
-            require_networks();
+            require_networks(cli.eval);
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             let mut b = Board::from_fen(&fen_str).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
@@ -271,7 +274,7 @@ fn main() {
             threads,
             hash,
         } => {
-            require_networks();
+            require_networks(cli.eval);
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             let start = Board::from_fen(&fen_str)
                 .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error: {e}")));
@@ -291,7 +294,7 @@ fn main() {
             }
         }
         Cmd::Eval { fen } => {
-            require_networks();
+            require_networks(cli.eval);
             let mut b = Board::from_fen(&fen).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
                 std::process::exit(1);
@@ -327,7 +330,7 @@ fn main() {
             }
         }
         Cmd::Bench { depth, hash } => {
-            require_networks();
+            require_networks(cli.eval);
             match bench::run(depth, hash) {
                 Ok(result) => {
                     println!("===========================");
@@ -511,7 +514,7 @@ fn main() {
                 Err(e) => exit_with_error(&e),
             }
         }
-        Cmd::Uci => uci::run_uci(),
+        Cmd::Uci => uci::run_uci(cli.eval),
     }
 }
 

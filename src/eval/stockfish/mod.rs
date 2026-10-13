@@ -91,13 +91,6 @@ pub fn ensure_loaded(paths: &NetPaths) -> Result<(), String> {
     Ok(())
 }
 
-/// Loads the networks baked in at build time.
-pub fn ensure_built_in_loaded() -> Result<(), String> {
-    let paths = NetPaths::built_in()
-        .ok_or("no network paths were set at build time; build inside the dev shell")?;
-    ensure_loaded(&paths)
-}
-
 fn run_net(net: &Network, sums: &PerspectiveSums, side_to_move: Color, bucket: usize) -> NetOutput {
     let mut transformed = [0u8; accumulator::BIG_HALF];
     let transformed = &mut transformed[..net.transformer.half_dims];
@@ -236,7 +229,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     fn nets() -> &'static Networks {
-        ensure_built_in_loaded().unwrap();
+        crate::eval::EvalOptions::with_kind(crate::eval::EvalKind::Stockfish).load().unwrap();
         NETWORKS.get().unwrap()
     }
 

@@ -249,14 +249,14 @@ fn print_eval(board: &mut Board) {
     send(&format!("info string fen: {}", board.to_fen()));
 }
 
-pub fn run_uci() {
+pub fn run_uci(eval_kind: crate::eval::EvalKind) {
     let mut board = Board::from_fen(START_FEN).expect("valid startpos");
     let mut options = Options {
         hash_mb: DEFAULT_HASH_MB,
         threads: DEFAULT_THREADS,
         own_book: true,
         move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
-        eval: EvalOptions::built_in(),
+        eval: EvalOptions::with_kind(eval_kind),
         search_params: SearchParams::default(),
     };
     let mut tt = SharedTransTable::new(options.hash_mb);
