@@ -119,6 +119,7 @@ fn serve(requests: &Receiver<Request>, replies: &Sender<Reply>, threads: usize, 
                     max_depth: MAX_DEPTH,
                     params: SearchParams::default(),
                     wait_for_stop: budget.is_none(),
+                    nodes: None,
                 };
                 let report = |info: &IterationInfo| {
                     let _ = replies.send(Reply::Info {

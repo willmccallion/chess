@@ -62,6 +62,7 @@ pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
         params: SearchParams::default(),
         max_depth: depth,
         wait_for_stop: false,
+        nodes: None,
     };
     let mut nodes = 0u64;
     let start = Instant::now();

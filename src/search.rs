@@ -109,18 +109,37 @@ impl SearchControl {
     }
 }
 
+/// A node budget for the main thread: no new iteration once `soft` nodes are searched,
+/// and an immediate stop at `hard`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct NodeLimit {
+    pub soft: u64,
+    pub hard: u64,
+}
+
 #[derive(Copy, Clone)]
 pub struct SearchLimits {
     pub max_depth: usize,
     pub params: SearchParams,
     /// `go infinite` / `go ponder`: never return before `stop` (or `ponderhit` sets a budget).
     pub wait_for_stop: bool,
+    pub nodes: Option<NodeLimit>,
 }
 
 pub struct SearchResult {
     pub best_move: Option<Move>,
     pub ponder_move: Option<Move>,
     pub nodes: u64,
+    /// Score of the last completed iteration, for the side to move.
+    pub score: Option<Score>,
+}
+
+/// What one thread's iterative deepening found.
+struct ThreadOutcome {
+    best_move: Option<Move>,
+    nodes: u64,
+    /// Search score of the last completed iteration.
+    score: Option<i32>,
 }
 
 /// Move-ordering statistics one search thread keeps between `go` commands.
@@ -203,16 +222,18 @@ impl LmrTables {
 struct TimeManager {
     control: Arc<SearchControl>,
     is_main_thread: bool,
+    node_limit: Option<NodeLimit>,
     nodes: u64,
     best_move_stability: usize,
     previous_best_move: Option<Move>,
 }
 
 impl TimeManager {
-    fn new(control: Arc<SearchControl>, is_main_thread: bool) -> Self {
+    fn new(control: Arc<SearchControl>, is_main_thread: bool, node_limit: Option<NodeLimit>) -> Self {
         Self {
             control,
             is_main_thread,
+            node_limit,
             nodes: 0,
             best_move_stability: 0,
             previous_best_move: None,
@@ -222,6 +243,13 @@ impl TimeManager {
     #[inline(always)]
     fn check_hard_limit(&mut self) -> bool {
         if self.control.is_stopped() {
+            return true;
+        }
+        if self.is_main_thread
+            && let Some(limit) = self.node_limit
+            && self.nodes >= limit.hard
+        {
+            self.control.stop();
             return true;
         }
         if self.is_main_thread
@@ -244,6 +272,9 @@ impl TimeManager {
         }
         self.previous_best_move = best_move;
 
+        if self.is_main_thread && self.node_limit.is_some_and(|limit| self.nodes >= limit.soft) {
+            return true;
+        }
         if !self.is_main_thread || !self.control.is_timed() || self.control.is_fixed_time() {
             return false;
         }
@@ -1328,7 +1359,7 @@ fn legal_moves(board: &Board) -> MoveList {
     moves
 }
 
-/// Iterative deepening on one thread; returns the best root move and the nodes searched.
+/// Iterative deepening on one thread.
 fn iterative_deepening(
     board: &Board,
     tt: &SharedTransTable,
@@ -1336,14 +1367,14 @@ fn iterative_deepening(
     limits: SearchLimits,
     control: Arc<SearchControl>,
     reporter: Option<InfoReporter>,
-) -> (Option<Move>, u64) {
+) -> ThreadOutcome {
     let is_main_thread = reporter.is_some();
     let params = limits.params;
     let mut search = Search {
         board: board.clone(),
         tt,
         td,
-        tm: TimeManager::new(control, is_main_thread),
+        tm: TimeManager::new(control, is_main_thread, limits.nodes),
         killers: [[None; 2]; MAX_PLY],
         stack: [StackEntry::default(); MAX_PLY + 1],
         ply: 0,
@@ -1355,6 +1386,7 @@ fn iterative_deepening(
     };
 
     let mut score = 0;
+    let mut completed_score = None;
     for depth in 1..=limits.max_depth {
         let previous_score = score;
         search.seldepth = 0;
@@ -1391,6 +1423,7 @@ fn iterative_deepening(
         if aborted {
             break;
         }
+        completed_score = Some(score);
 
         let best_move = search.root_best.map(|(m, _)| m);
         if let (Some(report), Some(m)) = (reporter, best_move) {
@@ -1409,7 +1442,11 @@ fn iterative_deepening(
         }
     }
 
-    (search.root_best.map(|(m, _)| m), search.tm.nodes)
+    ThreadOutcome {
+        best_move: search.root_best.map(|(m, _)| m),
+        nodes: search.tm.nodes,
+        score: completed_score,
+    }
 }
 
 fn ponder_move_after(board: &Board, best_move: Move, tt: &SharedTransTable) -> Option<Move> {
@@ -1456,6 +1493,7 @@ pub fn search_reporting(
             best_move: None,
             ponder_move: None,
             nodes: 0,
+            score: None,
         };
     }
     if root_moves.len() == 1 && control.is_timed() && !limits.wait_for_stop {
@@ -1463,11 +1501,12 @@ pub fn search_reporting(
             best_move: Some(root_moves.get(0)),
             ponder_move: None,
             nodes: 0,
+            score: None,
         };
     }
 
     let (main_td, helper_tds) = threads.data.split_at_mut(1);
-    let (best_move, nodes) = thread::scope(|scope| {
+    let (main, nodes) = thread::scope(|scope| {
         let helpers: Vec<_> = helper_tds
             .iter_mut()
             .enumerate()
@@ -1478,7 +1517,7 @@ pub fn search_reporting(
                     .stack_size(SEARCH_THREAD_STACK)
                     .spawn_scoped(scope, move || {
                         iterative_deepening(board, tt, td, limits, helper_control, None)
-                            .1
+                            .nodes
                     })
                     .ok()
             })
@@ -1505,22 +1544,29 @@ pub fn search_reporting(
                 result
             });
 
-        let (best_move, main_nodes) = match main {
-            Ok(handle) => handle.join().unwrap_or((None, 0)),
+        let failed = || ThreadOutcome {
+            best_move: None,
+            nodes: 0,
+            score: None,
+        };
+        let main = match main {
+            Ok(handle) => handle.join().unwrap_or_else(|_| failed()),
             Err(_) => {
                 control.stop();
-                (None, 0)
+                failed()
             }
         };
         let helper_nodes: u64 = helpers.into_iter().map(|h| h.join().unwrap_or(0)).sum();
-        (best_move, main_nodes + helper_nodes)
+        let nodes = main.nodes + helper_nodes;
+        (main, nodes)
     });
 
-    let best_move = best_move.or(Some(root_moves.get(0)));
+    let best_move = main.best_move.or(Some(root_moves.get(0)));
     let ponder_move = best_move.and_then(|m| ponder_move_after(board, m, tt));
     SearchResult {
         best_move,
         ponder_move,
         nodes,
+        score: main.score.map(Score::from_search),
     }
 }

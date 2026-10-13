@@ -1,7 +1,7 @@
 use crate::board::Board;
 use crate::eval::{self, EvalOptions};
 use crate::opening_book::get_book_move;
-use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
+use crate::search::{NodeLimit, SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
@@ -182,6 +182,10 @@ fn start_search(
         params: options.search_params,
         max_depth,
         wait_for_stop: is_ponder || is_infinite,
+        nodes: extract_i64(go_args, "nodes").map(|n| {
+            let n = n.max(1) as u64;
+            NodeLimit { soft: n, hard: n }
+        }),
     };
     let board = board.clone();
     let tt = tt.clone();
