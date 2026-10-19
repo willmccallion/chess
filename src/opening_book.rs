@@ -132,9 +132,13 @@ impl OpeningBook {
     }
 }
 
-static BOOK: OnceLock<Option<OpeningBook>> = OnceLock::new();
+/// The book and the file it came from, or every path that was tried.
+type LoadedBook = Result<(OpeningBook, PathBuf), Vec<PathBuf>>;
 
-fn get_book() -> &'static Option<OpeningBook> {
+static BOOK: OnceLock<LoadedBook> = OnceLock::new();
+static LOAD_REPORTED: OnceLock<()> = OnceLock::new();
+
+fn load_book() -> &'static LoadedBook {
     BOOK.get_or_init(|| {
         let book_filename = "moves/book.bin";
         let mut potential_paths: Vec<PathBuf> = Vec::new();
@@ -158,21 +162,60 @@ fn get_book() -> &'static Option<OpeningBook> {
             potential_paths.push(project_root.join(book_filename));
         }
 
-        for path in potential_paths {
-            if let Ok(book) = OpeningBook::new(path.to_str().unwrap())
+        for path in &potential_paths {
+            if let Some(book) = path.to_str().and_then(|p| OpeningBook::new(p).ok())
                 && path.exists()
             {
-                println!("info string Loaded opening book from: {}", path.display());
-                return Some(book);
+                return Ok((book, path.clone()));
             }
         }
-
-        println!(
-            "info string Opening book '{}' not found in any standard location.",
-            book_filename
-        );
-        None
+        Err(potential_paths)
     })
+}
+
+/// The book for UCI play, announcing on stdout once where it was loaded from.
+fn get_book() -> Option<&'static OpeningBook> {
+    let loaded = load_book();
+    LOAD_REPORTED.get_or_init(|| match loaded {
+        Ok((_, path)) => println!("info string Loaded opening book from: {}", path.display()),
+        Err(_) => println!("info string Opening book 'moves/book.bin' not found in any standard location."),
+    });
+    loaded.as_ref().ok().map(|(book, _)| book)
+}
+
+/// A book move with its relative weight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeightedMove {
+    pub m: Move,
+    pub weight: u16,
+}
+
+/// The book's moves for `b`, without printing anything; empty when there is no book.
+pub fn book_moves(b: &Board) -> Vec<WeightedMove> {
+    let Ok((book, _)) = load_book() else {
+        return Vec::new();
+    };
+    let key = polyglot_zobrist::calculate_key(b);
+    book.find_entries(key)
+        .iter()
+        .filter_map(|e| e.to_move().map(|m| WeightedMove { m, weight: e.weight }))
+        .collect()
+}
+
+/// The book's moves for `b` as legal moves (with their capture and castling flags set).
+pub fn legal_book_moves(b: &Board) -> Vec<WeightedMove> {
+    let mut legal = crate::types::MoveList::new();
+    b.generate_legal_moves(&mut legal);
+    book_moves(b)
+        .into_iter()
+        .filter_map(|w| {
+            legal
+                .as_slice()
+                .iter()
+                .find(|m| m.from == w.m.from && m.to == w.m.to && m.promotion == w.m.promotion)
+                .map(|&m| WeightedMove { m, weight: w.weight })
+        })
+        .collect()
 }
 
 pub fn get_book_move(b: &Board) -> Option<String> {
