@@ -1,11 +1,13 @@
+use crate::analysis::Searcher;
 use crate::board::Board;
 use crate::eval::{self, EvalOptions};
-use crate::opening_book::get_book_move;
+use crate::coach::bot::{Level, choose_move, pick_weighted};
+use crate::opening_book::{get_book_move, legal_book_moves};
 use crate::search::{NodeLimit, SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
-use crate::types::START_FEN;
+use crate::types::{Color, Move, START_FEN};
 use crate::uci_io::{format_uci, parse_uci_move};
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -18,6 +20,8 @@ const MAX_THREADS: usize = 128;
 const DEFAULT_MOVE_OVERHEAD_MS: i64 = 10;
 const MAX_MOVE_OVERHEAD_MS: i64 = 5000;
 const MAX_DEPTH: usize = 127;
+/// Hash for the coach bot's small per-move searches.
+const COACH_HASH_MB: usize = 16;
 
 #[inline]
 fn extract_i64(cmd: &str, key: &str) -> Option<i64> {
@@ -80,6 +84,8 @@ fn stop_search(active: &mut Option<ActiveSearch>, threads: &mut Option<SearchThr
 }
 
 struct Options {
+    /// When set, `go` plays like this coach level instead of at full strength.
+    coach_level: Option<Level>,
     hash_mb: usize,
     threads: usize,
     own_book: bool,
@@ -105,6 +111,7 @@ fn print_options(options: &Options) {
     ));
     send("option name Ponder type check default false");
     send("option name OwnBook type check default true");
+    send(&format!("option name CoachLevel type spin default 0 min 0 max {}", Level::STRONGEST.number()));
     send(&format!(
         "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD_MS} min 0 max {MAX_MOVE_OVERHEAD_MS}"
     ));
@@ -229,6 +236,8 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
         }
     } else if name.eq_ignore_ascii_case("OwnBook") {
         options.own_book = parse_check_value(value);
+    } else if name.eq_ignore_ascii_case("CoachLevel") {
+        options.coach_level = value.parse::<u8>().ok().and_then(Level::new);
     } else if name.eq_ignore_ascii_case("Move Overhead") {
         if let Ok(ms) = value.parse::<i64>() {
             options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
@@ -239,6 +248,23 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
         // Tunable search parameters are accepted by name but not advertised.
         options.search_params.set(name, number);
     }
+}
+
+/// The coach bot's move at `level`: from the book early on, otherwise from every move's
+/// score with the level's errors mixed in. Runs to completion; `stop` is not checked.
+fn coach_move(board: &Board, level: Level, remaining_ms: Option<i64>, searcher: &mut Searcher) -> Option<Move> {
+    let spec = level.spec();
+    let mut rng = rand::thread_rng();
+    let ply = (board.fullmove_number.max(1) as usize - 1) * 2 + usize::from(board.turn == Color::Black);
+    if ply < spec.book_plies {
+        let book: Vec<(Move, u16)> = legal_book_moves(board).iter().map(|w| (w.m, w.weight)).collect();
+        if let Some(m) = pick_weighted(&book, &mut rng) {
+            return Some(m);
+        }
+    }
+    let control = SearchControl::new(None);
+    let scores = searcher.score_moves(board, spec.nodes_for_clock(remaining_ms), &control)?;
+    choose_move(&scores, spec, &mut rng)
 }
 
 fn print_eval(board: &mut Board) {
@@ -256,6 +282,7 @@ fn print_eval(board: &mut Board) {
 pub fn run_uci(eval_kind: crate::eval::EvalKind) {
     let mut board = Board::from_fen(START_FEN).expect("valid startpos");
     let mut options = Options {
+        coach_level: None,
         hash_mb: DEFAULT_HASH_MB,
         threads: DEFAULT_THREADS,
         own_book: true,
@@ -266,6 +293,7 @@ pub fn run_uci(eval_kind: crate::eval::EvalKind) {
     let mut tt = SharedTransTable::new(options.hash_mb);
     let mut active: Option<ActiveSearch> = None;
     let mut threads = Some(SearchThreads::new(options.threads));
+    let mut coach_searcher: Option<Searcher> = None;
 
     let stdin = io::stdin();
     let mut line = String::new();
@@ -291,6 +319,9 @@ pub fn run_uci(eval_kind: crate::eval::EvalKind) {
             }
             "ucinewgame" => {
                 stop_search(&mut active, &mut threads, options.threads);
+                if let Some(searcher) = coach_searcher.as_mut() {
+                    searcher.clear();
+                }
                 tt.clear();
                 if let Some(t) = threads.as_mut() {
                     t.clear();
@@ -309,6 +340,13 @@ pub fn run_uci(eval_kind: crate::eval::EvalKind) {
             "go" => {
                 stop_search(&mut active, &mut threads, options.threads);
                 require_networks(&options);
+                if let Some(level) = options.coach_level {
+                    let searcher = coach_searcher.get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
+                    let clock_key = if board.turn == Color::White { "wtime" } else { "btime" };
+                    let chosen = coach_move(&board, level, extract_i64(rest, clock_key), searcher);
+                    send(&format!("bestmove {}", chosen.map_or_else(|| "0000".to_string(), format_uci)));
+                    continue;
+                }
                 if options.own_book
                     && !has_token(rest, "infinite")
                     && let Some(book_uci) = get_book_move(&board)
