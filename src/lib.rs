@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod bench;
 pub mod board;
 pub mod compare;

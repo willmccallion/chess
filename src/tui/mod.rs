@@ -9,7 +9,7 @@ mod view;
 pub use app::{Mode, PlayConfig, TimeSetting, parse_clock};
 
 use app::{App, EngineTask, TaskKind};
-use engine::{Engine, Reply, SearchId};
+use engine::{Engine, Reply, SearchId, SearchLimit};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton,
@@ -75,7 +75,7 @@ impl Session {
         engine.stop();
         self.running = wanted.map(|task| {
             let budget = (task.kind == TaskKind::Think).then(|| app.think_budget(now));
-            (task, engine.start(app.board(), budget))
+            (task, engine.start(app.board(), SearchLimit::Time(budget)))
         });
     }
 
@@ -91,13 +91,13 @@ impl Session {
                 let root = app.board().clone();
                 app.record_engine_info(task.kind, &root, &info);
             }
-            Reply::Done { id, best_move } if id == running_id => {
+            Reply::Done { id, outcome } if id == running_id => {
                 self.running = None;
-                if let (TaskKind::Think, Some(m)) = (task.kind, best_move) {
+                if let (TaskKind::Think, Some(m)) = (task.kind, outcome.best_move) {
                     app.play_engine_move(m, now);
                 }
             }
-            Reply::Info { .. } | Reply::Done { .. } => {}
+            Reply::Info { .. } | Reply::Done { .. } | Reply::MoveScores { .. } => {}
         }
     }
 }

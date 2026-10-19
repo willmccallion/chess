@@ -1,15 +1,13 @@
+pub use crate::analysis::{SearchLimit, SearchOutcome};
+use crate::analysis::Searcher;
 use crate::board::Board;
-use crate::search::{IterationInfo, SearchControl, SearchLimits, SearchThreads, search_reporting};
-use crate::search_params::SearchParams;
+use crate::search::{IterationInfo, Score, SearchControl};
 use crate::time::TimeBudget;
-use crate::tt::SharedTransTable;
 use crate::types::Move;
 use std::io;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
-
-const MAX_DEPTH: usize = 64;
 
 /// Identifies one search, so replies from a search that was stopped can be ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,7 +17,13 @@ enum Request {
     Search {
         id: SearchId,
         board: Box<Board>,
-        budget: Option<TimeBudget>,
+        limit: SearchLimit,
+        control: Arc<SearchControl>,
+    },
+    ScoreMoves {
+        id: SearchId,
+        board: Box<Board>,
+        nodes_per_move: u64,
         control: Arc<SearchControl>,
     },
     NewGame,
@@ -27,7 +31,9 @@ enum Request {
 
 pub enum Reply {
     Info { id: SearchId, info: IterationInfo },
-    Done { id: SearchId, best_move: Option<Move> },
+    Done { id: SearchId, outcome: SearchOutcome },
+    /// Every legal move with its score for the side that plays it.
+    MoveScores { id: SearchId, scores: Vec<(Move, Score)> },
 }
 
 /// A search thread pool running in the background, one search at a time.
@@ -55,20 +61,40 @@ impl Engine {
         })
     }
 
-    /// Stops any running search and starts one on `board`; no budget means until stopped.
-    pub fn start(&mut self, board: &Board, budget: Option<TimeBudget>) -> SearchId {
-        self.stop();
-        self.next_id += 1;
-        let id = SearchId(self.next_id);
-        let control = SearchControl::new(budget);
-        self.running = Some(Arc::clone(&control));
+    /// Stops any running search and starts one on `board`.
+    pub fn start(&mut self, board: &Board, limit: SearchLimit) -> SearchId {
+        let budget = match limit {
+            SearchLimit::Time(budget) => budget,
+            SearchLimit::Nodes(_) => None,
+        };
+        let (id, control) = self.begin(budget);
         self.send(Request::Search {
             id,
             board: Box::new(board.clone()),
-            budget,
+            limit,
             control,
         });
         id
+    }
+
+    /// Stops any running search and scores every legal move on `board` with its own search.
+    pub fn score_moves(&mut self, board: &Board, nodes_per_move: u64) -> SearchId {
+        let (id, control) = self.begin(None);
+        self.send(Request::ScoreMoves {
+            id,
+            board: Box::new(board.clone()),
+            nodes_per_move,
+            control,
+        });
+        id
+    }
+
+    fn begin(&mut self, budget: Option<TimeBudget>) -> (SearchId, Arc<SearchControl>) {
+        self.stop();
+        self.next_id += 1;
+        let control = SearchControl::new(budget);
+        self.running = Some(Arc::clone(&control));
+        (SearchId(self.next_id), control)
     }
 
     pub fn stop(&mut self) {
@@ -105,38 +131,35 @@ impl Drop for Engine {
 }
 
 fn serve(requests: &Receiver<Request>, replies: &Sender<Reply>, threads: usize, hash_mb: usize) {
-    let tt = SharedTransTable::new(hash_mb);
-    let mut search_threads = SearchThreads::new(threads);
+    let mut searcher = Searcher::new(threads, hash_mb);
     for request in requests {
         match request {
             Request::Search {
                 id,
                 board,
-                budget,
+                limit,
                 control,
             } => {
-                let limits = SearchLimits {
-                    max_depth: MAX_DEPTH,
-                    params: SearchParams::default(),
-                    wait_for_stop: budget.is_none(),
-                    nodes: None,
-                };
                 let report = |info: &IterationInfo| {
                     let _ = replies.send(Reply::Info {
                         id,
                         info: info.clone(),
                     });
                 };
-                let result = search_reporting(&board, &tt, limits, &mut search_threads, &control, &report);
-                let _ = replies.send(Reply::Done {
-                    id,
-                    best_move: result.best_move,
-                });
+                let outcome = searcher.search(&board, limit, &control, &report);
+                let _ = replies.send(Reply::Done { id, outcome });
             }
-            Request::NewGame => {
-                tt.clear();
-                search_threads.clear();
+            Request::ScoreMoves {
+                id,
+                board,
+                nodes_per_move,
+                control,
+            } => {
+                if let Some(scores) = searcher.score_moves(&board, nodes_per_move, &control) {
+                    let _ = replies.send(Reply::MoveScores { id, scores });
+                }
             }
+            Request::NewGame => searcher.clear(),
         }
     }
 }
