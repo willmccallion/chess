@@ -1,5 +1,6 @@
 pub mod bot;
 pub mod endgames;
+pub mod explain;
 pub mod habits;
 pub mod judgement;
 pub mod profile;

@@ -160,7 +160,7 @@ impl Cause {
     }
 }
 
-fn points_text(points: i32) -> String {
+pub(super) fn points_text(points: i32) -> String {
     match points {
         1 => "a pawn".to_string(),
         2 => "the exchange or two pawns".to_string(),
@@ -371,7 +371,7 @@ fn was_already_attacked(board: &Board, square: u8) -> bool {
 
 /// How many points of material `side` gains along `line` from `board`, measured once the
 /// captures in the line have settled.
-fn material_gain_along(board: &Board, line: &[Move], side: Color) -> i32 {
+pub(super) fn material_gain_along(board: &Board, line: &[Move], side: Color) -> i32 {
     let start = material_balance(board, side);
     let mut position = board.clone();
     let mut settled = start;
