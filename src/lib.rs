@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod bench;
 pub mod board;
+pub mod coach;
 pub mod compare;
 pub mod datagen;
 pub mod eval;
