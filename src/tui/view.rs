@@ -1,4 +1,5 @@
 use super::app::{App, EngineLine, GameEnd, Mode, PieceStyle, TaskKind, TimeSetting};
+use super::octants;
 use super::sprites::{self, Pixel};
 use crate::game_runner::GameResult;
 use crate::search::Score;
@@ -34,7 +35,7 @@ const WHITE_SPRITE_OUTLINE: Rgb = Rgb::Rgb(35, 35, 35);
 const BLACK_SPRITE_FILL: Rgb = Rgb::Rgb(45, 45, 45);
 const BLACK_SPRITE_OUTLINE: Rgb = Rgb::Rgb(0, 0, 0);
 /// Squares shorter than this are too coarse for pixel-art pieces.
-const MIN_SPRITE_SQUARE_HEIGHT: u16 = 4;
+const MIN_SPRITE_SQUARE_HEIGHT: u16 = 2;
 const BAR_WHITE: Rgb = Rgb::Rgb(235, 235, 235);
 const BAR_BLACK: Rgb = Rgb::Rgb(55, 55, 55);
 const LABEL: Rgb = Rgb::Gray;
@@ -259,7 +260,7 @@ fn draw_piece(buf: &mut Buffer, rect: Rect, piece: Piece, style: PieceStyle, bac
     }
 }
 
-/// Two pixels per cell: the upper half block in the top pixel's colour over the bottom's.
+/// Eight pixels per cell, two across and four down, drawn as octant blocks.
 fn draw_sprite(buf: &mut Buffer, rect: Rect, kind: PieceKind, color: Color, background: Rgb) {
     let (fill, outline) = match color {
         Color::White => (WHITE_SPRITE_FILL, WHITE_SPRITE_OUTLINE),
@@ -270,13 +271,16 @@ fn draw_sprite(buf: &mut Buffer, rect: Rect, kind: PieceKind, color: Color, back
         Pixel::Fill => fill,
         Pixel::Outline => outline,
     };
-    let pixels = sprites::render(kind, usize::from(rect.width), 2 * usize::from(rect.height));
-    for (row, pair) in pixels.chunks(2).enumerate() {
+    let pixels = sprites::render(kind, 2 * usize::from(rect.width), 4 * usize::from(rect.height));
+    for row in 0..rect.height {
         for column in 0..rect.width {
-            let top = paint(pair[0][usize::from(column)]);
-            let bottom = paint(pair[1][usize::from(column)]);
-            if let Some(cell) = buf.cell_mut((rect.x + column, rect.y + row as u16)) {
-                cell.set_symbol("▀").set_fg(top).set_bg(bottom);
+            let (top, left) = (4 * usize::from(row), 2 * usize::from(column));
+            let cell = octants::Cell::from_pixels(std::array::from_fn(|i| pixels[top + i / 2][left + i % 2]));
+            if let Some(buffer_cell) = buf.cell_mut((rect.x + column, rect.y + row)) {
+                buffer_cell
+                    .set_symbol(cell.symbol())
+                    .set_fg(paint(cell.foreground))
+                    .set_bg(paint(cell.background));
             }
         }
     }
