@@ -12,6 +12,7 @@ use super::super::view::{ACCENT, BoardScene, DIM, format_clock};
 use super::{Job, JobKind, JobResult, Nav, Screen};
 use crate::board::Board;
 use crate::coach::bot::{Level, choose_move, pick_weighted};
+use crate::coach::explain::{LineStory, line_story};
 use crate::coach::judgement::Eval;
 use crate::coach::rating::Elo;
 use crate::coach::repertoire::{CHAPTERS, lines_continuing};
@@ -75,6 +76,8 @@ struct Warning {
     san: String,
     verdict: String,
     explanation: String,
+    /// How the opponent punishes the move.
+    punishment: Option<LineStory>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -227,10 +230,14 @@ impl CoachGame {
             return;
         };
         let board = self.app.board().clone();
+        let mut after_board = board.without_eval_state();
+        after_board.make_move(m);
+        let punishment = line_story(&after_board, &after.best_line, board.turn);
         let review = review_moves(&board, &[m], &[before, after], &|_, _| false).into_iter().next();
         match review {
             Some(review) if review.class.is_serious() => {
                 self.warning = Some(Warning {
+                    punishment,
                     san: review.san.clone(),
                     verdict: format!("{} looks like a {}.", review.san, review.class.name().to_lowercase()),
                     explanation: review.cause.map(|c| c.explain()).unwrap_or_default(),
@@ -280,6 +287,10 @@ impl CoachGame {
             lines.push(colored(warning.verdict.clone(), WARN));
             if !warning.explanation.is_empty() {
                 lines.push(Line::styled(warning.explanation.clone(), Style::new().fg(TEXT)));
+            }
+            if let Some(story) = &warning.punishment {
+                lines.push(dim(format!("For example: {}", story.moves)));
+                lines.push(colored(format!("→ {}", story.outcome), WARN));
             }
             lines.push(dim(format!("Enter: play {} anyway   Esc: think again", warning.san)));
         }
@@ -693,6 +704,7 @@ mod tests {
         assert_eq!(game.app.history().len(), 2);
         let warning = game.warning.as_ref().unwrap();
         assert!(warning.explanation.contains("checkmate in 1"), "{}", warning.explanation);
+        assert_eq!(warning.punishment.as_ref().map(|p| p.outcome.as_str()), Some("White is checkmated"));
         assert_eq!(game.job(&data).map(|j| j.tag), None);
     }
 
