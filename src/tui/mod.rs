@@ -3,11 +3,13 @@
 mod app;
 mod engine;
 mod input;
+mod learn;
 mod octants;
 mod sprites;
 mod view;
 
 pub use app::{Mode, PlayConfig, TimeSetting, parse_clock};
+pub use learn::run as run_learn;
 
 use app::{App, EngineTask, TaskKind};
 use engine::{Engine, Reply, SearchId, SearchLimit};
