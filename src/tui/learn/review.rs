@@ -1,7 +1,7 @@
 //! Going through a finished game with the coach: every move judged, mistakes explained.
 
 use super::common::{
-    BAD, GOOD, INFO, MARK_GOOD, TEXT, WARN, bar, class_color, class_mark, colored, dim, draw_board, draw_help,
+    BAD, GOOD, INFO, MARK_GOOD, MARK_HINT, TEXT, WARN, bar, class_color, class_mark, colored, dim, draw_board, draw_help,
     draw_status, heading, move_marks, panel, sparkline,
 };
 use super::data::CoachData;
@@ -10,6 +10,7 @@ use super::super::engine::SearchLimit;
 use super::super::view::{ACCENT, BoardScene, DIM, board_layout, draw_eval_bar, white_share};
 use super::{Job, JobKind, JobResult, Nav, Screen};
 use crate::board::Board;
+use crate::coach::explain::{LineStory, line_story, positional_differences};
 use crate::coach::habits::HabitNote;
 use crate::coach::judgement::{Eval, MoveClass};
 use crate::coach::review::{AnalysedPosition, MoveReview, summarise};
@@ -17,7 +18,8 @@ use crate::coach::store::{GameId, GameRecord};
 use crate::game_runner::position_outcome;
 use crate::search::Score;
 use crate::time::TimeBudget;
-use crate::types::Color;
+use crate::notation::{numbered, san_of};
+use crate::types::{Color, Move};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -34,7 +36,8 @@ const KEYS: &[(&str, &str)] = &[
     ("← →  h l", "step through the game"),
     ("↓ ↑  j k", "your next / previous mistake"),
     ("Home End", "start / end of the game"),
-    ("b", "show the better move on the board"),
+    ("t", "play through what happens after the move"),
+    ("b", "play through the better move's line"),
     ("f", "flip the board"),
     ("p", "pieces as pictures, symbols or letters"),
     ("Esc", "back"),
@@ -49,7 +52,8 @@ pub struct ReviewScreen {
     habits: Vec<HabitNote>,
     /// How many moves have been played on the board shown.
     cursor: usize,
-    show_best: bool,
+    /// A line being played through on the board, if any.
+    explore: Option<Explore>,
     flipped: bool,
     saved: Option<Result<(), String>>,
     help: bool,
@@ -75,7 +79,7 @@ impl ReviewScreen {
             reviews: Vec::new(),
             habits,
             cursor: 0,
-            show_best: false,
+            explore: None,
             saved: None,
             help: false,
             record,
@@ -121,7 +125,7 @@ impl ReviewScreen {
         };
         if let Some(cursor) = target {
             self.cursor = cursor;
-            self.show_best = false;
+            self.explore = None;
         }
     }
 
@@ -184,6 +188,9 @@ impl ReviewScreen {
     }
 
     fn detail_lines(&self, data: &CoachData) -> Vec<Line<'static>> {
+        if let Some(explore) = &self.explore {
+            return explore.lines();
+        }
         if self.cursor == 0 {
             return self.overview_lines(data);
         }
@@ -198,11 +205,11 @@ impl ReviewScreen {
             Span::styled(review.class.name(), Style::new().fg(class_color(review.class)).add_modifier(Modifier::BOLD)),
             Span::styled(format!("   {who}"), Style::new().fg(DIM)),
         ])];
-        if let Some(analysis) = self.analysis.get(self.cursor) {
-            let board = &self.positions[self.cursor];
+        if let (Some(before), Some(after)) = (self.analysis.get(review.ply), self.analysis.get(self.cursor)) {
             lines.push(dim(format!(
-                "Evaluation {}   ·   win chance {:.0}% → {:.0}%",
-                analysis.eval.text_for_white(board.turn),
+                "Evaluation {} → {}   ·   win chance {:.0}% → {:.0}%",
+                before.eval.text_for_white(self.positions[review.ply].turn),
+                after.eval.text_for_white(self.positions[self.cursor].turn),
                 review.before.percent(),
                 review.after.percent()
             )));
@@ -211,21 +218,67 @@ impl ReviewScreen {
             lines.push(Line::raw(""));
             lines.push(Line::styled(cause.explain(), Style::new().fg(if yours { WARN } else { GOOD })));
         }
-        if let Some(best) = &review.best_san
-            && review.class != MoveClass::Book
-        {
+        if !review.class.is_error() || review.class == MoveClass::Book {
+            return lines;
+        }
+        let mover = review.mover;
+        if let Some(story) = self.story(Branch::WhatHappens, mover) {
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
-                Span::styled("Better was ", Style::new().fg(DIM)),
-                Span::styled(best.clone(), Style::new().fg(GOOD).add_modifier(Modifier::BOLD)),
-                Span::styled(if self.show_best { "  (shown)" } else { "  (b to show)" }, Style::new().fg(DIM)),
+                Span::styled("What happens next", Style::new().fg(TEXT).add_modifier(Modifier::BOLD)),
+                Span::styled("  (t to play it through)", Style::new().fg(DIM)),
             ]));
-            lines.push(dim(format!("Line: {}", review.best_line)));
+            lines.push(Line::styled(story.moves, Style::new().fg(TEXT)));
+            lines.push(colored(format!("→ {}", story.outcome), if yours { WARN } else { GOOD }));
+        }
+        if let (Some(best), Some(story)) = (&review.best_san, self.story(Branch::Better, mover)) {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(vec![
+                Span::styled("Better was ", Style::new().fg(TEXT).add_modifier(Modifier::BOLD)),
+                Span::styled(best.clone(), Style::new().fg(GOOD).add_modifier(Modifier::BOLD)),
+                Span::styled("  (b to play it through)", Style::new().fg(DIM)),
+            ]));
+            lines.push(Line::styled(story.moves, Style::new().fg(TEXT)));
+            lines.push(colored(format!("→ {}", story.outcome), GOOD));
+        }
+        let notes = review
+            .best
+            .map(|best| positional_differences(&self.positions[review.ply], review.played, best, review.phase))
+            .unwrap_or_default();
+        if !notes.is_empty() {
+            lines.push(Line::raw(""));
+            lines.push(heading("Compared with the better move"));
+            for note in notes {
+                lines.push(Line::from(vec![Span::styled("• ", Style::new().fg(INFO)), Span::styled(note, Style::new().fg(TEXT))]));
+            }
         }
         if yours && review.class.is_serious() && review.best.is_some() {
+            lines.push(Line::raw(""));
             lines.push(colored("Saved as a puzzle for you to practise.", INFO));
         }
         lines
+    }
+
+    /// The engine line for `branch` of the move shown: the board it starts from and its moves.
+    fn branch_line(&self, branch: Branch) -> Option<(&Board, &[Move])> {
+        let ply = self.cursor.checked_sub(1)?;
+        let review = self.review_at(ply)?;
+        let start = match branch {
+            Branch::WhatHappens => ply + 1,
+            Branch::Better if review.best.is_some() => ply,
+            Branch::Better => return None,
+        };
+        let line = &self.analysis.get(start)?.best_line;
+        (!line.is_empty()).then(|| (&self.positions[start], line.as_slice()))
+    }
+
+    fn story(&self, branch: Branch, mover: Color) -> Option<LineStory> {
+        let (board, line) = self.branch_line(branch)?;
+        line_story(board, line, mover)
+    }
+
+    fn start_explore(&mut self, branch: Branch) {
+        self.explore = self.branch_line(branch).map(|(board, line)| Explore::new(branch, board, line));
     }
 
     fn overview_lines(&self, data: &CoachData) -> Vec<Line<'static>> {
@@ -278,15 +331,14 @@ impl ReviewScreen {
     }
 
     fn scene(&self, data: &CoachData) -> BoardScene<'_> {
-        let review = self.current_review();
-        if self.show_best
-            && let Some(review) = review
-            && let Some(best) = review.best
-        {
-            let mut scene = BoardScene::plain(&self.positions[review.ply], self.flipped, data.piece_style);
-            scene.marks = move_marks(best, MARK_GOOD);
+        if let Some(explore) = &self.explore {
+            let mut scene = BoardScene::plain(&explore.boards[explore.step], self.flipped, data.piece_style);
+            if let Some(&m) = explore.step.checked_sub(1).and_then(|i| explore.moves.get(i)) {
+                scene.marks = move_marks(m, explore.branch.mark());
+            }
             return scene;
         }
+        let review = self.current_review();
         let mut scene = BoardScene::plain(&self.positions[self.cursor], self.flipped, data.piece_style);
         scene.last_move = self.cursor.checked_sub(1).and_then(|ply| self.record.moves.get(ply).copied());
         if let (Some(review), Some(m)) = (review, scene.last_move)
@@ -295,6 +347,85 @@ impl ReviewScreen {
             scene.marks = move_marks(m, color);
         }
         scene
+    }
+}
+
+/// Which engine line of a move to play through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Branch {
+    /// The engine's line after the move played.
+    WhatHappens,
+    /// The engine's line from its better move.
+    Better,
+}
+
+impl Branch {
+    const fn title(self) -> &'static str {
+        match self {
+            Self::WhatHappens => "What happens next",
+            Self::Better => "The better line",
+        }
+    }
+
+    const fn mark(self) -> ratatui::style::Color {
+        match self {
+            Self::WhatHappens => MARK_HINT,
+            Self::Better => MARK_GOOD,
+        }
+    }
+}
+
+/// A line played through move by move on the board.
+struct Explore {
+    branch: Branch,
+    /// The position before each move of the line, then the one after the last.
+    boards: Vec<Board>,
+    moves: Vec<Move>,
+    /// Moves of the line played on the board shown.
+    step: usize,
+}
+
+impl Explore {
+    fn new(branch: Branch, start: &Board, line: &[Move]) -> Self {
+        let mut board = start.clone();
+        let mut boards = vec![board.clone()];
+        let mut moves = Vec::new();
+        for &m in line {
+            if san_of(&board, m).is_none() {
+                break;
+            }
+            board.make_move(m);
+            boards.push(board.clone());
+            moves.push(m);
+        }
+        Self { branch, boards, moves, step: 1.min(line.len()) }
+    }
+
+    fn step(&mut self, forward: bool) {
+        self.step = if forward { (self.step + 1).min(self.moves.len()) } else { self.step.saturating_sub(1) };
+    }
+
+    fn lines(&self) -> Vec<Line<'static>> {
+        let mut spans = Vec::new();
+        for (i, &m) in self.moves.iter().enumerate() {
+            let board = &self.boards[i];
+            let san = san_of(board, m).unwrap_or_default();
+            let style = if i + 1 == self.step {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else if i < self.step {
+                Style::new().fg(TEXT)
+            } else {
+                Style::new().fg(DIM)
+            };
+            spans.push(Span::styled(numbered(board, &san, i == 0), style));
+            spans.push(Span::raw(" "));
+        }
+        vec![
+            Line::from(spans),
+            Line::raw(""),
+            dim(format!("Move {} of {}", self.step, self.moves.len())),
+            dim("←→ step through · t / b other line · Esc back to the game"),
+        ]
     }
 }
 
@@ -326,7 +457,7 @@ impl Screen for ReviewScreen {
         let scene = self.scene(data);
         draw_board(frame, &layout, &scene);
         if let Some(bar_area) = layout.eval_bar {
-            let shown = if self.show_best { self.cursor.saturating_sub(1) } else { self.cursor };
+            let shown = self.cursor;
             let share = self.analysis.get(shown).map_or(0.5, |a| {
                 let turn = self.positions[shown].turn;
                 match a.eval {
@@ -352,7 +483,11 @@ impl Screen for ReviewScreen {
         let rest = side.height.saturating_sub(summary_height);
         let detail = self.detail_lines(data);
         let detail_height = (detail.len() as u16 + 4).min(rest.saturating_sub(5).max(rest / 2)).min(rest);
-        let title = if self.cursor == 0 { "Coach" } else { "This move" };
+        let title = match &self.explore {
+            Some(explore) => explore.branch.title(),
+            None if self.cursor == 0 => "Coach",
+            None => "This move",
+        };
         frame.render_widget(
             Paragraph::new(detail).wrap(Wrap { trim: false }).block(panel(title)),
             Rect::new(side.x, side.y + summary_height, side.width, detail_height),
@@ -370,7 +505,7 @@ impl Screen for ReviewScreen {
             layout.status,
             None,
             None,
-            "←→ step · ↓↑ your mistakes · b better move · f flip · ? help · Esc back",
+            "←→ step · ↓↑ your mistakes · t what happens · b better line · f flip · ? help · Esc back",
         );
         if self.help {
             draw_help(frame, KEYS);
@@ -382,22 +517,33 @@ impl Screen for ReviewScreen {
             self.help = false;
             return Nav::Stay;
         }
+        if let Some(explore) = self.explore.as_mut() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => self.explore = None,
+                KeyCode::Right | KeyCode::Char('l' | ' ') => explore.step(true),
+                KeyCode::Left | KeyCode::Char('h') => explore.step(false),
+                KeyCode::Char('t') => self.start_explore(Branch::WhatHappens),
+                KeyCode::Char('b') => self.start_explore(Branch::Better),
+                KeyCode::Char('f') => self.flipped = !self.flipped,
+                _ => {}
+            }
+            return Nav::Stay;
+        }
         let last = self.record.moves.len();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Nav::Back,
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
                 self.cursor = (self.cursor + 1).min(last);
-                self.show_best = false;
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 self.cursor = self.cursor.saturating_sub(1);
-                self.show_best = false;
             }
             KeyCode::Down | KeyCode::Char('j') => self.jump_to_error(true),
             KeyCode::Up | KeyCode::Char('k') => self.jump_to_error(false),
             KeyCode::Home | KeyCode::Char('g') => self.cursor = 0,
             KeyCode::End | KeyCode::Char('G') => self.cursor = last,
-            KeyCode::Char('b') => self.show_best = !self.show_best && self.current_review().is_some_and(|r| r.best.is_some()),
+            KeyCode::Char('t') => self.start_explore(Branch::WhatHappens),
+            KeyCode::Char('b') => self.start_explore(Branch::Better),
             KeyCode::Char('f') => self.flipped = !self.flipped,
             KeyCode::Char('p') => data.piece_style = data.piece_style.next(),
             KeyCode::Char('?') => self.help = true,
@@ -448,5 +594,86 @@ impl Screen for ReviewScreen {
             self.record.analysis = self.analysis.clone();
         }
         Nav::Stay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::SearchOutcome;
+    use crate::coach::bot::Level;
+    use crate::coach::srs::UnixTime;
+    use crate::coach::store::{Ending, Store};
+    use crate::game_runner::GameResult;
+    use crate::notation::parse_san_line;
+    use crate::types::START_FEN;
+
+    /// Fool's mate, reviewed with the engine's lines filled in by hand.
+    fn reviewed_fools_mate() -> (ReviewScreen, CoachData) {
+        let dir = std::env::temp_dir().join(format!("chess-review-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut data = CoachData::load(Store::open(dir).unwrap()).unwrap();
+        let start = Board::from_fen(START_FEN).unwrap();
+        let id = GameId(7);
+        data.add_game(GameRecord {
+            id,
+            played_at: UnixTime(1_700_000_000),
+            human: Color::White,
+            level: Level::WEAKEST,
+            result: GameResult::BlackWin,
+            ending: Ending::Checkmate,
+            blunder_check: false,
+            start_fen: START_FEN.to_string(),
+            moves: parse_san_line(&start, &["f3", "e5", "g4", "Qh4#"]).unwrap(),
+            analysis: Vec::new(),
+        })
+        .unwrap();
+        let mut screen = ReviewScreen::new(id, &data);
+        let lines: [(Score, &[&str]); 4] = [
+            (Score::Centipawns(20), &["e4", "e5"]),
+            (Score::Centipawns(-10), &["e5"]),
+            (Score::Centipawns(-60), &["e4", "Nc6"]),
+            (Score::MateIn(1), &["Qh4#"]),
+        ];
+        while let Some(job) = screen.job(&data) {
+            let (score, line) = lines[job.tag as usize];
+            let pv = parse_san_line(&job.board, line).unwrap();
+            let outcome = SearchOutcome { best_move: pv.first().copied(), score: Some(score), pv };
+            screen.engine(job.tag, JobResult::Done(outcome), &mut data, Instant::now());
+            screen.tick(&mut data, Instant::now());
+        }
+        (screen, data)
+    }
+
+    fn text(lines: &[Line]) -> String {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>() + "\n").collect()
+    }
+
+    #[test]
+    fn a_blunder_shows_what_happens_and_the_better_line() {
+        let (mut screen, data) = reviewed_fools_mate();
+        screen.cursor = 3;
+
+        let shown = text(&screen.detail_lines(&data));
+
+        assert!(shown.contains("What happens next"), "{shown}");
+        assert!(shown.contains("2... Qh4#") && shown.contains("White is checkmated"), "{shown}");
+        assert!(shown.contains("Better was e4") && shown.contains("2. e4 Nc6"), "{shown}");
+    }
+
+    #[test]
+    fn playing_through_a_line_steps_the_board_along_it() {
+        let (mut screen, _data) = reviewed_fools_mate();
+        screen.cursor = 3;
+
+        screen.start_explore(Branch::Better);
+        let first = screen.explore.as_ref().map(|e| (e.step, e.moves.len()));
+        if let Some(explore) = screen.explore.as_mut() {
+            explore.step(true);
+            explore.step(true);
+        }
+
+        assert_eq!(first, Some((1, 2)));
+        assert_eq!(screen.explore.as_ref().map(|e| e.step), Some(2));
     }
 }
