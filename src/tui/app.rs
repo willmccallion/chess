@@ -4,6 +4,7 @@ use crate::search::{IterationInfo, Score};
 use crate::time::{TimeBudget, TimeControl};
 use crate::types::{Color, Move, MoveList, PieceKind};
 use crate::notation::{line_in_san, parse_typed_move};
+use super::input::{MoveInput, PendingPromotion};
 use std::time::Instant;
 
 const ENGINE_MOVE_OVERHEAD_MS: i64 = 50;
@@ -177,12 +178,6 @@ fn since_ms(since: Instant, now: Instant) -> i64 {
     now.saturating_duration_since(since).as_millis() as i64
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PendingPromotion {
-    pub from: u8,
-    pub to: u8,
-}
-
 pub struct App {
     config: PlayConfig,
     human: Color,
@@ -193,9 +188,10 @@ pub struct App {
     outcome: Option<GameEnd>,
     clocks: Option<Clocks>,
     paused: bool,
-    selected: Option<u8>,
-    dragging: bool,
-    pending_promotion: Option<PendingPromotion>,
+    input: MoveInput,
+    /// When set, your moves wait in `proposed` until confirmed instead of being played.
+    hold_moves: bool,
+    proposed: Option<Move>,
     analysis: bool,
     engine_line: Option<EngineLine>,
     pub panels: Panels,
@@ -219,9 +215,9 @@ impl App {
             outcome: None,
             clocks: None,
             paused: false,
-            selected: None,
-            dragging: false,
-            pending_promotion: None,
+            input: MoveInput::default(),
+            hold_moves: false,
+            proposed: None,
             analysis: config.mode == Mode::Casual,
             engine_line: None,
             panels: Panels {
@@ -273,11 +269,39 @@ impl App {
     }
 
     pub fn selected(&self) -> Option<u8> {
-        self.selected
+        self.input.selected()
     }
 
     pub fn pending_promotion(&self) -> Option<PendingPromotion> {
-        self.pending_promotion
+        self.input.pending_promotion()
+    }
+
+    pub fn legal_moves(&self) -> &[Move] {
+        self.legal.as_slice()
+    }
+
+    /// Holds your moves for confirmation instead of playing them at once.
+    pub fn set_hold_moves(&mut self, hold: bool) {
+        self.hold_moves = hold;
+        self.proposed = None;
+    }
+
+    /// Your move waiting for confirmation.
+    pub fn proposed(&self) -> Option<Move> {
+        self.proposed
+    }
+
+    pub fn play_proposed(&mut self, now: Instant) {
+        if let Some(m) = self.proposed.take()
+            && self.is_human_turn()
+            && self.legal.as_slice().contains(&m)
+        {
+            self.play(m, now);
+        }
+    }
+
+    pub fn discard_proposed(&mut self) {
+        self.proposed = None;
     }
 
     pub fn is_paused(&self) -> bool {
@@ -312,15 +336,7 @@ impl App {
 
     /// Squares the selected piece can move to.
     pub fn targets(&self) -> Vec<u8> {
-        let Some(from) = self.selected else {
-            return Vec::new();
-        };
-        self.legal
-            .as_slice()
-            .iter()
-            .filter(|m| m.from == from)
-            .map(|m| m.to)
-            .collect()
+        self.input.targets(self.legal.as_slice())
     }
 
     pub fn new_game(&mut self, now: Instant) {
@@ -350,9 +366,8 @@ impl App {
         self.position_version += 1;
         self.legal = MoveList::new();
         self.board.generate_legal_moves(&mut self.legal);
-        self.selected = None;
-        self.dragging = false;
-        self.pending_promotion = None;
+        self.input.clear();
+        self.proposed = None;
         self.outcome = position_outcome(&self.board).map(|(result, reason)| GameEnd { result, reason });
     }
 
@@ -426,8 +441,8 @@ impl App {
             result: win_for(loser.other()),
             reason: GameEndReason::FlagFall,
         });
-        self.selected = None;
-        self.pending_promotion = None;
+        self.input.clear();
+        self.proposed = None;
     }
 
     /// Ends the game if the side to move has run out of time.
@@ -519,99 +534,45 @@ impl App {
 
     /// A press of the left mouse button on `square`.
     pub fn press_square(&mut self, square: u8, now: Instant) {
-        if !self.is_human_turn() || self.pending_promotion.is_some() {
+        if !self.is_human_turn() || self.proposed.is_some() {
             return;
         }
-        if let Some(from) = self.selected
-            && from != square
-            && !self.moves_between(from, square).is_empty()
-        {
-            self.move_piece(from, square, now);
-            return;
-        }
-        if self.own_piece_on(square) {
-            self.selected = Some(square);
-            self.dragging = true;
-        } else {
-            self.selected = None;
+        if let Some(m) = self.input.press(&self.board, self.legal.as_slice(), square) {
+            self.human_move(m, now);
         }
     }
 
     /// A release of the left mouse button on `square`; completes a drag.
     pub fn release_square(&mut self, square: u8, now: Instant) {
-        let was_dragging = std::mem::take(&mut self.dragging);
-        if let Some(from) = self.selected
-            && was_dragging
-            && from != square
-            && !self.moves_between(from, square).is_empty()
-        {
-            self.move_piece(from, square, now);
+        if !self.is_human_turn() || self.proposed.is_some() {
+            self.input.release_off_board();
+            return;
+        }
+        if let Some(m) = self.input.release(&self.board, self.legal.as_slice(), square) {
+            self.human_move(m, now);
         }
     }
 
     pub fn release_off_board(&mut self) {
-        self.dragging = false;
-    }
-
-    fn own_piece_on(&self, square: u8) -> bool {
-        self.board.piece_on[square as usize].color() == Some(self.board.turn)
-    }
-
-    /// Legal moves taking the piece on `from` to `to`; several when promoting. Moving the
-    /// king onto its own rook castles on that side.
-    fn moves_between(&self, from: u8, to: u8) -> Vec<Move> {
-        let legal = self.legal.as_slice();
-        let direct: Vec<Move> = legal.iter().filter(|m| m.from == from && m.to == to).copied().collect();
-        if !direct.is_empty() {
-            return direct;
-        }
-        let mover = self.board.piece_on[from as usize];
-        let target = self.board.piece_on[to as usize];
-        let king_onto_own_rook = mover.kind() == Some(PieceKind::King)
-            && target.kind() == Some(PieceKind::Rook)
-            && target.color() == mover.color();
-        if !king_onto_own_rook {
-            return Vec::new();
-        }
-        legal
-            .iter()
-            .filter(|m| m.castle && m.from == from && (m.to > m.from) == (to > from))
-            .copied()
-            .collect()
-    }
-
-    fn move_piece(&mut self, from: u8, to: u8, now: Instant) {
-        let candidates = self.moves_between(from, to);
-        match candidates.as_slice() {
-            [] => {}
-            [only] => self.play(*only, now),
-            _ => {
-                self.pending_promotion = Some(PendingPromotion { from, to });
-                self.selected = None;
-                self.dragging = false;
-            }
-        }
+        self.input.release_off_board();
     }
 
     pub fn choose_promotion(&mut self, kind: PieceKind, now: Instant) {
-        let Some(PendingPromotion { from, to }) = self.pending_promotion.take() else {
-            return;
-        };
-        let chosen = self
-            .legal
-            .as_slice()
-            .iter()
-            .find(|m| m.from == from && m.to == to && m.promotion == Some(kind))
-            .copied();
-        if let Some(m) = chosen {
+        if let Some(m) = self.input.choose_promotion(self.legal.as_slice(), kind) {
+            self.human_move(m, now);
+        }
+    }
+
+    fn human_move(&mut self, m: Move, now: Instant) {
+        if self.hold_moves {
+            self.proposed = Some(m);
+        } else {
             self.play(m, now);
         }
     }
 
     pub fn cancel(&mut self) {
-        self.pending_promotion = None;
-        self.selected = None;
-        self.dragging = false;
+        self.input.clear();
         self.typed = None;
         self.panels.help = false;
     }
@@ -626,7 +587,7 @@ impl App {
             return;
         }
         match parse_typed_move(&self.board, self.legal.as_slice(), &text) {
-            Some(m) => self.play(m, now),
+            Some(m) => self.human_move(m, now),
             None => self.message = Some(format!("'{}' is not a legal move here", text.trim())),
         }
     }

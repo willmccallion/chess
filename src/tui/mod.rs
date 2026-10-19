@@ -2,6 +2,7 @@
 
 mod app;
 mod engine;
+mod input;
 mod octants;
 mod sprites;
 mod view;
