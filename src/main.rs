@@ -64,12 +64,16 @@ enum Cmd {
         #[arg(long, default_value_t = 16)]
         hash: usize,
     },
-    /// Play the engine in an interactive terminal board, or watch it play itself
+    /// Play the engine in an interactive terminal board, watch it play itself, or learn
     Play {
         /// casual: engine evaluation, analysis and takebacks; game: no help until the game
-        /// ends; watch: the engine plays both sides
+        /// ends; watch: the engine plays both sides; learn: the coach, with lessons, puzzles,
+        /// games at your level and reviews
         #[arg(long, value_enum, default_value_t = PlayMode::Casual)]
         mode: PlayMode,
+        /// Where learn mode keeps your games and progress (defaults to ~/.local/share/chess/coach)
+        #[arg(long)]
+        coach_dir: Option<std::path::PathBuf>,
         /// The colour you play
         #[arg(long, value_enum, default_value_t = SideChoice::White)]
         side: SideChoice,
@@ -86,6 +90,17 @@ enum Cmd {
         /// Hash table size in MB
         #[arg(long, default_value_t = 256)]
         hash: usize,
+    },
+    /// Import puzzles for learn mode from the Lichess puzzle CSV (`-` reads stdin), e.g.
+    /// `zstd -dc lichess_db_puzzle.csv.zst | chess import-puzzles -`
+    ImportPuzzles {
+        path: String,
+        /// Where learn mode keeps your data (defaults to ~/.local/share/chess/coach)
+        #[arg(long)]
+        coach_dir: Option<std::path::PathBuf>,
+        /// Puzzles kept per 100-point rating band
+        #[arg(long, default_value_t = 2500)]
+        per_band: usize,
     },
     Eval {
         fen: String,
@@ -234,16 +249,49 @@ enum PlayMode {
     Casual,
     Game,
     Watch,
+    Learn,
 }
 
-impl From<PlayMode> for tui::Mode {
-    fn from(mode: PlayMode) -> Self {
-        match mode {
-            PlayMode::Casual => Self::Casual,
-            PlayMode::Game => Self::Game,
-            PlayMode::Watch => Self::Watch,
+impl PlayMode {
+    /// The board mode, or None for learn mode, which has its own screens.
+    const fn board_mode(self) -> Option<tui::Mode> {
+        match self {
+            Self::Casual => Some(tui::Mode::Casual),
+            Self::Game => Some(tui::Mode::Game),
+            Self::Watch => Some(tui::Mode::Watch),
+            Self::Learn => None,
         }
     }
+}
+
+/// Opens learn mode's data directory, or exits saying why it can't.
+fn open_coach_store(dir: Option<std::path::PathBuf>) -> chess::coach::store::Store {
+    let dir = dir
+        .or_else(chess::coach::store::Store::default_dir)
+        .unwrap_or_else(|| exit_with_error("no data directory: set HOME or pass --coach-dir"));
+    chess::coach::store::Store::open(dir.clone())
+        .unwrap_or_else(|e| exit_with_error(&format!("cannot open {}: {e}", dir.display())))
+}
+
+fn import_puzzles(path: &str, store: &chess::coach::store::Store, per_band: usize) {
+    use chess::coach::store::{ImportFilter, sample_lichess_csv};
+    use std::io::BufReader;
+    let filter = ImportFilter { per_band, ..ImportFilter::default() };
+    let mut rng = rand::thread_rng();
+    let sampled = if path == "-" {
+        sample_lichess_csv(std::io::stdin().lock(), filter, &mut rng)
+    } else {
+        let file = std::fs::File::open(path).unwrap_or_else(|e| exit_with_error(&format!("cannot open {path}: {e}")));
+        sample_lichess_csv(BufReader::new(file), filter, &mut rng)
+    };
+    let puzzles = sampled.unwrap_or_else(|e| exit_with_error(&format!("reading {path}: {e}")));
+    if puzzles.is_empty() {
+        exit_with_error("no puzzles found: expected the Lichess puzzle CSV, decompressed (zstd -dc)");
+    }
+    store
+        .save_lichess_puzzles(&puzzles)
+        .unwrap_or_else(|e| exit_with_error(&format!("saving puzzles: {e}")));
+    println!("Imported {} puzzles into {}", puzzles.len(), store.dir().display());
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -333,6 +381,7 @@ fn main() {
         }
         Cmd::Play {
             mode,
+            coach_dir,
             side,
             clock,
             movetime,
@@ -341,23 +390,34 @@ fn main() {
             hash,
         } => {
             require_networks(cli.eval);
+            let engine = tui::EngineConfig {
+                threads: threads.max(1),
+                hash_mb: hash.max(1),
+            };
+            let Some(board_mode) = mode.board_mode() else {
+                let store = open_coach_store(coach_dir);
+                if let Err(e) = tui::run_learn(engine, store) {
+                    exit_with_error(&format!("terminal error: {e}"));
+                }
+                return;
+            };
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             let start = Board::from_fen(&fen_str)
                 .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error: {e}")));
             let config = tui::PlayConfig {
                 start,
-                mode: mode.into(),
+                mode: board_mode,
                 human: side.color(),
                 time: clock.map_or(tui::TimeSetting::PerMove { ms: movetime }, tui::TimeSetting::Clock),
-            };
-            let engine = tui::EngineConfig {
-                threads: threads.max(1),
-                hash_mb: hash.max(1),
             };
             match tui::run(config, engine) {
                 Ok(record) => println!("{record}"),
                 Err(e) => exit_with_error(&format!("terminal error: {e}")),
             }
+        }
+        Cmd::ImportPuzzles { path, coach_dir, per_band } => {
+            let store = open_coach_store(coach_dir);
+            import_puzzles(&path, &store, per_band.max(1));
         }
         Cmd::Eval { fen } => {
             require_networks(cli.eval);

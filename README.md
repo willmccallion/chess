@@ -93,6 +93,31 @@ Without `--clock` the engine thinks for `--movetime` milliseconds per move (defa
 
 ---
 
+### Learning with the coach
+
+`play --mode learn` opens a coach that teaches openings, sets puzzles and endgame drills, plays you at your level and reviews your games:
+
+```bash
+cargo run --release -- play --mode learn
+```
+
+- **Play**: a game against the coach's bot, at the level that matches your rating or any of ten levels. The bot plays human-like moves, mistakes included. The optional blunder check stops you before a move that gives away material or allows mate, and says why. You can also have the bot steer into a chapter of your repertoire.
+- **Review**: after each game the engine goes through every move, marks inaccuracies (`?!`), mistakes (`?`) and blunders (`??`), and explains each one: a piece left hanging, a threat ignored, a fork walked into, a mate or free material missed. It shows the better move on the board and the main lesson of the game.
+- **Puzzles**: every mistake and blunder from your games becomes a puzzle, and comes back on a spaced-repetition schedule until you get it right. Puzzles from the Lichess database fill the gaps, picked near your puzzle rating and weighted towards the themes behind your mistakes.
+- **Openings**: a repertoire built on 1.d4 and 2.c4 as White, and 1...e5 and 1...d5 as Black, with a note on every move. A lesson walks through a line; a drill has you play your side from memory, and lines come back for review on a schedule.
+- **Endgames**: the basic mates, king-and-pawn endings, and the Lucena and Philidor positions, against the engine's best defence.
+- **Progress**: your rating and puzzle rating, accuracy by phase of the game, mistakes per game by cause with trends, opening habits, and what to work on.
+
+Your games and practice are kept in `~/.local/share/chess/coach` (or `$XDG_DATA_HOME/chess/coach`); `--coach-dir` uses another directory. To add Lichess puzzles, download `lichess_db_puzzle.csv.zst` from [database.lichess.org](https://database.lichess.org/#puzzles) and import it once:
+
+```bash
+zstd -dc lichess_db_puzzle.csv.zst | cargo run --release -- import-puzzles -
+```
+
+This keeps a sample of about 50,000 popular puzzles rated 400 to 2400.
+
+---
+
 ### Using the Engine with a Chess GUI (UCI)
 
 To use this engine with a graphical interface, start it in `uci` mode:
@@ -107,6 +132,8 @@ Then, in your favorite chess GUI:
 2. Add a **new UCI engine**.
 3. When prompted for the engine executable, point to the binary (for example, `target/release/chess`).
 4. Save the configuration and start a game using this engine.
+
+The `CoachLevel` option (1 to 10, 0 for off) makes the engine play like one of the coach's levels in learn mode instead of at full strength.
 
 ---
 
