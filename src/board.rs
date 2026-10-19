@@ -1344,6 +1344,27 @@ impl Board {
         }
     }
 
+    /// A copy without evaluation state, so it and its clones are cheap; evaluating it
+    /// rebuilds the state on first use.
+    pub fn without_eval_state(&self) -> Self {
+        Self {
+            piece_bb: self.piece_bb,
+            piece_on: self.piece_on,
+            w_pieces: self.w_pieces,
+            b_pieces: self.b_pieces,
+            all_pieces: self.all_pieces,
+            turn: self.turn,
+            castle: self.castle,
+            en_passant_sq: self.en_passant_sq,
+            halfmove_clock: self.halfmove_clock,
+            fullmove_number: self.fullmove_number,
+            plies_from_null: self.plies_from_null,
+            history: self.history.clone(),
+            zobrist: self.zobrist,
+            eval_state: EvalState::Stateless,
+        }
+    }
+
     /// Drops the evaluation state of earlier positions; the current one is recomputed on demand.
     pub fn forget_eval_history(&mut self) {
         self.eval_state.reset();
