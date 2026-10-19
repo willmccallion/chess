@@ -10,6 +10,7 @@ pub mod history;
 pub mod legality;
 pub mod magics;
 pub mod movepicker;
+pub mod notation;
 pub mod opening_book;
 pub mod openings;
 pub mod pawn_hash;

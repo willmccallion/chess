@@ -3,7 +3,7 @@ use crate::game_runner::{GameClock, GameEndReason, GameResult, position_outcome,
 use crate::search::{IterationInfo, Score};
 use crate::time::{TimeBudget, TimeControl};
 use crate::types::{Color, Move, MoveList, PieceKind};
-use crate::uci_io::parse_uci_move;
+use crate::notation::{line_in_san, parse_typed_move};
 use std::time::Instant;
 
 const ENGINE_MOVE_OVERHEAD_MS: i64 = 50;
@@ -632,48 +632,6 @@ impl App {
     }
 }
 
-/// Reads a move typed in UCI (`e7e8q`) or SAN (`Nf3`, `exd5`, `O-O`), ignoring check marks.
-pub fn parse_typed_move(board: &Board, legal: &[Move], text: &str) -> Option<Move> {
-    let text = text.trim();
-    let mut scratch = board.clone();
-    if let Some(m) = parse_uci_move(&mut scratch, text) {
-        return Some(m);
-    }
-    let wanted = normalize_san(text);
-    legal
-        .iter()
-        .copied()
-        .find(|&m| normalize_san(&board.to_san(m, legal)) == wanted)
-}
-
-fn normalize_san(san: &str) -> String {
-    san.chars()
-        .filter(|c| !matches!(c, '+' | '#' | '!' | '?'))
-        .map(|c| if c == '0' { 'O' } else { c })
-        .collect()
-}
-
-/// `moves` from `root` in numbered SAN, stopping at the first move that is not legal.
-pub fn line_in_san(root: &Board, moves: &[Move]) -> String {
-    let mut board = root.clone();
-    let mut parts = Vec::new();
-    for (i, &m) in moves.iter().enumerate() {
-        let mut legal = MoveList::new();
-        board.generate_legal_moves(&mut legal);
-        if !legal.as_slice().contains(&m) {
-            break;
-        }
-        let san = board.to_san(m, legal.as_slice());
-        match board.turn {
-            Color::White => parts.push(format!("{}. {san}", board.fullmove_number)),
-            Color::Black if i == 0 => parts.push(format!("{}... {san}", board.fullmove_number)),
-            Color::Black => parts.push(san),
-        }
-        board.make_move(m);
-    }
-    parts.join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,32 +773,6 @@ mod tests {
     }
 
     #[test]
-    fn typed_moves_accept_uci_and_san() {
-        let board = Board::from_fen(START_FEN).unwrap();
-        let mut legal = MoveList::new();
-        board.generate_legal_moves(&mut legal);
-
-        let uci = parse_typed_move(&board, legal.as_slice(), "g1f3").unwrap();
-        let san = parse_typed_move(&board, legal.as_slice(), "Nf3").unwrap();
-
-        assert_eq!(uci, san);
-        assert!(parse_typed_move(&board, legal.as_slice(), "Nf4").is_none());
-        assert!(parse_typed_move(&board, legal.as_slice(), "zz").is_none());
-    }
-
-    #[test]
-    fn castling_can_be_typed_with_zeros_or_letters() {
-        let board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
-        let mut legal = MoveList::new();
-        board.generate_legal_moves(&mut legal);
-
-        let letters = parse_typed_move(&board, legal.as_slice(), "O-O").unwrap();
-        let zeros = parse_typed_move(&board, legal.as_slice(), "0-0").unwrap();
-
-        assert!(letters.castle && letters == zeros);
-    }
-
-    #[test]
     fn undo_returns_to_your_turn() {
         let mut app = casual(START_FEN);
         let now = Instant::now();
@@ -938,16 +870,5 @@ mod tests {
 
         let clocks = app.clocks().unwrap();
         assert_eq!(clocks.remaining_ms(Color::White, Color::Black, moved_at), 9_000);
-    }
-
-    #[test]
-    fn pv_is_numbered_from_the_side_to_move() {
-        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
-        let mut scratch = board.clone();
-        let e5 = parse_uci_move(&mut scratch, "e7e5").unwrap();
-        scratch.make_move(e5);
-        let nf3 = parse_uci_move(&mut scratch, "g1f3").unwrap();
-
-        assert_eq!(line_in_san(&board, &[e5, nf3]), "1... e5 2. Nf3");
     }
 }
