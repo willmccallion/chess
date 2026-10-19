@@ -7,3 +7,4 @@ pub mod rating;
 pub mod repertoire;
 pub mod review;
 pub mod srs;
+pub mod store;
