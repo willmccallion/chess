@@ -29,17 +29,19 @@ pub struct LevelSpec {
     pub book_plies: usize,
 }
 
+/// Interpolated from matches between levels, anchored on Stockfish's UCI_Elo; the Elo is
+/// on an engine scale and only roughly a human rating.
 const LEVELS: [LevelSpec; 10] = [
-    LevelSpec { elo: Elo(400), nodes_per_move: 300, temperature: 16.0, mistake_chance: 0.24, book_plies: 2 },
-    LevelSpec { elo: Elo(550), nodes_per_move: 400, temperature: 12.0, mistake_chance: 0.18, book_plies: 4 },
-    LevelSpec { elo: Elo(700), nodes_per_move: 600, temperature: 9.0, mistake_chance: 0.13, book_plies: 4 },
-    LevelSpec { elo: Elo(850), nodes_per_move: 900, temperature: 7.0, mistake_chance: 0.10, book_plies: 6 },
-    LevelSpec { elo: Elo(1000), nodes_per_move: 1_400, temperature: 5.5, mistake_chance: 0.075, book_plies: 6 },
-    LevelSpec { elo: Elo(1200), nodes_per_move: 2_500, temperature: 4.0, mistake_chance: 0.05, book_plies: 8 },
-    LevelSpec { elo: Elo(1400), nodes_per_move: 4_000, temperature: 3.0, mistake_chance: 0.035, book_plies: 10 },
-    LevelSpec { elo: Elo(1600), nodes_per_move: 8_000, temperature: 2.0, mistake_chance: 0.02, book_plies: 12 },
-    LevelSpec { elo: Elo(1800), nodes_per_move: 15_000, temperature: 1.2, mistake_chance: 0.01, book_plies: 14 },
-    LevelSpec { elo: Elo(2000), nodes_per_move: 30_000, temperature: 0.6, mistake_chance: 0.004, book_plies: 16 },
+    LevelSpec { elo: Elo(400), nodes_per_move: 610, temperature: 8.95, mistake_chance: 0.129, book_plies: 4 },
+    LevelSpec { elo: Elo(580), nodes_per_move: 830, temperature: 7.36, mistake_chance: 0.105, book_plies: 6 },
+    LevelSpec { elo: Elo(760), nodes_per_move: 1_100, temperature: 6.26, mistake_chance: 0.088, book_plies: 6 },
+    LevelSpec { elo: Elo(930), nodes_per_move: 1_460, temperature: 5.38, mistake_chance: 0.073, book_plies: 6 },
+    LevelSpec { elo: Elo(1110), nodes_per_move: 1_940, temperature: 4.6, mistake_chance: 0.06, book_plies: 7 },
+    LevelSpec { elo: Elo(1290), nodes_per_move: 2_570, temperature: 3.93, mistake_chance: 0.049, book_plies: 8 },
+    LevelSpec { elo: Elo(1470), nodes_per_move: 3_330, temperature: 3.36, mistake_chance: 0.04, book_plies: 9 },
+    LevelSpec { elo: Elo(1640), nodes_per_move: 4_450, temperature: 2.82, mistake_chance: 0.032, book_plies: 10 },
+    LevelSpec { elo: Elo(1820), nodes_per_move: 6_400, temperature: 2.28, mistake_chance: 0.024, book_plies: 11 },
+    LevelSpec { elo: Elo(2000), nodes_per_move: 8_990, temperature: 1.82, mistake_chance: 0.018, book_plies: 12 },
 ];
 
 /// A playing strength of the coach, from 1 (weakest) up.
