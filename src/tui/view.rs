@@ -3,7 +3,8 @@ use super::octants;
 use super::sprites::{self, Pixel};
 use crate::game_runner::GameResult;
 use crate::search::Score;
-use crate::types::{Color, Piece, PieceKind};
+use crate::board::Board;
+use crate::types::{Color, Move, Piece, PieceKind};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -38,9 +39,9 @@ const BLACK_SPRITE_OUTLINE: Rgb = Rgb::Rgb(0, 0, 0);
 const MIN_SPRITE_SQUARE_HEIGHT: u16 = 2;
 const BAR_WHITE: Rgb = Rgb::Rgb(235, 235, 235);
 const BAR_BLACK: Rgb = Rgb::Rgb(55, 55, 55);
-const LABEL: Rgb = Rgb::Gray;
-const DIM: Rgb = Rgb::DarkGray;
-const ACCENT: Rgb = Rgb::Yellow;
+pub const LABEL: Rgb = Rgb::Gray;
+pub const DIM: Rgb = Rgb::DarkGray;
+pub const ACCENT: Rgb = Rgb::Yellow;
 
 /// The order promotion choices are shown in.
 pub const PROMOTION_KINDS: [PieceKind; 4] =
@@ -107,16 +108,64 @@ impl BoardGeometry {
 pub struct ScreenLayout {
     /// None when the terminal is too small to draw a board.
     pub board: Option<BoardGeometry>,
-    eval_bar: Option<Rect>,
-    side: Rect,
-    status: Rect,
+    pub eval_bar: Option<Rect>,
+    pub side: Rect,
+    pub status: Rect,
+}
+
+/// What a board shows, whichever screen draws it.
+pub struct BoardScene<'a> {
+    pub board: &'a Board,
+    pub flipped: bool,
+    pub piece_style: PieceStyle,
+    pub selected: Option<u8>,
+    pub targets: Vec<u8>,
+    pub last_move: Option<Move>,
+    /// Squares tinted to point something out, drawn over the last-move colours.
+    pub marks: Vec<(u8, Rgb)>,
+    pub promotion_open: bool,
+}
+
+impl<'a> BoardScene<'a> {
+    /// A board with nothing selected or marked.
+    pub fn plain(board: &'a Board, flipped: bool, piece_style: PieceStyle) -> Self {
+        Self {
+            board,
+            flipped,
+            piece_style,
+            selected: None,
+            targets: Vec::new(),
+            last_move: None,
+            marks: Vec::new(),
+            promotion_open: false,
+        }
+    }
+}
+
+fn app_scene(app: &App) -> BoardScene<'_> {
+    BoardScene {
+        board: app.board(),
+        flipped: app.flipped,
+        piece_style: app.piece_style,
+        selected: app.selected(),
+        targets: app.targets(),
+        last_move: app.last_move(),
+        marks: Vec::new(),
+        promotion_open: app.pending_promotion().is_some(),
+    }
 }
 
 /// Splits the screen; used both to draw and to find what a mouse click hit.
 pub fn layout(area: Rect, app: &App) -> ScreenLayout {
+    board_layout(area, app.shows_engine_output())
+}
+
+/// A board on the left, with an evaluation bar beside it if `with_bar`, a side panel on the
+/// right and a status line at the bottom.
+pub fn board_layout(area: Rect, with_bar: bool) -> ScreenLayout {
     let status = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
     let main = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-    let bar_width = if app.shows_engine_output() { EVAL_BAR_WIDTH + GAP } else { 0 };
+    let bar_width = if with_bar { EVAL_BAR_WIDTH + GAP } else { 0 };
     let available_width = main.width.saturating_sub(bar_width + RANK_LABEL_WIDTH + GAP + SIDE_MIN_WIDTH);
     let available_height = main.height.saturating_sub(1);
     let square_height = (available_height / 8).min((available_width / 8).saturating_sub(1) / 2);
@@ -150,9 +199,10 @@ pub fn draw(frame: &mut Frame, app: &App, now: Instant) {
     let screen = layout(frame.area(), app);
     match screen.board {
         Some(board) => {
-            draw_board(frame.buffer_mut(), app, board);
+            draw_board(frame.buffer_mut(), &app_scene(app), board);
             if let Some(bar) = screen.eval_bar {
-                draw_eval_bar(frame.buffer_mut(), app, bar);
+                let share = app.engine_line().map_or(0.5, |line| white_share(line.score));
+                draw_eval_bar(frame.buffer_mut(), share, app.flipped, bar);
             }
         }
         None => frame.render_widget(
@@ -163,27 +213,30 @@ pub fn draw(frame: &mut Frame, app: &App, now: Instant) {
     draw_side_panel(frame, app, screen.side, now);
     frame.render_widget(status_line(app), screen.status);
     if let (Some(board), Some(_)) = (screen.board, app.pending_promotion()) {
-        draw_promotion_choice(frame, app, board);
+        draw_promotion_choice(frame, app.board().turn, app.piece_style, board);
     }
     if app.panels.help {
         draw_help(frame);
     }
 }
 
-fn draw_board(buf: &mut Buffer, app: &App, geometry: BoardGeometry) {
-    let board = app.board();
-    let targets = app.targets();
-    let last_move = app.last_move();
-    let checked_king = in_check_king_square(app);
+pub fn draw_board(buf: &mut Buffer, scene: &BoardScene, geometry: BoardGeometry) {
+    let board = scene.board;
+    let targets = &scene.targets;
+    let last_move = scene.last_move;
+    let checked_king = in_check_king_square(board);
     for square in 0..64u8 {
         let piece = board.piece_on[square as usize];
         let is_light = (square / 8 + square % 8) % 2 == 1;
-        let background = if Some(square) == app.selected() {
+        let mark = scene.marks.iter().find(|(s, _)| *s == square).map(|&(_, color)| color);
+        let background = if Some(square) == scene.selected {
             SELECTED
         } else if Some(square) == checked_king {
             CHECK
         } else if targets.contains(&square) && piece != Piece::Empty {
             CAPTURE_TARGET
+        } else if let Some(color) = mark {
+            color
         } else if last_move.is_some_and(|m| m.from == square || m.to == square) {
             if is_light { LAST_MOVE_LIGHT } else { LAST_MOVE_DARK }
         } else if is_light {
@@ -191,15 +244,15 @@ fn draw_board(buf: &mut Buffer, app: &App, geometry: BoardGeometry) {
         } else {
             DARK_SQUARE
         };
-        let rect = geometry.square_rect(square, app.flipped);
+        let rect = geometry.square_rect(square, scene.flipped);
         buf.set_style(rect, Style::new().bg(background));
         if piece != Piece::Empty {
-            draw_piece(buf, rect, piece, app.piece_style, background);
+            draw_piece(buf, rect, piece, scene.piece_style, background);
         } else if targets.contains(&square) {
             draw_target_dot(buf, rect, background);
         }
     }
-    draw_coordinates(buf, app.flipped, geometry);
+    draw_coordinates(buf, scene.flipped, geometry);
 }
 
 fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
@@ -214,8 +267,7 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
     }
 }
 
-fn in_check_king_square(app: &App) -> Option<u8> {
-    let board = app.board();
+fn in_check_king_square(board: &Board) -> Option<u8> {
     let king = board.king_square(board.turn);
     (king < 64 && board.is_square_attacked(king as i32, board.turn.other())).then_some(king as u8)
 }
@@ -308,7 +360,7 @@ fn piece_symbol(piece: Piece, style: PieceStyle) -> Option<(&'static str, Style)
 }
 
 /// White's share of the bar, from the expected score of the evaluation.
-fn white_share(score: Score) -> f64 {
+pub fn white_share(score: Score) -> f64 {
     match score {
         Score::MateIn(moves) => {
             if moves >= 0 {
@@ -321,10 +373,10 @@ fn white_share(score: Score) -> f64 {
     }
 }
 
-fn draw_eval_bar(buf: &mut Buffer, app: &App, bar: Rect) {
-    let share = app.engine_line().map_or(0.5, |line| white_share(line.score));
-    let white_rows = (share * f64::from(bar.height)).round() as u16;
-    let (white, black) = if app.flipped {
+/// A bar split between White and Black by `share`, White's part nearest White's side.
+pub fn draw_eval_bar(buf: &mut Buffer, share: f64, flipped: bool, bar: Rect) {
+    let white_rows = (share.clamp(0.0, 1.0) * f64::from(bar.height)).round() as u16;
+    let (white, black) = if flipped {
         (Rect::new(bar.x, bar.y, bar.width, white_rows), Rect::new(bar.x, bar.y + white_rows, bar.width, bar.height - white_rows))
     } else {
         let black_rows = bar.height - white_rows;
@@ -510,16 +562,15 @@ fn status_line(app: &App) -> Paragraph<'static> {
     Paragraph::new(Line::styled(hints, Style::new().fg(DIM)))
 }
 
-fn draw_promotion_choice(frame: &mut Frame, app: &App, geometry: BoardGeometry) {
+pub fn draw_promotion_choice(frame: &mut Frame, color: Color, piece_style: PieceStyle, geometry: BoardGeometry) {
     let rects = geometry.promotion_rects();
     let outline = Rect::new(rects[0].x - 1, rects[0].y - 1, 4 * geometry.square_width + 2, geometry.square_height + 2);
     frame.render_widget(Clear, outline);
     frame.render_widget(Block::bordered().title(" Promote "), outline);
-    let color = app.board().turn;
     let buf = frame.buffer_mut();
     for (rect, kind) in rects.into_iter().zip(PROMOTION_KINDS) {
         buf.set_style(rect, Style::new().bg(LIGHT_SQUARE));
-        draw_piece(buf, rect, Piece::from_kind(kind, color), app.piece_style, LIGHT_SQUARE);
+        draw_piece(buf, rect, Piece::from_kind(kind, color), piece_style, LIGHT_SQUARE);
     }
 }
 
@@ -541,11 +592,16 @@ const HELP: &[(&str, &str)] = &[
 ];
 
 fn draw_help(frame: &mut Frame) {
+    draw_key_help(frame, HELP);
+}
+
+/// A centred popup listing keys and what they do.
+pub fn draw_key_help(frame: &mut Frame, keys: &[(&str, &str)]) {
     let area = frame.area();
     let width = 52.min(area.width);
-    let height = (HELP.len() as u16 + 2).min(area.height);
+    let height = (keys.len() as u16 + 2).min(area.height);
     let popup = Rect::new(area.x + (area.width - width) / 2, area.y + (area.height - height) / 2, width, height);
-    let lines: Vec<Line> = HELP
+    let lines: Vec<Line> = keys
         .iter()
         .map(|(key, action)| {
             Line::from(vec![Span::styled(format!("{key:>13}  "), Style::new().fg(ACCENT)), Span::raw(*action)])
@@ -555,7 +611,7 @@ fn draw_help(frame: &mut Frame) {
     frame.render_widget(Paragraph::new(lines).block(Block::bordered().title(" Keys ")), popup);
 }
 
-fn format_score(score: Score) -> String {
+pub fn format_score(score: Score) -> String {
     match score {
         Score::Centipawns(cp) => format!("{:+.2}", f64::from(cp) / 100.0),
         Score::MateIn(moves) if moves >= 0 => format!("#{moves}"),
@@ -571,7 +627,7 @@ fn format_count(n: u64) -> String {
     }
 }
 
-fn format_clock(ms: i64) -> String {
+pub fn format_clock(ms: i64) -> String {
     let tenths = ms / 100;
     let seconds = tenths / 10;
     if seconds < 20 {
@@ -584,7 +640,6 @@ fn format_clock(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::Board;
     use crate::tui::app::PlayConfig;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
