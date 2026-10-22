@@ -47,6 +47,17 @@ const AGE_MASK: u64 = 0x1F;
 const NO_EVAL: i16 = i16::MIN;
 const HASHFULL_SAMPLE_CLUSTERS: usize = 1000;
 
+/// What a search learned about a position, to be written into the table.
+#[derive(Copy, Clone, Debug)]
+pub struct TTWrite {
+    pub depth: i16,
+    pub score: i32,
+    pub eval: Option<i32>,
+    pub bound: Bound,
+    pub best_move: Option<Move>,
+    pub is_pv: bool,
+}
+
 /// A decoded entry, copied out of the table.
 #[derive(Copy, Clone, Debug)]
 pub struct TTEntry {
@@ -54,15 +65,15 @@ pub struct TTEntry {
 }
 
 impl TTEntry {
-    fn pack(
-        depth: i16,
-        score: i32,
-        eval: Option<i32>,
-        bound: Bound,
-        best_move: Option<Move>,
-        is_pv: bool,
-        age: u8,
-    ) -> Self {
+    fn pack(write: TTWrite, age: u8) -> Self {
+        let TTWrite {
+            depth,
+            score,
+            eval,
+            bound,
+            best_move,
+            is_pv,
+        } = write;
         let packed_score = u64::from(score as i16 as u16);
         let packed_eval = u64::from(eval.map_or(NO_EVAL, |e| e as i16) as u16);
         let packed_move = u64::from(best_move.map_or(0u16, u16::from));
@@ -227,18 +238,9 @@ impl SharedTransTable {
     }
 
     #[inline]
-    pub fn store(
-        &self,
-        key: ZKey,
-        depth: i16,
-        score: i32,
-        eval: Option<i32>,
-        bound: Bound,
-        best_move: Option<Move>,
-        is_pv: bool,
-    ) {
+    pub fn store(&self, key: ZKey, write: TTWrite) {
         let age = self.table.current_age();
-        let new_entry = TTEntry::pack(depth, score, eval, bound, best_move, is_pv, age);
+        let new_entry = TTEntry::pack(write, age);
         let slots = &self.table.cluster(key).slots;
 
         for slot in slots {
@@ -246,8 +248,14 @@ impl SharedTransTable {
             if slot_key == key {
                 let existing = TTEntry { data };
                 if existing.age() == age || new_entry.depth() >= existing.depth() {
-                    let kept_move = best_move.or(existing.best_move());
-                    let entry = TTEntry::pack(depth, score, eval, bound, kept_move, is_pv, age);
+                    let kept_move = write.best_move.or(existing.best_move());
+                    let entry = TTEntry::pack(
+                        TTWrite {
+                            best_move: kept_move,
+                            ..write
+                        },
+                        age,
+                    );
                     slot.store(key, entry.data);
                 }
                 return;
@@ -323,12 +331,14 @@ mod tests {
 
         tt.store(
             0xDEAD_BEEF_1234_5678,
-            17,
-            -1234,
-            Some(56),
-            Bound::Lower,
-            Some(mv),
-            true,
+            TTWrite {
+                depth: 17,
+                score: -1234,
+                eval: Some(56),
+                bound: Bound::Lower,
+                best_move: Some(mv),
+                is_pv: true,
+            },
         );
         let entry = tt.probe(0xDEAD_BEEF_1234_5678).unwrap();
 
@@ -345,8 +355,28 @@ mod tests {
         let tt = SharedTransTable::new(1);
         let mv = Move::quiet(12, 28);
 
-        tt.store(5, 6, 10, None, Bound::Lower, Some(mv), false);
-        tt.store(5, 7, -3, None, Bound::Upper, None, false);
+        tt.store(
+            5,
+            TTWrite {
+                depth: 6,
+                score: 10,
+                eval: None,
+                bound: Bound::Lower,
+                best_move: Some(mv),
+                is_pv: false,
+            },
+        );
+        tt.store(
+            5,
+            TTWrite {
+                depth: 7,
+                score: -3,
+                eval: None,
+                bound: Bound::Upper,
+                best_move: None,
+                is_pv: false,
+            },
+        );
 
         let entry = tt.probe(5).unwrap();
         assert_eq!(entry.best_move(), Some(mv));
@@ -356,7 +386,17 @@ mod tests {
     #[test]
     fn missing_eval_and_move_are_none() {
         let tt = SharedTransTable::new(1);
-        tt.store(42, 3, 0, None, Bound::Upper, None, false);
+        tt.store(
+            42,
+            TTWrite {
+                depth: 3,
+                score: 0,
+                eval: None,
+                bound: Bound::Upper,
+                best_move: None,
+                is_pv: false,
+            },
+        );
         let entry = tt.probe(42).unwrap();
         assert_eq!(entry.eval(), None);
         assert_eq!(entry.best_move(), None);
@@ -365,7 +405,17 @@ mod tests {
     #[test]
     fn probe_misses_unknown_key_and_clear_empties_table() {
         let tt = SharedTransTable::new(1);
-        tt.store(7, 1, 10, None, Bound::Exact, None, false);
+        tt.store(
+            7,
+            TTWrite {
+                depth: 1,
+                score: 10,
+                eval: None,
+                bound: Bound::Exact,
+                best_move: None,
+                is_pv: false,
+            },
+        );
         assert!(tt.probe(8).is_none());
         tt.clear();
         assert!(tt.probe(7).is_none());
@@ -374,9 +424,29 @@ mod tests {
     #[test]
     fn shallower_store_of_same_key_from_older_search_is_ignored() {
         let tt = SharedTransTable::new(1);
-        tt.store(99, 10, 1, None, Bound::Exact, None, false);
+        tt.store(
+            99,
+            TTWrite {
+                depth: 10,
+                score: 1,
+                eval: None,
+                bound: Bound::Exact,
+                best_move: None,
+                is_pv: false,
+            },
+        );
         tt.tick_age();
-        tt.store(99, 4, 2, None, Bound::Exact, None, false);
+        tt.store(
+            99,
+            TTWrite {
+                depth: 4,
+                score: 2,
+                eval: None,
+                bound: Bound::Exact,
+                best_move: None,
+                is_pv: false,
+            },
+        );
         assert_eq!(tt.probe(99).unwrap().depth(), 10);
     }
 
@@ -386,9 +456,29 @@ mod tests {
         // Small keys all map to cluster 0: the index uses the key's high bits.
         let keys: Vec<u64> = (1..=5).collect();
         for (depth, &key) in [9, 3, 7, 8].iter().zip(&keys) {
-            tt.store(key, *depth, 0, None, Bound::Exact, None, false);
+            tt.store(
+                key,
+                TTWrite {
+                    depth: *depth,
+                    score: 0,
+                    eval: None,
+                    bound: Bound::Exact,
+                    best_move: None,
+                    is_pv: false,
+                },
+            );
         }
-        tt.store(keys[4], 5, 0, None, Bound::Exact, None, false);
+        tt.store(
+            keys[4],
+            TTWrite {
+                depth: 5,
+                score: 0,
+                eval: None,
+                bound: Bound::Exact,
+                best_move: None,
+                is_pv: false,
+            },
+        );
         assert!(
             tt.probe(keys[1]).is_none(),
             "depth-3 entry should be evicted"

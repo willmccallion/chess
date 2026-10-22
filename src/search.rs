@@ -6,7 +6,7 @@ use crate::movepicker::{MovePicker, OrderingContext};
 use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
-use crate::tt::{Bound, SharedTransTable};
+use crate::tt::{Bound, SharedTransTable, TTWrite};
 use crate::types::{MAX_MOVES, Move, MoveList, Piece, StackVec, Undo};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
@@ -731,12 +731,14 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         if tt_entry.is_none() {
             s.tt.store(
                 key,
-                0,
-                score_to_tt(stand_pat, s.ply),
-                Some(raw_eval),
-                Bound::Lower,
-                None,
-                tt_pv,
+                TTWrite {
+                    depth: 0,
+                    score: score_to_tt(stand_pat, s.ply),
+                    eval: Some(raw_eval),
+                    bound: Bound::Lower,
+                    best_move: None,
+                    is_pv: tt_pv,
+                },
             );
         }
         return stand_pat;
@@ -784,12 +786,14 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     let bound = bound_for(best_score, alpha_orig, beta);
     s.tt.store(
         key,
-        0,
-        score_to_tt(best_score, s.ply),
-        Some(raw_eval),
-        bound,
-        best_move,
-        tt_pv,
+        TTWrite {
+            depth: 0,
+            score: score_to_tt(best_score, s.ply),
+            eval: Some(raw_eval),
+            bound,
+            best_move,
+            is_pv: tt_pv,
+        },
     );
     best_score
 }
@@ -878,12 +882,14 @@ fn probcut(
         if score >= probcut_beta {
             s.tt.store(
                 s.board.zobrist,
-                (probe_depth + 1) as i16,
-                score_to_tt(score, s.ply),
-                None,
-                Bound::Lower,
-                Some(m),
-                s.stack[s.ply].tt_pv,
+                TTWrite {
+                    depth: (probe_depth + 1) as i16,
+                    score: score_to_tt(score, s.ply),
+                    eval: None,
+                    bound: Bound::Lower,
+                    best_move: Some(m),
+                    is_pv: s.stack[s.ply].tt_pv,
+                },
             );
             return ProbCut::Cutoff(score);
         }
@@ -1342,12 +1348,14 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     }
     s.tt.store(
         key,
-        depth as i16,
-        score_to_tt(best_score, s.ply),
-        raw_eval,
-        bound,
-        best_move,
-        tt_pv,
+        TTWrite {
+            depth: depth as i16,
+            score: score_to_tt(best_score, s.ply),
+            eval: raw_eval,
+            bound,
+            best_move,
+            is_pv: tt_pv,
+        },
     );
     best_score
 }
