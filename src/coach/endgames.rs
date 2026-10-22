@@ -10,7 +10,9 @@ pub enum Goal {
     /// Make a queen that survives, with the opponent left with only a king.
     Promote,
     /// Hold a draw for this many of your moves (or reach a drawn result sooner).
-    Hold { moves: usize },
+    Hold {
+        moves: usize,
+    },
 }
 
 impl Goal {

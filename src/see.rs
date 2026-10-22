@@ -221,7 +221,11 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
 
     let mut occupied = b.all_pieces ^ (1u64 << from) ^ (1u64 << to);
     if m.en_passant {
-        let captured_sq = if b.turn == Color::White { to - 8 } else { to + 8 };
+        let captured_sq = if b.turn == Color::White {
+            to - 8
+        } else {
+            to + 8
+        };
         occupied ^= 1u64 << captured_sq;
     }
     let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
@@ -250,7 +254,11 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
 
         if kind == PieceKind::King {
             let opponent_still_attacks = attackers & color_pieces(b, side.other()) != 0;
-            return if opponent_still_attacks { !result } else { result };
+            return if opponent_still_attacks {
+                !result
+            } else {
+                result
+            };
         }
 
         swap = kind_value(kind) - swap;
@@ -277,13 +285,24 @@ mod tests {
     fn see_value_bracket(fen: &str, uci: &str, expected: i32) {
         let mut board = Board::from_fen(fen).unwrap();
         let m = crate::uci_io::parse_uci_move(&mut board, uci).unwrap();
-        assert!(see_ge(&board, m, expected), "{uci} should gain at least {expected}");
-        assert!(!see_ge(&board, m, expected + 1), "{uci} should gain less than {}", expected + 1);
+        assert!(
+            see_ge(&board, m, expected),
+            "{uci} should gain at least {expected}"
+        );
+        assert!(
+            !see_ge(&board, m, expected + 1),
+            "{uci} should gain less than {}",
+            expected + 1
+        );
     }
 
     #[test]
     fn undefended_pawn_capture_wins_a_pawn() {
-        see_value_bracket("1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", "e1e5", 100);
+        see_value_bracket(
+            "1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1",
+            "e1e5",
+            100,
+        );
     }
 
     #[test]

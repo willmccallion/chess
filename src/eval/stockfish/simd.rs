@@ -94,7 +94,11 @@ impl<const N: usize> WeightRows<N> for [i16] {
 
     fn apply_scalar(&self, row: usize, acc: &mut [i16; N], subtract: bool) {
         for (value, &w) in acc.iter_mut().zip(&self[row * N..(row + 1) * N]) {
-            *value = if subtract { value.wrapping_sub(w) } else { value.wrapping_add(w) };
+            *value = if subtract {
+                value.wrapping_sub(w)
+            } else {
+                value.wrapping_add(w)
+            };
         }
     }
 
@@ -114,7 +118,11 @@ impl<const N: usize> WeightRows<N> for [i8] {
     fn apply_scalar(&self, row: usize, acc: &mut [i16; N], subtract: bool) {
         for (value, &w) in acc.iter_mut().zip(&self[row * N..(row + 1) * N]) {
             let w = i16::from(w);
-            *value = if subtract { value.wrapping_sub(w) } else { value.wrapping_add(w) };
+            *value = if subtract {
+                value.wrapping_sub(w)
+            } else {
+                value.wrapping_add(w)
+            };
         }
     }
 
@@ -291,7 +299,8 @@ pub fn scramble_for_sparse(weights: &[i8], inputs: usize, outputs: usize) -> Vec
     for output in 0..outputs {
         for input in 0..inputs {
             let chunk = input / 4;
-            scrambled[(chunk * outputs + output) * 4 + input % 4] = weights[output * inputs + input];
+            scrambled[(chunk * outputs + output) * 4 + input % 4] =
+                weights[output * inputs + input];
         }
     }
     scrambled
@@ -301,7 +310,10 @@ pub fn scramble_for_sparse(weights: &[i8], inputs: usize, outputs: usize) -> Vec
 /// from `scramble_for_sparse`; inputs must be at most 127.
 pub fn sparse_affine_16(input: &[u8], scrambled: &[i8], biases: &[i32; 16]) -> [i32; 16] {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    if input.len() % 32 == 0 && input.len() <= SPARSE_MAX_INPUTS && scrambled.len() >= input.len() * 16 {
+    if input.len() % 32 == 0
+        && input.len() <= SPARSE_MAX_INPUTS
+        && scrambled.len() >= input.len() * 16
+    {
         // SAFETY: AVX2 is enabled at compile time, the input length is a multiple of 32 and
         // the weights cover 16 outputs for every input.
         return unsafe { sparse_affine_16_avx2(input, scrambled, biases) };
@@ -313,7 +325,11 @@ pub fn sparse_affine_16(input: &[u8], scrambled: &[i8], biases: &[i32; 16]) -> [
         }
         for (o, sum) in out.iter_mut().enumerate() {
             let w = &scrambled[(chunk * 16 + o) * 4..(chunk * 16 + o) * 4 + 4];
-            *sum += group.iter().zip(w).map(|(&x, &w)| i32::from(x) * i32::from(w)).sum::<i32>();
+            *sum += group
+                .iter()
+                .zip(w)
+                .map(|(&x, &w)| i32::from(x) * i32::from(w))
+                .sum::<i32>();
         }
     }
     out
@@ -411,7 +427,9 @@ mod tests {
     #[test]
     fn fused_row_updates_match_one_row_at_a_time() {
         const N: usize = 256;
-        let wide: Vec<i16> = (0..N * 6).map(|i| ((i * 7919) % 65_536) as u16 as i16).collect();
+        let wide: Vec<i16> = (0..N * 6)
+            .map(|i| ((i * 7919) % 65_536) as u16 as i16)
+            .collect();
         let narrow: Vec<i8> = (0..N * 6).map(|i| ((i * 31) % 256) as u8 as i8).collect();
         let start: [i16; N] = std::array::from_fn(|i| (i as i16).wrapping_mul(97));
         let (adds, subs) = ([0usize, 3, 5], [1usize, 4]);
@@ -454,7 +472,8 @@ mod tests {
                     a = a.wrapping_add(ta[j]);
                     b = b.wrapping_add(tb[j]);
                 }
-                let expected = (i32::from(a.clamp(0, clip)) * i32::from(b.clamp(0, clip)) / 512) as u8;
+                let expected =
+                    (i32::from(a.clamp(0, clip)) * i32::from(b.clamp(0, clip)) / 512) as u8;
                 assert_eq!(fast[j], expected, "lane {j}");
             }
         }
@@ -463,14 +482,25 @@ mod tests {
     #[test]
     fn sparse_affine_matches_dense_dot_products() {
         const INPUTS: usize = 128;
-        let input: Vec<u8> = (0..INPUTS).map(|i| if i % 3 == 0 || i / 4 % 5 == 0 { 0 } else { (i * 13 % 128) as u8 }).collect();
-        let weights: Vec<i8> = (0..16 * INPUTS).map(|i| ((i * 29) % 256) as u8 as i8).collect();
+        let input: Vec<u8> = (0..INPUTS)
+            .map(|i| {
+                if i % 3 == 0 || i / 4 % 5 == 0 {
+                    0
+                } else {
+                    (i * 13 % 128) as u8
+                }
+            })
+            .collect();
+        let weights: Vec<i8> = (0..16 * INPUTS)
+            .map(|i| ((i * 29) % 256) as u8 as i8)
+            .collect();
         let biases: [i32; 16] = std::array::from_fn(|o| o as i32 * 100 - 700);
 
         let sparse = sparse_affine_16(&input, &scramble_for_sparse(&weights, INPUTS, 16), &biases);
 
         for o in 0..16 {
-            let dense = biases[o] + dot_u8_i8_scalar(&input, &weights[o * INPUTS..(o + 1) * INPUTS]);
+            let dense =
+                biases[o] + dot_u8_i8_scalar(&input, &weights[o * INPUTS..(o + 1) * INPUTS]);
             assert_eq!(sparse[o], dense, "output {o}");
         }
     }

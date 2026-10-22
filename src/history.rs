@@ -161,7 +161,10 @@ mod tests {
             correction.update(Color::White, 99, 10_000, 20, 16);
         }
         let saturated = correction.correction(Color::White, 99);
-        assert!((CORRECTION_LIMIT_CP - 2..=CORRECTION_LIMIT_CP).contains(&saturated), "{saturated}");
+        assert!(
+            (CORRECTION_LIMIT_CP - 2..=CORRECTION_LIMIT_CP).contains(&saturated),
+            "{saturated}"
+        );
     }
 
     #[test]
@@ -180,7 +183,9 @@ mod tests {
 
     #[test]
     fn gravity_keeps_entries_within_bounds() {
-        let largest_bonus = crate::search_params::ParamSpec::find("HistoryBonusMax").unwrap().max;
+        let largest_bonus = crate::search_params::ParamSpec::find("HistoryBonusMax")
+            .unwrap()
+            .max;
         let mut entry = 0i16;
         for _ in 0..1000 {
             apply_gravity(&mut entry, largest_bonus);

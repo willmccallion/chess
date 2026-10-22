@@ -106,8 +106,14 @@ impl UciEngine {
             .spawn()
             .map_err(|e| format!("Failed to spawn '{}': {}", path, e))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| format!("{path}: no stdin pipe"))?;
-        let stdout = child.stdout.take().ok_or_else(|| format!("{path}: no stdout pipe"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| format!("{path}: no stdin pipe"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("{path}: no stdout pipe"))?;
 
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -137,11 +143,7 @@ impl UciEngine {
         writeln!(self.stdin, "{}", cmd).map_err(|e| format!("send to {}: {}", self.name, e))
     }
 
-    fn read_until(
-        &self,
-        pred: impl Fn(&str) -> bool,
-        timeout: Duration,
-    ) -> Result<String, String> {
+    fn read_until(&self, pred: impl Fn(&str) -> bool, timeout: Duration) -> Result<String, String> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -188,7 +190,11 @@ impl UciEngine {
         self.is_ready()
     }
 
-    pub fn set_position(&mut self, start_fen: Option<&str>, moves: &[String]) -> Result<(), String> {
+    pub fn set_position(
+        &mut self,
+        start_fen: Option<&str>,
+        moves: &[String],
+    ) -> Result<(), String> {
         let pos = match start_fen {
             Some(fen) => format!("position fen {}", fen),
             None => "position startpos".to_string(),
@@ -200,13 +206,7 @@ impl UciEngine {
         }
     }
 
-    pub fn go(
-        &mut self,
-        wtime: i64,
-        btime: i64,
-        winc: u64,
-        binc: u64,
-    ) -> Result<String, String> {
+    pub fn go(&mut self, wtime: i64, btime: i64, winc: u64, binc: u64) -> Result<String, String> {
         self.send(&format!(
             "go wtime {} btime {} winc {} binc {}",
             wtime.max(1),
@@ -310,7 +310,10 @@ mod tests {
     fn stockfish_static_eval_is_white_pov_centipawns() {
         let line = "Final evaluation       +0.12 (white side) [with scaled NNUE, ...]";
         assert_eq!(parse_static_eval_white_cp(line), Some(12));
-        assert_eq!(parse_static_eval_white_cp("Final evaluation: none (in check)"), None);
+        assert_eq!(
+            parse_static_eval_white_cp("Final evaluation: none (in check)"),
+            None
+        );
     }
 
     #[test]

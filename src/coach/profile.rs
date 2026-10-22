@@ -42,7 +42,11 @@ impl ReviewedGame {
             ),
             Err(_) => (Vec::new(), Vec::new()),
         };
-        Self { record, reviews, habits }
+        Self {
+            record,
+            reviews,
+            habits,
+        }
     }
 
     pub fn your_moves(&self) -> impl Iterator<Item = &MoveReview> {
@@ -51,7 +55,11 @@ impl ReviewedGame {
 
     pub fn cause_counts(&self) -> BTreeMap<CauseKind, usize> {
         let mut counts = BTreeMap::new();
-        for cause in self.your_moves().filter(|r| r.class.is_serious()).filter_map(|r| r.cause.as_ref()) {
+        for cause in self
+            .your_moves()
+            .filter(|r| r.class.is_serious())
+            .filter_map(|r| r.cause.as_ref())
+        {
             *counts.entry(cause.kind()).or_insert(0) += 1;
         }
         counts
@@ -59,7 +67,10 @@ impl ReviewedGame {
 
     /// The single most useful lesson from the game, if it had errors.
     pub fn main_lesson(&self) -> Option<CauseKind> {
-        self.cause_counts().into_iter().max_by_key(|&(kind, count)| (count, std::cmp::Reverse(kind))).map(|(k, _)| k)
+        self.cause_counts()
+            .into_iter()
+            .max_by_key(|&(kind, count)| (count, std::cmp::Reverse(kind)))
+            .map(|(k, _)| k)
     }
 }
 
@@ -77,14 +88,24 @@ pub struct PeriodStats {
 
 impl PeriodStats {
     pub fn of(games: &[&ReviewedGame]) -> Self {
-        let analysed: Vec<&&ReviewedGame> = games.iter().filter(|g| g.record.is_fully_analysed()).collect();
+        let analysed: Vec<&&ReviewedGame> = games
+            .iter()
+            .filter(|g| g.record.is_fully_analysed())
+            .collect();
         let n = analysed.len();
         if n == 0 {
-            return Self { games: games.len(), ..Self::default() };
+            return Self {
+                games: games.len(),
+                ..Self::default()
+            };
         }
         let moves: Vec<&MoveReview> = analysed.iter().flat_map(|g| g.your_moves()).collect();
         let accuracy_of = |filter: &dyn Fn(&MoveReview) -> bool| {
-            let values: Vec<f64> = moves.iter().filter(|r| filter(r)).map(|r| r.accuracy()).collect();
+            let values: Vec<f64> = moves
+                .iter()
+                .filter(|r| filter(r))
+                .map(|r| r.accuracy())
+                .collect();
             overall_accuracy(&values)
         };
         let mut errors_per_game = BTreeMap::new();
@@ -97,7 +118,10 @@ impl PeriodStats {
         for note in games.iter().flat_map(|g| g.habits.iter()) {
             *habits.entry(note.habit).or_insert(0) += 1;
         }
-        let blunders = moves.iter().filter(|r| r.class == super::judgement::MoveClass::Blunder).count();
+        let blunders = moves
+            .iter()
+            .filter(|r| r.class == super::judgement::MoveClass::Blunder)
+            .count();
         Self {
             games: games.len(),
             accuracy: accuracy_of(&|_| true),
@@ -152,16 +176,33 @@ impl Profile {
     }
 
     pub fn build(games: &[ReviewedGame], attempts: &[AttemptRecord], now: UnixTime) -> Self {
-        let results: Vec<(Elo, Outcome)> =
-            games.iter().map(|g| (g.record.level.spec().elo, g.record.outcome())).collect();
-        let rating_history: Vec<Elo> = (1..=results.len()).map(|n| rating_after(results[..n].iter().copied())).collect();
+        let results: Vec<(Elo, Outcome)> = games
+            .iter()
+            .map(|g| (g.record.level.spec().elo, g.record.outcome()))
+            .collect();
+        let rating_history: Vec<Elo> = (1..=results.len())
+            .map(|n| rating_after(results[..n].iter().copied()))
+            .collect();
         let count = |outcome: Outcome| results.iter().filter(|(_, o)| *o == outcome).count();
         let rated_puzzles: Vec<(Elo, Outcome)> = attempts
             .iter()
             .filter(|a| matches!(a.item, TrainingItem::Puzzle(PuzzleId::Lichess(_))))
-            .filter_map(|a| a.rating.map(|r| (r, if a.success { Outcome::Win } else { Outcome::Loss })))
+            .filter_map(|a| {
+                a.rating.map(|r| {
+                    (
+                        r,
+                        if a.success {
+                            Outcome::Win
+                        } else {
+                            Outcome::Loss
+                        },
+                    )
+                })
+            })
             .collect();
-        let puzzle_attempts = attempts.iter().filter(|a| matches!(a.item, TrainingItem::Puzzle(_)));
+        let puzzle_attempts = attempts
+            .iter()
+            .filter(|a| matches!(a.item, TrainingItem::Puzzle(_)));
         let recent_start = games.len().saturating_sub(RECENT_GAMES);
         let recent_games: Vec<&ReviewedGame> = games[recent_start..].iter().collect();
         let earlier_start = recent_start.saturating_sub(RECENT_GAMES);
@@ -195,14 +236,19 @@ fn focus_areas(stats: &PeriodStats) -> Vec<Focus> {
         .map(|(&kind, &rate)| (kind, rate))
         .collect();
     mistakes.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let mut focus: Vec<Focus> = mistakes.into_iter().map(|(kind, per_game)| Focus::Mistakes { kind, per_game }).collect();
+    let mut focus: Vec<Focus> = mistakes
+        .into_iter()
+        .map(|(kind, per_game)| Focus::Mistakes { kind, per_game })
+        .collect();
     if let Some((&habit, &games)) = stats.habits.iter().max_by_key(|&(_, &count)| count)
         && games * 3 >= stats.games.max(1)
     {
         focus.push(Focus::Habit { habit, games });
     }
-    if let Some((&phase, &accuracy)) =
-        stats.phase_accuracy.iter().min_by(|a, b| a.1.total_cmp(b.1))
+    if let Some((&phase, &accuracy)) = stats
+        .phase_accuracy
+        .iter()
+        .min_by(|a, b| a.1.total_cmp(b.1))
         && accuracy < WEAK_PHASE_ACCURACY
     {
         focus.push(Focus::Phase { phase, accuracy });
@@ -219,7 +265,11 @@ fn streak_days(games: &[ReviewedGame], attempts: &[AttemptRecord], now: UnixTime
         .chain(attempts.iter().map(|a| a.at.day()))
         .collect();
     let today = now.day();
-    let mut day = if days.contains(&today) { today } else { today.saturating_sub(1) };
+    let mut day = if days.contains(&today) {
+        today
+    } else {
+        today.saturating_sub(1)
+    };
     let mut streak = 0;
     while days.contains(&day) {
         streak += 1;
@@ -235,7 +285,10 @@ fn streak_days(games: &[ReviewedGame], attempts: &[AttemptRecord], now: UnixTime
 pub fn schedules(attempts: &[AttemptRecord]) -> HashMap<TrainingItem, Schedule> {
     let mut by_item: HashMap<TrainingItem, Vec<Attempt>> = HashMap::new();
     for a in attempts {
-        by_item.entry(a.item.clone()).or_default().push(Attempt { at: a.at, success: a.success });
+        by_item.entry(a.item.clone()).or_default().push(Attempt {
+            at: a.at,
+            success: a.success,
+        });
     }
     by_item
         .into_iter()
@@ -278,10 +331,18 @@ pub fn puzzles_from_games(games: &[ReviewedGame]) -> Vec<Puzzle> {
                 let themes = review
                     .cause
                     .as_ref()
-                    .map(|c| themes_for(c.kind()).iter().map(|t| (*t).to_string()).collect())
+                    .map(|c| {
+                        themes_for(c.kind())
+                            .iter()
+                            .map(|t| (*t).to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 puzzles.push(Puzzle {
-                    id: PuzzleId::Game { game: game.record.id.0, ply },
+                    id: PuzzleId::Game {
+                        game: game.record.id.0,
+                        ply,
+                    },
                     board: board.clone(),
                     last_move: previous,
                     solution: vec![best],
@@ -330,15 +391,25 @@ pub struct PuzzlePool<'a> {
 
 impl PuzzlePool<'_> {
     fn schedule_of(&self, id: &PuzzleId) -> Option<Schedule> {
-        self.schedules.get(&TrainingItem::Puzzle(id.clone())).copied()
+        self.schedules
+            .get(&TrainingItem::Puzzle(id.clone()))
+            .copied()
     }
 
     /// Due reviews first, then untried mistakes from your games, then a fresh puzzle near
     /// your rating, usually on a theme you need. `skip` is the puzzle just played.
-    pub fn next(&self, now: UnixTime, skip: Option<&PuzzleId>, rng: &mut impl Rng) -> Option<(Puzzle, PuzzleReason)> {
+    pub fn next(
+        &self,
+        now: UnixTime,
+        skip: Option<&PuzzleId>,
+        rng: &mut impl Rng,
+    ) -> Option<(Puzzle, PuzzleReason)> {
         let not_skipped = |id: &PuzzleId| Some(id) != skip;
         let is_due_review = |id: &PuzzleId| {
-            not_skipped(id) && self.schedule_of(id).is_some_and(|s| s.is_due(now) && !s.is_learned())
+            not_skipped(id)
+                && self
+                    .schedule_of(id)
+                    .is_some_and(|s| s.is_due(now) && !s.is_learned())
         };
         let due_lichess = self
             .lichess
@@ -348,20 +419,30 @@ impl PuzzlePool<'_> {
         let due = self
             .own
             .iter()
-            .filter(|p| not_skipped(&p.id) && self.schedule_of(&p.id).is_some_and(|s| s.is_due(now)))
+            .filter(|p| {
+                not_skipped(&p.id) && self.schedule_of(&p.id).is_some_and(|s| s.is_due(now))
+            })
             .cloned()
             .chain(due_lichess)
             .min_by_key(|p| self.schedule_of(&p.id).map(|s| s.due));
         if let Some(puzzle) = due {
             return Some((puzzle, PuzzleReason::Review));
         }
-        if let Some(puzzle) = self.own.iter().find(|p| not_skipped(&p.id) && self.schedule_of(&p.id).is_none()) {
+        if let Some(puzzle) = self
+            .own
+            .iter()
+            .find(|p| not_skipped(&p.id) && self.schedule_of(&p.id).is_none())
+        {
             return Some((puzzle.clone(), PuzzleReason::FromYourGame));
         }
         self.fresh_lichess(skip, rng)
     }
 
-    fn fresh_lichess(&self, skip: Option<&PuzzleId>, rng: &mut impl Rng) -> Option<(Puzzle, PuzzleReason)> {
+    fn fresh_lichess(
+        &self,
+        skip: Option<&PuzzleId>,
+        rng: &mut impl Rng,
+    ) -> Option<(Puzzle, PuzzleReason)> {
         let near = |window: i32| -> Vec<&LichessPuzzle> {
             self.lichess
                 .iter()
@@ -379,7 +460,11 @@ impl PuzzlePool<'_> {
         let on_weak_theme: Vec<&LichessPuzzle> = candidates
             .iter()
             .copied()
-            .filter(|p| p.themes.iter().any(|t| self.weak_themes.contains(&t.as_str())))
+            .filter(|p| {
+                p.themes
+                    .iter()
+                    .any(|t| self.weak_themes.contains(&t.as_str()))
+            })
             .collect();
         let (pool, reason) = if !on_weak_theme.is_empty() && rng.gen_bool(WEAK_THEME_SHARE) {
             (on_weak_theme, PuzzleReason::WeakTheme)
@@ -389,7 +474,9 @@ impl PuzzlePool<'_> {
         if pool.is_empty() {
             return None;
         }
-        pool[rng.gen_range(0..pool.len())].to_puzzle().map(|p| (p, reason))
+        pool[rng.gen_range(0..pool.len())]
+            .to_puzzle()
+            .map(|p| (p, reason))
     }
 }
 
@@ -402,7 +489,11 @@ pub enum LineStatus {
     Learned,
 }
 
-pub fn line_status(line: &Line, schedules: &HashMap<TrainingItem, Schedule>, now: UnixTime) -> LineStatus {
+pub fn line_status(
+    line: &Line,
+    schedules: &HashMap<TrainingItem, Schedule>,
+    now: UnixTime,
+) -> LineStatus {
     match schedules.get(&TrainingItem::Opening(line.id.to_string())) {
         None => LineStatus::New,
         Some(s) if s.is_due(now) => LineStatus::Due,
@@ -431,7 +522,9 @@ pub fn daily_plan(
     let mut plan = Vec::new();
     let due_puzzles = schedules
         .iter()
-        .filter(|(item, s)| matches!(item, TrainingItem::Puzzle(_)) && s.is_due(now) && !s.is_learned())
+        .filter(|(item, s)| {
+            matches!(item, TrainingItem::Puzzle(_)) && s.is_due(now) && !s.is_learned()
+        })
         .count();
     let untried_own = own_puzzles
         .iter()
@@ -440,14 +533,20 @@ pub fn daily_plan(
     if due_puzzles + untried_own > 0 {
         plan.push(Task::ReviewPuzzles(due_puzzles + untried_own));
     }
-    let due_lines = all_lines().filter(|l| line_status(l, schedules, now) == LineStatus::Due).count();
+    let due_lines = all_lines()
+        .filter(|l| line_status(l, schedules, now) == LineStatus::Due)
+        .count();
     if due_lines > 0 {
         plan.push(Task::ReviewLines(due_lines));
-    } else if let Some(line) = all_lines().find(|l| line_status(l, schedules, now) == LineStatus::New) {
+    } else if let Some(line) =
+        all_lines().find(|l| line_status(l, schedules, now) == LineStatus::New)
+    {
         plan.push(Task::LearnLine(line));
     }
     let solved = |drill: &Drill| {
-        schedules.get(&TrainingItem::Endgame(drill.id.to_string())).is_some_and(|s| s.level > 0)
+        schedules
+            .get(&TrainingItem::Endgame(drill.id.to_string()))
+            .is_some_and(|s| s.level > 0)
     };
     if let Some(drill) = DRILLS.iter().find(|d| !solved(d)) {
         plan.push(Task::Endgame(drill));
@@ -505,7 +604,12 @@ mod tests {
     fn first_legal_other_than(board: &Board, m: Option<Move>) -> Move {
         let mut legal = crate::types::MoveList::new();
         board.generate_legal_moves(&mut legal);
-        legal.as_slice().iter().copied().find(|&x| Some(x) != m).unwrap()
+        legal
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|&x| Some(x) != m)
+            .unwrap()
     }
 
     fn cp(cp: i32) -> Eval {
@@ -516,7 +620,13 @@ mod tests {
         game(
             id,
             &["f3", "e5", "g4", "Qh4#"],
-            &[cp(20), cp(60), cp(-80), Eval::Score(Score::MateIn(1)), Eval::Checkmated],
+            &[
+                cp(20),
+                cp(60),
+                cp(-80),
+                Eval::Score(Score::MateIn(1)),
+                Eval::Checkmated,
+            ],
             GameResult::BlackWin,
         )
     }
@@ -539,14 +649,25 @@ mod tests {
         let profile = Profile::build(&games, &[], UnixTime(DAY));
         let puzzles = puzzles_from_games(&games);
 
-        assert!(matches!(profile.focus.first(), Some(Focus::Mistakes { kind: CauseKind::AllowedMate, .. })));
+        assert!(matches!(
+            profile.focus.first(),
+            Some(Focus::Mistakes {
+                kind: CauseKind::AllowedMate,
+                ..
+            })
+        ));
         assert_eq!(puzzles.len(), 1);
         assert_eq!(puzzles[0].id, PuzzleId::Game { game: 1, ply: 2 });
     }
 
     #[test]
     fn the_streak_counts_consecutive_active_days() {
-        let games = [fools_mate(10), fools_mate(11), fools_mate(13), fools_mate(14)];
+        let games = [
+            fools_mate(10),
+            fools_mate(11),
+            fools_mate(13),
+            fools_mate(14),
+        ];
 
         let streak = Profile::build(&games, &[], UnixTime(15 * DAY + 100)).streak_days;
 
@@ -558,7 +679,13 @@ mod tests {
         let games = [fools_mate(1)];
         let own = puzzles_from_games(&games);
         let schedules = HashMap::new();
-        let pool = PuzzlePool { own: &own, lichess: &[], schedules: &schedules, rating: Elo(600), weak_themes: &[] };
+        let pool = PuzzlePool {
+            own: &own,
+            lichess: &[],
+            schedules: &schedules,
+            rating: Elo(600),
+            weak_themes: &[],
+        };
         let mut rng = StdRng::seed_from_u64(1);
 
         let (puzzle, reason) = pool.next(UnixTime(DAY), None, &mut rng).unwrap();
@@ -579,11 +706,21 @@ mod tests {
             moves: None,
         };
         let schedules = schedules(&[missed]);
-        let pool = PuzzlePool { own: &own, lichess: &[], schedules: &schedules, rating: Elo(600), weak_themes: &[] };
+        let pool = PuzzlePool {
+            own: &own,
+            lichess: &[],
+            schedules: &schedules,
+            rating: Elo(600),
+            weak_themes: &[],
+        };
         let mut rng = StdRng::seed_from_u64(1);
 
         assert!(pool.next(UnixTime(DAY + 60), None, &mut rng).is_none());
-        assert_eq!(pool.next(UnixTime(DAY + 3600), None, &mut rng).map(|(_, r)| r), Some(PuzzleReason::Review));
+        assert_eq!(
+            pool.next(UnixTime(DAY + 3600), None, &mut rng)
+                .map(|(_, r)| r),
+            Some(PuzzleReason::Review)
+        );
     }
 
     #[test]

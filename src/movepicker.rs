@@ -79,9 +79,17 @@ impl QuietThreats {
             PieceKind::Knight | PieceKind::Bishop => (self.by_pawn, MINOR_THREAT_BONUS),
             PieceKind::Pawn | PieceKind::King => (0, 0),
         };
-        let escape = if danger & from != 0 && danger & to == 0 { bonus } else { 0 };
+        let escape = if danger & from != 0 && danger & to == 0 {
+            bonus
+        } else {
+            0
+        };
         let blunder = if danger & to != 0 { bonus } else { 0 };
-        let check = if self.checks[kind as usize] & to != 0 { CHECK_BONUS } else { 0 };
+        let check = if self.checks[kind as usize] & to != 0 {
+            CHECK_BONUS
+        } else {
+            0
+        };
         escape - blunder + check
     }
 }
@@ -412,7 +420,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(first_quiet.from, 27, "{first_quiet:?}");
-        assert_eq!(QuietThreats::new(&board).by_pawn & (1u64 << first_quiet.to), 0);
+        assert_eq!(
+            QuietThreats::new(&board).by_pawn & (1u64 << first_quiet.to),
+            0
+        );
     }
 
     #[test]

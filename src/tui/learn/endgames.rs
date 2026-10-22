@@ -1,19 +1,19 @@
 //! Endgame drills: win or hold key positions against the engine's best defence.
 
-use super::common::{
-    BAD, BoardKey, BoardPanel, GOOD, INFO, TEXT, centred, colored, dim, draw_board, draw_help, draw_status, heading,
-    panel, screen_layout,
-};
-use super::data::CoachData;
 use super::super::engine::SearchLimit;
 use super::super::view::{ACCENT, DIM, board_layout};
+use super::common::{
+    BAD, BoardKey, BoardPanel, GOOD, INFO, TEXT, centred, colored, dim, draw_board, draw_help,
+    draw_status, heading, panel, screen_layout,
+};
+use super::data::CoachData;
 use super::{Job, JobKind, JobResult, Nav, Screen};
 use crate::coach::endgames::{DRILLS, Drill, Goal, has_won_queen_ending};
 use crate::coach::store::TrainingItem;
 use crate::game_runner::{GameEndReason, GameResult, position_outcome, win_for};
+use crate::notation::{numbered, san_of};
 use crate::search::Score;
 use crate::time::TimeBudget;
-use crate::notation::{numbered, san_of};
 use crate::types::{Color, Move};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -57,9 +57,15 @@ impl Screen for Endgames {
             let chosen = i == self.selected;
             let item = TrainingItem::Endgame(drill.id.to_string());
             let tries: Vec<_> = data.attempts.iter().filter(|a| a.item == item).collect();
-            let best = tries.iter().filter(|a| a.success).filter_map(|a| a.moves).min();
+            let best = tries
+                .iter()
+                .filter(|a| a.success)
+                .filter_map(|a| a.moves)
+                .min();
             let status = match (best, tries.is_empty()) {
-                (Some(moves), _) => Span::styled(format!("done in {moves} moves"), Style::new().fg(GOOD)),
+                (Some(moves), _) => {
+                    Span::styled(format!("done in {moves} moves"), Style::new().fg(GOOD))
+                }
                 (None, false) => Span::styled("not yet", Style::new().fg(BAD)),
                 (None, true) => Span::styled("new", Style::new().fg(INFO)),
             };
@@ -67,15 +73,33 @@ impl Screen for Endgames {
                 Span::styled(if chosen { "▸ " } else { "  " }, Style::new().fg(ACCENT)),
                 Span::styled(
                     format!("{:<38}", drill.name),
-                    if chosen { Style::new().fg(TEXT).add_modifier(Modifier::BOLD) } else { Style::new().fg(TEXT) },
+                    if chosen {
+                        Style::new().fg(TEXT).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(TEXT)
+                    },
                 ),
                 status,
             ]));
-            lines.push(Line::styled(format!("    {}", drill.goal.describe()), Style::new().fg(DIM)));
+            lines.push(Line::styled(
+                format!("    {}", drill.goal.describe()),
+                Style::new().fg(DIM),
+            ));
         }
-        frame.render_widget(Paragraph::new(lines).block(panel("Endgames")), list_area(area));
-        let status = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
-        frame.render_widget(Paragraph::new(dim("  ↑↓ choose · Enter start · Esc back")), status);
+        frame.render_widget(
+            Paragraph::new(lines).block(panel("Endgames")),
+            list_area(area),
+        );
+        let status = Rect::new(
+            area.x,
+            area.bottom().saturating_sub(1),
+            area.width,
+            area.height.min(1),
+        );
+        frame.render_widget(
+            Paragraph::new(dim("  ↑↓ choose · Enter start · Esc back")),
+            status,
+        );
     }
 
     fn key(&mut self, key: KeyEvent, _data: &mut CoachData, _now: Instant) -> Nav {
@@ -94,7 +118,13 @@ impl Screen for Endgames {
         }
     }
 
-    fn mouse(&mut self, mouse: MouseEvent, area: Rect, _data: &mut CoachData, _now: Instant) -> Nav {
+    fn mouse(
+        &mut self,
+        mouse: MouseEvent,
+        area: Rect,
+        _data: &mut CoachData,
+        _now: Instant,
+    ) -> Nav {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return Nav::Stay;
         }
@@ -185,7 +215,8 @@ impl EndgameDrill {
     fn play(&mut self, m: Move) {
         let board = self.panel.board();
         if let Some(san) = san_of(board, m) {
-            self.history.push(numbered(board, &san, self.history.is_empty()));
+            self.history
+                .push(numbered(board, &san, self.history.is_empty()));
         }
         self.panel.play(m);
     }
@@ -206,7 +237,10 @@ impl EndgameDrill {
             }
             Some((GameResult::Draw, reason)) => match goal {
                 Goal::Hold { .. } => Some((true, format!("Drawn by {reason}: you held it!"))),
-                Goal::Checkmate | Goal::Promote => Some((false, format!("Drawn by {reason}. Careful: that throws the win away."))),
+                Goal::Checkmate | Goal::Promote => Some((
+                    false,
+                    format!("Drawn by {reason}. Careful: that throws the win away."),
+                )),
             },
             Some(_) => Some((false, "You were checkmated.".to_string())),
             None => self.goal_reached(),
@@ -217,15 +251,17 @@ impl EndgameDrill {
         let board = self.panel.board();
         let after_their_move = board.turn == self.you;
         match self.drill.goal {
-            Goal::Promote if after_their_move && has_won_queen_ending(board, self.you) => {
-                Some((true, "Promoted, and the new queen is safe: it's a win.".to_string()))
-            }
+            Goal::Promote if after_their_move && has_won_queen_ending(board, self.you) => Some((
+                true,
+                "Promoted, and the new queen is safe: it's a win.".to_string(),
+            )),
             Goal::Hold { moves } if after_their_move && self.your_moves >= moves => {
                 Some((true, format!("You held for {moves} moves: drawn!")))
             }
-            Goal::Checkmate | Goal::Promote if self.your_moves >= MOVE_LIMIT => {
-                Some((false, format!("{MOVE_LIMIT} moves without finishing: try a more direct plan.")))
-            }
+            Goal::Checkmate | Goal::Promote if self.your_moves >= MOVE_LIMIT => Some((
+                false,
+                format!("{MOVE_LIMIT} moves without finishing: try a more direct plan."),
+            )),
             _ => None,
         }
     }
@@ -248,25 +284,45 @@ impl EndgameDrill {
             Line::raw(""),
         ];
         for tip in self.drill.tips.iter().take(self.tips_shown) {
-            lines.push(Line::from(vec![Span::styled("• ", Style::new().fg(INFO)), Span::styled(tip.to_string(), Style::new().fg(TEXT))]));
+            lines.push(Line::from(vec![
+                Span::styled("• ", Style::new().fg(INFO)),
+                Span::styled(tip.to_string(), Style::new().fg(TEXT)),
+            ]));
         }
         if self.tips_shown < self.drill.tips.len() {
             lines.push(dim("Stuck? Press t for a tip."));
         }
         lines.push(Line::raw(""));
-        let recent: Vec<&str> = self.history.iter().rev().take(6).rev().map(String::as_str).collect();
+        let recent: Vec<&str> = self
+            .history
+            .iter()
+            .rev()
+            .take(6)
+            .rev()
+            .map(String::as_str)
+            .collect();
         if !recent.is_empty() {
             lines.push(Line::styled(recent.join(" "), Style::new().fg(TEXT)));
         }
-        let target = self.drill.target_moves.map_or_else(String::new, |t| format!(" (aim for {t})"));
+        let target = self
+            .drill
+            .target_moves
+            .map_or_else(String::new, |t| format!(" (aim for {t})"));
         lines.push(dim(format!("Your moves: {}{target}", self.your_moves)));
         match self.state {
             State::Playing => {
-                let text = if self.your_turn() { "Your move" } else { "The engine is defending…" };
+                let text = if self.your_turn() {
+                    "Your move"
+                } else {
+                    "The engine is defending…"
+                };
                 lines.push(heading(text));
             }
             State::Won => {
-                lines.push(Line::styled(self.verdict.clone().unwrap_or_default(), Style::new().fg(GOOD).add_modifier(Modifier::BOLD)));
+                lines.push(Line::styled(
+                    self.verdict.clone().unwrap_or_default(),
+                    Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
+                ));
                 if let Some(target) = self.drill.target_moves
                     && self.your_moves > target
                 {
@@ -275,7 +331,10 @@ impl EndgameDrill {
                 lines.push(dim("r: try again   Esc: back"));
             }
             State::Lost => {
-                lines.push(Line::styled(self.verdict.clone().unwrap_or_default(), Style::new().fg(BAD).add_modifier(Modifier::BOLD)));
+                lines.push(Line::styled(
+                    self.verdict.clone().unwrap_or_default(),
+                    Style::new().fg(BAD).add_modifier(Modifier::BOLD),
+                ));
                 lines.push(dim("r: try again   t: tip   Esc: back"));
             }
         }
@@ -289,9 +348,15 @@ impl EndgameDrill {
 impl Screen for EndgameDrill {
     fn draw(&self, frame: &mut Frame, data: &CoachData, _now: Instant) {
         let layout = screen_layout(frame.area());
-        draw_board(frame, &layout, &self.panel.scene(data.piece_style, Vec::new()));
+        draw_board(
+            frame,
+            &layout,
+            &self.panel.scene(data.piece_style, Vec::new()),
+        );
         frame.render_widget(
-            Paragraph::new(self.side_lines()).wrap(Wrap { trim: false }).block(panel("Endgame drill")),
+            Paragraph::new(self.side_lines())
+                .wrap(Wrap { trim: false })
+                .block(panel("Endgame drill")),
             layout.side,
         );
         draw_status(
@@ -326,7 +391,9 @@ impl Screen for EndgameDrill {
         }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Nav::Back,
-            KeyCode::Char('t') => self.tips_shown = (self.tips_shown + 1).min(self.drill.tips.len()),
+            KeyCode::Char('t') => {
+                self.tips_shown = (self.tips_shown + 1).min(self.drill.tips.len())
+            }
             KeyCode::Char('r') => self.restart(),
             KeyCode::Char('f') => self.panel.flipped = !self.panel.flipped,
             KeyCode::Char('p') => data.piece_style = data.piece_style.next(),
@@ -371,8 +438,16 @@ impl Screen for EndgameDrill {
             None => false,
         };
         self.play(m);
-        if matches!(self.drill.goal, Goal::Hold { .. }) && engine_winning && position_outcome(self.panel.board()).is_none() {
-            self.end(false, "The position can't be held any more: replay and look for the drawing method.".to_string(), data);
+        if matches!(self.drill.goal, Goal::Hold { .. })
+            && engine_winning
+            && position_outcome(self.panel.board()).is_none()
+        {
+            self.end(
+                false,
+                "The position can't be held any more: replay and look for the drawing method."
+                    .to_string(),
+                data,
+            );
             return Nav::Stay;
         }
         self.judge(data);
@@ -388,7 +463,9 @@ mod tests {
 
     fn drill_at(id: &str, fen: &str, your_moves: usize) -> EndgameDrill {
         let mut drill = EndgameDrill::new(drill_by_id(id).unwrap()).unwrap();
-        drill.panel.set_position(Board::from_fen(fen).unwrap(), None);
+        drill
+            .panel
+            .set_position(Board::from_fen(fen).unwrap(), None);
         drill.your_moves = your_moves;
         drill
     }

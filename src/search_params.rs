@@ -101,7 +101,9 @@ search_params! {
 
 impl ParamSpec {
     pub fn find(name: &str) -> Option<&'static ParamSpec> {
-        PARAM_SPECS.iter().find(|spec| spec.name.eq_ignore_ascii_case(name))
+        PARAM_SPECS
+            .iter()
+            .find(|spec| spec.name.eq_ignore_ascii_case(name))
     }
 
     pub const fn clamp(&self, value: i32) -> i32 {
@@ -138,7 +140,11 @@ mod tests {
     #[test]
     fn defaults_lie_inside_their_ranges() {
         for spec in PARAM_SPECS {
-            assert!(spec.min <= spec.default && spec.default <= spec.max, "{}", spec.name);
+            assert!(
+                spec.min <= spec.default && spec.default <= spec.max,
+                "{}",
+                spec.name
+            );
             assert!(spec.step > 0, "{}", spec.name);
         }
     }

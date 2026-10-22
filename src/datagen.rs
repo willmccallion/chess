@@ -4,7 +4,9 @@
 
 use crate::board::Board;
 use crate::game_runner::{GameResult, position_outcome};
-use crate::search::{NodeLimit, Score, SearchControl, SearchLimits, SearchThreads, search_reporting};
+use crate::search::{
+    NodeLimit, Score, SearchControl, SearchLimits, SearchThreads, search_reporting,
+};
 use crate::search_params::SearchParams;
 use crate::tt::SharedTransTable;
 use crate::types::{Color, Move, MoveList, START_FEN};
@@ -59,7 +61,10 @@ pub struct DatagenSummary {
 
 /// Plays games on `config.threads` threads until enough positions are written.
 pub fn run(config: &DatagenConfig) -> io::Result<DatagenSummary> {
-    let file = OpenOptions::new().write(true).create_new(true).open(&config.output)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&config.output)?;
     let mut out = BufWriter::new(file);
     let stop = AtomicBool::new(false);
     let (sender, receiver) = mpsc::sync_channel::<GameRecord>(256);
@@ -101,7 +106,12 @@ pub fn run(config: &DatagenConfig) -> io::Result<DatagenSummary> {
     })
 }
 
-fn play_games(config: &DatagenConfig, seed: u64, stop: &AtomicBool, sender: &mpsc::SyncSender<GameRecord>) {
+fn play_games(
+    config: &DatagenConfig,
+    seed: u64,
+    stop: &AtomicBool,
+    sender: &mpsc::SyncSender<GameRecord>,
+) {
     let mut rng = StdRng::seed_from_u64(seed);
     let tt = SharedTransTable::new(config.hash_mb);
     let mut threads = SearchThreads::new(1);
@@ -173,11 +183,19 @@ impl Adjudicator {
         }
         self.winning_side = leader;
         if self.winning_streak >= WIN_PLIES {
-            return Some(if leader == Some(true) { GameResult::WhiteWin } else { GameResult::BlackWin });
+            return Some(if leader == Some(true) {
+                GameResult::WhiteWin
+            } else {
+                GameResult::BlackWin
+            });
         }
 
         let quiet = matches!(verdict, Verdict::Centipawns(cp) if cp.abs() <= DRAW_SCORE_CP);
-        self.quiet_streak = if quiet && ply >= DRAW_MIN_PLY { self.quiet_streak + 1 } else { 0 };
+        self.quiet_streak = if quiet && ply >= DRAW_MIN_PLY {
+            self.quiet_streak + 1
+        } else {
+            0
+        };
         (self.quiet_streak >= DRAW_PLIES).then_some(GameResult::Draw)
     }
 }
@@ -205,7 +223,12 @@ fn is_quiet(m: Move) -> bool {
     !m.capture && m.promotion.is_none()
 }
 
-fn think(board: &Board, tt: &SharedTransTable, threads: &mut SearchThreads, nodes: NodeLimit) -> Option<(Move, Score)> {
+fn think(
+    board: &Board,
+    tt: &SharedTransTable,
+    threads: &mut SearchThreads,
+    nodes: NodeLimit,
+) -> Option<(Move, Score)> {
     let limits = SearchLimits {
         max_depth: MAX_DEPTH,
         params: SearchParams::default(),
@@ -217,7 +240,12 @@ fn think(board: &Board, tt: &SharedTransTable, threads: &mut SearchThreads, node
     Some((result.best_move?, result.score?))
 }
 
-fn play_game(rng: &mut StdRng, tt: &SharedTransTable, threads: &mut SearchThreads, config: &DatagenConfig) -> Option<GameRecord> {
+fn play_game(
+    rng: &mut StdRng,
+    tt: &SharedTransTable,
+    threads: &mut SearchThreads,
+    config: &DatagenConfig,
+) -> Option<GameRecord> {
     let plies = config.random_plies + rng.gen_range(0..=1);
     let mut board = random_opening(rng, plies)?;
     let (_, opening_score) = think(&board, tt, threads, config.nodes)?;
@@ -296,7 +324,9 @@ mod tests {
         let mut brief = Adjudicator::default();
         let big = Verdict::Centipawns(-2500);
 
-        let lasting_results: Vec<_> = (0..WIN_PLIES).map(|ply| lasting.observe(big, ply)).collect();
+        let lasting_results: Vec<_> = (0..WIN_PLIES)
+            .map(|ply| lasting.observe(big, ply))
+            .collect();
         brief.observe(big, 0);
         brief.observe(big, 1);
         let after_recovery = brief.observe(Verdict::Centipawns(50), 2);
@@ -312,8 +342,14 @@ mod tests {
         let mut late = Adjudicator::default();
         let level = Verdict::Centipawns(3);
 
-        let early_result = (0..DRAW_PLIES).map(|ply| early.observe(level, ply)).last().flatten();
-        let late_result = (0..DRAW_PLIES).map(|ply| late.observe(level, DRAW_MIN_PLY + ply)).last().flatten();
+        let early_result = (0..DRAW_PLIES)
+            .map(|ply| early.observe(level, ply))
+            .last()
+            .flatten();
+        let late_result = (0..DRAW_PLIES)
+            .map(|ply| late.observe(level, DRAW_MIN_PLY + ply))
+            .last()
+            .flatten();
 
         assert_eq!(early_result, None);
         assert_eq!(late_result, Some(GameResult::Draw));
@@ -321,9 +357,18 @@ mod tests {
 
     #[test]
     fn mate_scores_are_turned_into_whites_point_of_view() {
-        assert_eq!(Verdict::from_search(Score::MateIn(2), Color::Black), Verdict::Mate(false));
-        assert_eq!(Verdict::from_search(Score::MateIn(-2), Color::Black), Verdict::Mate(true));
-        assert_eq!(Verdict::from_search(Score::Centipawns(40), Color::Black), Verdict::Centipawns(-40));
+        assert_eq!(
+            Verdict::from_search(Score::MateIn(2), Color::Black),
+            Verdict::Mate(false)
+        );
+        assert_eq!(
+            Verdict::from_search(Score::MateIn(-2), Color::Black),
+            Verdict::Mate(true)
+        );
+        assert_eq!(
+            Verdict::from_search(Score::Centipawns(40), Color::Black),
+            Verdict::Centipawns(-40)
+        );
     }
 
     #[test]
@@ -333,7 +378,10 @@ mod tests {
             output: PathBuf::new(),
             positions: 0,
             threads: 1,
-            nodes: NodeLimit { soft: 300, hard: 3000 },
+            nodes: NodeLimit {
+                soft: 300,
+                hard: 3000,
+            },
             random_plies: 8,
             seed: 1,
             hash_mb: 1,
@@ -341,7 +389,9 @@ mod tests {
         let tt = SharedTransTable::new(config.hash_mb);
         let mut threads = SearchThreads::new(1);
         let mut rng = StdRng::seed_from_u64(config.seed);
-        let game = (0..20).find_map(|_| play_game(&mut rng, &tt, &mut threads, &config)).unwrap();
+        let game = (0..20)
+            .find_map(|_| play_game(&mut rng, &tt, &mut threads, &config))
+            .unwrap();
 
         let mut text = Vec::new();
         write_game(&mut text, &game).unwrap();

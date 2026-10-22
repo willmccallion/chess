@@ -10,7 +10,10 @@ use crate::uci_io::parse_uci_move;
 pub enum PuzzleId {
     Lichess(String),
     /// The position before your move at `ply` of a coach game.
-    Game { game: u64, ply: usize },
+    Game {
+        game: u64,
+        ply: usize,
+    },
 }
 
 impl PuzzleId {
@@ -27,7 +30,10 @@ impl PuzzleId {
             "lichess" if !rest.is_empty() => Some(Self::Lichess(rest.to_string())),
             "game" => {
                 let (game, ply) = rest.split_once(':')?;
-                Some(Self::Game { game: game.parse().ok()?, ply: ply.parse().ok()? })
+                Some(Self::Game {
+                    game: game.parse().ok()?,
+                    ply: ply.parse().ok()?,
+                })
             }
             _ => None,
         }
@@ -70,7 +76,18 @@ pub struct LichessPuzzle {
 /// Reads `PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags`.
 pub fn parse_lichess_csv_row(row: &str) -> Option<LichessPuzzle> {
     let fields: Vec<&str> = row.split(',').collect();
-    let [id, fen, moves, rating, _deviation, popularity, plays, themes, ..] = fields.as_slice() else {
+    let [
+        id,
+        fen,
+        moves,
+        rating,
+        _deviation,
+        popularity,
+        plays,
+        themes,
+        ..,
+    ] = fields.as_slice()
+    else {
         return None;
     };
     let moves: Vec<String> = moves.split_whitespace().map(str::to_string).collect();
@@ -117,11 +134,15 @@ impl LichessPuzzle {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// Right; the opponent answers with `reply` and you go on.
-    Continue { reply: Move },
+    Continue {
+        reply: Move,
+    },
     Solved,
     /// Not the expected move, but it might be as good: the engine should judge it.
     NeedsEngine,
-    Wrong { expected: Move },
+    Wrong {
+        expected: Move,
+    },
 }
 
 /// A puzzle being solved.
@@ -176,7 +197,9 @@ impl Attempt {
             return self.advance(m);
         }
         self.state = AttemptState::Failed;
-        Verdict::Wrong { expected: self.expected().unwrap_or(m) }
+        Verdict::Wrong {
+            expected: self.expected().unwrap_or(m),
+        }
     }
 
     fn is_final_move(&self) -> bool {
@@ -254,7 +277,10 @@ const THEME_NAMES: &[(&str, &str)] = &[
 ];
 
 pub fn theme_name(theme: &str) -> Option<&'static str> {
-    THEME_NAMES.iter().find(|(key, _)| *key == theme).map(|(_, name)| *name)
+    THEME_NAMES
+        .iter()
+        .find(|(key, _)| *key == theme)
+        .map(|(_, name)| *name)
 }
 
 /// A puzzle's themes in words, most telling first.
@@ -270,7 +296,14 @@ pub fn describe_themes(themes: &[String]) -> String {
 
 /// A one-line form of a stored Lichess puzzle: id, FEN, moves, rating and themes.
 pub fn lichess_to_line(p: &LichessPuzzle) -> String {
-    format!("{}\t{}\t{}\t{}\t{}", p.id, p.fen, p.moves.join(" "), p.rating.0, p.themes.join(" "))
+    format!(
+        "{}\t{}\t{}\t{}\t{}",
+        p.id,
+        p.fen,
+        p.moves.join(" "),
+        p.rating.0,
+        p.themes.join(" ")
+    )
 }
 
 pub fn lichess_from_line(line: &str) -> Option<LichessPuzzle> {
@@ -322,7 +355,12 @@ mod tests {
         let first = attempt.play(puzzle.solution[0]);
         let last = attempt.play(puzzle.solution[2]);
 
-        assert_eq!(first, Verdict::Continue { reply: puzzle.solution[1] });
+        assert_eq!(
+            first,
+            Verdict::Continue {
+                reply: puzzle.solution[1]
+            }
+        );
         assert_eq!(last, Verdict::Solved);
         assert_eq!(attempt.state, AttemptState::Solved { first_try: true });
     }
@@ -332,12 +370,22 @@ mod tests {
         let puzzle = parse_lichess_csv_row(ROW).unwrap().to_puzzle().unwrap();
         let mut legal = MoveList::new();
         puzzle.board.generate_legal_moves(&mut legal);
-        let wrong = legal.as_slice().iter().copied().find(|&m| m != puzzle.solution[0]).unwrap();
+        let wrong = legal
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|&m| m != puzzle.solution[0])
+            .unwrap();
         let mut attempt = Attempt::new(puzzle.clone());
 
         let verdict = attempt.play(wrong);
 
-        assert_eq!(verdict, Verdict::Wrong { expected: puzzle.solution[0] });
+        assert_eq!(
+            verdict,
+            Verdict::Wrong {
+                expected: puzzle.solution[0]
+            }
+        );
         assert_eq!(attempt.state, AttemptState::Failed);
     }
 
@@ -346,8 +394,18 @@ mod tests {
         let board = Board::from_fen("4k3/8/8/3q4/8/8/8/3RK3 w - - 0 1").unwrap();
         let mut legal = MoveList::new();
         board.generate_legal_moves(&mut legal);
-        let rxd5 = legal.as_slice().iter().copied().find(|m| m.capture).unwrap();
-        let other = legal.as_slice().iter().copied().find(|m| !m.capture).unwrap();
+        let rxd5 = legal
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|m| m.capture)
+            .unwrap();
+        let other = legal
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|m| !m.capture)
+            .unwrap();
         let puzzle = Puzzle {
             id: PuzzleId::Game { game: 1, ply: 0 },
             board,
@@ -364,7 +422,13 @@ mod tests {
 
     #[test]
     fn puzzle_ids_survive_their_text_form() {
-        for id in [PuzzleId::Lichess("00sHx".into()), PuzzleId::Game { game: 1_700_000_000_123, ply: 17 }] {
+        for id in [
+            PuzzleId::Lichess("00sHx".into()),
+            PuzzleId::Game {
+                game: 1_700_000_000_123,
+                ply: 17,
+            },
+        ] {
             assert_eq!(PuzzleId::from_key(&id.key()), Some(id));
         }
         assert_eq!(PuzzleId::from_key("nonsense"), None);
@@ -376,12 +440,19 @@ mod tests {
 
         let back = lichess_from_line(&lichess_to_line(&row)).unwrap();
 
-        assert_eq!((back.id, back.fen, back.moves, back.rating), (row.id, row.fen, row.moves, row.rating));
+        assert_eq!(
+            (back.id, back.fen, back.moves, back.rating),
+            (row.id, row.fen, row.moves, row.rating)
+        );
     }
 
     #[test]
     fn themes_read_as_words() {
-        let themes = vec!["middlegame".to_string(), "mateIn2".to_string(), "fork".to_string()];
+        let themes = vec![
+            "middlegame".to_string(),
+            "mateIn2".to_string(),
+            "fork".to_string(),
+        ];
 
         assert_eq!(describe_themes(&themes), "Mate in 2 · Fork");
     }

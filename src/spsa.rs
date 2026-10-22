@@ -43,11 +43,14 @@ pub fn parse_worker_groups(spec: &str) -> Result<Vec<WorkerGroup>, String> {
             let (cpus, count) = group
                 .rsplit_once(':')
                 .ok_or_else(|| format!("expected cpus:count, got '{group}'"))?;
-            let valid_cpus = !cpus.is_empty() && cpus.chars().all(|c| c.is_ascii_digit() || c == '-');
+            let valid_cpus =
+                !cpus.is_empty() && cpus.chars().all(|c| c.is_ascii_digit() || c == '-');
             if !valid_cpus {
                 return Err(format!("invalid CPU list '{cpus}'"));
             }
-            let count = count.parse::<usize>().map_err(|e| format!("'{count}': {e}"))?;
+            let count = count
+                .parse::<usize>()
+                .map_err(|e| format!("'{count}': {e}"))?;
             Ok(WorkerGroup {
                 cpus: Some(cpus.to_string()),
                 count,
@@ -287,9 +290,15 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
     if config.openings.is_empty() {
         return Err("no openings".to_string());
     }
-    let mut theta: Vec<f64> = PARAM_SPECS.iter().map(|spec| f64::from(spec.default)).collect();
+    let mut theta: Vec<f64> = PARAM_SPECS
+        .iter()
+        .map(|spec| f64::from(spec.default))
+        .collect();
     for (name, value) in &config.start {
-        if let Some(index) = PARAM_SPECS.iter().position(|spec| spec.name.eq_ignore_ascii_case(name)) {
+        if let Some(index) = PARAM_SPECS
+            .iter()
+            .position(|spec| spec.name.eq_ignore_ascii_case(name))
+        {
             theta[index] = *value;
         }
     }
@@ -348,7 +357,13 @@ mod tests {
         let groups = parse_worker_groups("0-15:8,16-27:10").unwrap();
 
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0], WorkerGroup { cpus: Some("0-15".into()), count: 8 });
+        assert_eq!(
+            groups[0],
+            WorkerGroup {
+                cpus: Some("0-15".into()),
+                count: 8
+            }
+        );
         assert_eq!(groups[1].count, 10);
         assert!(parse_worker_groups("0-15").is_err());
         assert!(parse_worker_groups("a-b:3").is_err());
@@ -360,14 +375,21 @@ mod tests {
 
         let last = gains(planned - 1, planned);
 
-        assert!((last.perturbation - 1.0).abs() < 1e-9, "{}", last.perturbation);
+        assert!(
+            (last.perturbation - 1.0).abs() < 1e-9,
+            "{}",
+            last.perturbation
+        );
         assert!((last.learning - R_END).abs() < 1e-9, "{}", last.learning);
         assert!(gains(0, planned).perturbation > last.perturbation);
     }
 
     #[test]
     fn estimate_round_trips_through_its_file_format() {
-        let theta: Vec<f64> = PARAM_SPECS.iter().map(|s| f64::from(s.default) + 0.25).collect();
+        let theta: Vec<f64> = PARAM_SPECS
+            .iter()
+            .map(|s| f64::from(s.default) + 0.25)
+            .collect();
 
         let parsed = read_estimate(&format_estimate(&theta)).unwrap();
 
@@ -407,8 +429,14 @@ mod tests {
         for (i, spec) in PARAM_SPECS.iter().enumerate() {
             let moved = estimate.theta[i] - before[i];
             let toward_plus = f64::from(job.plus[i]) - before[i];
-            if toward_plus.abs() > 0.0 && (before[i] > f64::from(spec.min) && before[i] < f64::from(spec.max)) {
-                assert!(moved * toward_plus > 0.0, "{} moved {moved} plus {toward_plus}", spec.name);
+            if toward_plus.abs() > 0.0
+                && (before[i] > f64::from(spec.min) && before[i] < f64::from(spec.max))
+            {
+                assert!(
+                    moved * toward_plus > 0.0,
+                    "{} moved {moved} plus {toward_plus}",
+                    spec.name
+                );
             }
         }
     }

@@ -2,7 +2,9 @@
 
 use super::super::app::PieceStyle;
 use super::super::input::MoveInput;
-use super::super::view::{self, ACCENT, BoardGeometry, BoardScene, DIM, PROMOTION_KINDS, ScreenLayout};
+use super::super::view::{
+    self, ACCENT, BoardGeometry, BoardScene, DIM, PROMOTION_KINDS, ScreenLayout,
+};
 use crate::board::Board;
 use crate::coach::judgement::MoveClass;
 use crate::notation::parse_typed_move;
@@ -120,7 +122,12 @@ impl BoardPanel {
     }
 
     /// Handles a mouse event when `interactive`; returns a move you completed.
-    pub fn mouse(&mut self, mouse: MouseEvent, geometry: Option<BoardGeometry>, interactive: bool) -> Option<Move> {
+    pub fn mouse(
+        &mut self,
+        mouse: MouseEvent,
+        geometry: Option<BoardGeometry>,
+        interactive: bool,
+    ) -> Option<Move> {
         let geometry = geometry?;
         if !interactive {
             self.input.clear();
@@ -147,7 +154,9 @@ impl BoardPanel {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => match square {
-                Some(square) => self.input.release(&self.board, self.legal.as_slice(), square),
+                Some(square) => self
+                    .input
+                    .release(&self.board, self.legal.as_slice(), square),
                 None => {
                     self.input.release_off_board();
                     None
@@ -166,7 +175,9 @@ impl BoardPanel {
                     return match parse_typed_move(&self.board, self.legal.as_slice(), &text) {
                         Some(m) if interactive => BoardKey::Move(m),
                         Some(_) => BoardKey::Invalid("Wait for your turn".into()),
-                        None => BoardKey::Invalid(format!("'{}' is not a legal move here", text.trim())),
+                        None => {
+                            BoardKey::Invalid(format!("'{}' is not a legal move here", text.trim()))
+                        }
                     };
                 }
                 KeyCode::Esc => self.typed = None,
@@ -200,7 +211,9 @@ impl BoardPanel {
 }
 
 fn promotion_kind(c: char) -> Option<PieceKind> {
-    PROMOTION_KINDS.into_iter().find(|kind| kind.to_char_upper() == c.to_ascii_uppercase())
+    PROMOTION_KINDS
+        .into_iter()
+        .find(|kind| kind.to_char_upper() == c.to_ascii_uppercase())
 }
 
 /// Board on the left, side panel on the right, one status line at the bottom.
@@ -218,14 +231,21 @@ pub fn draw_board(frame: &mut Frame, layout: &ScreenLayout, scene: &BoardScene) 
             }
         }
         None => frame.render_widget(
-            Paragraph::new("Make the terminal larger to see the board").style(Style::new().fg(ACCENT)),
+            Paragraph::new("Make the terminal larger to see the board")
+                .style(Style::new().fg(ACCENT)),
             layout.side,
         ),
     }
 }
 
 /// The bottom line: what you are typing, a message, or the keys you can press.
-pub fn draw_status(frame: &mut Frame, area: Rect, typed: Option<&str>, message: Option<&str>, hints: &str) {
+pub fn draw_status(
+    frame: &mut Frame,
+    area: Rect,
+    typed: Option<&str>,
+    message: Option<&str>,
+    hints: &str,
+) {
     let line = if let Some(typed) = typed {
         Line::from(vec![
             Span::styled("Move: ", Style::new().fg(ACCENT)),
@@ -245,11 +265,17 @@ pub fn panel(title: &str) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(DIM))
-        .title(Span::styled(format!(" {title} "), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ))
 }
 
 pub fn heading(text: impl Into<String>) -> Line<'static> {
-    Line::styled(text.into(), Style::new().fg(TEXT).add_modifier(Modifier::BOLD))
+    Line::styled(
+        text.into(),
+        Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
+    )
 }
 
 pub fn dim(text: impl Into<String>) -> Line<'static> {
@@ -295,7 +321,12 @@ pub fn bar(fraction: f64, width: usize) -> String {
 pub fn centred(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
-    Rect::new(area.x + (area.width - width) / 2, area.y + (area.height - height) / 2, width, height)
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
 }
 
 /// Key help: the same `?` popup as play mode, with this screen's keys.

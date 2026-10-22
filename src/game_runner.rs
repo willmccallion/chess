@@ -61,7 +61,10 @@ impl std::fmt::Display for GameEndReason {
 }
 
 fn report_rejected_move(engine: &str, bestmove: &str, board: &Board) {
-    eprintln!("{engine} played illegal move '{bestmove}' in {}", board.to_fen());
+    eprintln!(
+        "{engine} played illegal move '{bestmove}' in {}",
+        board.to_fen()
+    );
 }
 
 /// The result if the game is over in `board` by the rules: mate, stalemate, threefold
@@ -72,8 +75,7 @@ pub fn position_outcome(board: &Board) -> Option<(GameResult, GameEndReason)> {
     if legal.is_empty() {
         let king = Piece::from_kind(PieceKind::King, board.turn);
         let king_sq = board.piece_bb[king.index()].trailing_zeros();
-        let in_check =
-            king_sq < 64 && board.is_square_attacked(king_sq as i32, board.turn.other());
+        let in_check = king_sq < 64 && board.is_square_attacked(king_sq as i32, board.turn.other());
         return Some(if in_check {
             (win_for(board.turn.other()), GameEndReason::Checkmate)
         } else {
@@ -100,11 +102,7 @@ pub const fn win_for(winner: Color) -> GameResult {
     }
 }
 
-pub fn play_game(
-    white: &mut UciEngine,
-    black: &mut UciEngine,
-    config: &GameConfig,
-) -> GameOutcome {
+pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConfig) -> GameOutcome {
     if let Err(e) = white.new_game() {
         eprintln!("Warning: white engine new_game failed: {}", e);
     }
@@ -127,7 +125,10 @@ pub fn play_game(
     let is_startpos = config.start_fen.is_none();
     let mut wtime = config.white_clock.base_ms as i64;
     let mut btime = config.black_clock.base_ms as i64;
-    let (winc, binc) = (config.white_clock.increment_ms, config.black_clock.increment_ms);
+    let (winc, binc) = (
+        config.white_clock.increment_ms,
+        config.black_clock.increment_ms,
+    );
     let mut moves: Vec<String> = Vec::new();
     let mut ply = 0usize;
 

@@ -46,7 +46,6 @@ fn format_error(msg: impl Into<String>) -> NetLoadError {
     NetLoadError::Format(msg.into())
 }
 
-
 /// Weights of the threat half of the big net's feature transformer.
 pub struct ThreatWeights {
     /// `[feature][neuron]`
@@ -371,7 +370,21 @@ mod tests {
 
     #[test]
     fn leb128_round_trips_signed_values() {
-        let values = [0, 1, -1, 63, 64, -64, -65, 300, -300, i32::from(i16::MAX), i32::from(i16::MIN), 1 << 20, -(1 << 25)];
+        let values = [
+            0,
+            1,
+            -1,
+            63,
+            64,
+            -64,
+            -65,
+            300,
+            -300,
+            i32::from(i16::MAX),
+            i32::from(i16::MIN),
+            1 << 20,
+            -(1 << 25),
+        ];
         let bytes = leb128_block(&values);
         let mut cursor = bytes.as_slice();
 

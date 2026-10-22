@@ -29,8 +29,10 @@ fn line_tables() -> &'static LineTables {
                 if magics::get_rook_attacks(a, 0) & b_bb != 0 {
                     tables.between[a][b] =
                         magics::get_rook_attacks(a, b_bb) & magics::get_rook_attacks(b, a_bb);
-                    tables.line[a][b] =
-                        (magics::get_rook_attacks(a, 0) & magics::get_rook_attacks(b, 0)) | a_bb | b_bb;
+                    tables.line[a][b] = (magics::get_rook_attacks(a, 0)
+                        & magics::get_rook_attacks(b, 0))
+                        | a_bb
+                        | b_bb;
                 } else if magics::get_bishop_attacks(a, 0) & b_bb != 0 {
                     tables.between[a][b] =
                         magics::get_bishop_attacks(a, b_bb) & magics::get_bishop_attacks(b, a_bb);
@@ -151,14 +153,19 @@ impl Board {
         }
 
         if m.en_passant {
-            let captured_sq = if self.turn == Color::White { to - 8 } else { to + 8 };
+            let captured_sq = if self.turn == Color::White {
+                to - 8
+            } else {
+                to + 8
+            };
             let captured = 1u64 << captured_sq;
             let occupied = (self.all_pieces ^ (1u64 << from) ^ captured) | (1u64 << to);
             return attackers_of(self, info.king_sq, them, occupied, captured) == 0;
         }
 
         let tables = line_tables();
-        if info.pinned & (1u64 << from) != 0 && tables.line[info.king_sq][from] & (1u64 << to) == 0 {
+        if info.pinned & (1u64 << from) != 0 && tables.line[info.king_sq][from] & (1u64 << to) == 0
+        {
             return false;
         }
 
@@ -195,7 +202,12 @@ mod tests {
         let info = board.legality_info().unwrap();
         for &m in moves.as_slice() {
             let expected = legal_by_making(board, m);
-            assert_eq!(board.is_legal(m, &info), expected, "{} {m:?}", board.to_fen());
+            assert_eq!(
+                board.is_legal(m, &info),
+                expected,
+                "{} {m:?}",
+                board.to_fen()
+            );
             if expected && depth > 1 {
                 let undo = board.make_move(m);
                 assert_agrees_with_make_unmake(board, depth - 1);

@@ -5,7 +5,14 @@ use super::{Evaluator, IncrementalState, PositionView};
 use crate::types::{Color, Move, Piece, PieceKind};
 
 /// Middlegame and endgame values of each piece kind, pawn first.
-const MATERIAL: [(i32, i32); 6] = [(90, 120), (320, 300), (330, 320), (480, 540), (950, 980), (0, 0)];
+const MATERIAL: [(i32, i32); 6] = [
+    (90, 120),
+    (320, 300),
+    (330, 320),
+    (480, 540),
+    (950, 980),
+    (0, 0),
+];
 /// Game phase each piece kind contributes; the full opening total is [`MAX_PHASE`].
 const PHASE_WEIGHT: [i32; 6] = [0, 1, 1, 2, 4, 0];
 const MAX_PHASE: i32 = 24;
@@ -25,7 +32,11 @@ const KINDS: [PieceKind; 6] = [
 const fn center_distance(file: i32, rank: i32) -> i32 {
     let file_distance = if file < 4 { 3 - file } else { file - 4 };
     let rank_distance = if rank < 4 { 3 - rank } else { rank - 4 };
-    if file_distance > rank_distance { file_distance } else { rank_distance }
+    if file_distance > rank_distance {
+        file_distance
+    } else {
+        rank_distance
+    }
 }
 
 /// Positional (middlegame, endgame) bonus for a piece on `square`, seen from its own side
@@ -48,7 +59,11 @@ const fn placement(kind: PieceKind, file: i32, rank: i32) -> (i32, i32) {
         }
         PieceKind::Queen => (5 - 3 * center, 15 - 5 * center),
         PieceKind::King => {
-            let shelter = if rank == 0 && (file <= 2 || file >= 6) { 20 } else { 0 };
+            let shelter = if rank == 0 && (file <= 2 || file >= 6) {
+                20
+            } else {
+                0
+            };
             (shelter - 25 * rank, 30 - 12 * center)
         }
     }
@@ -66,7 +81,11 @@ fn side_score(position: PositionView, color: Color) -> (i32, i32, i32) {
         while squares != 0 {
             let square = squares.trailing_zeros() as i32;
             squares &= squares - 1;
-            let rank = if color == Color::White { square / 8 } else { 7 - square / 8 };
+            let rank = if color == Color::White {
+                square / 8
+            } else {
+                7 - square / 8
+            };
             let (mg, eg) = placement(kind, square % 8, rank);
             middlegame += mg;
             endgame += eg;
@@ -103,9 +122,14 @@ impl Evaluator for Bootstrap {
         let (white_mg, white_eg, white_phase) = side_score(position, Color::White);
         let (black_mg, black_eg, black_phase) = side_score(position, Color::Black);
         let phase = (white_phase + black_phase).min(MAX_PHASE);
-        let white_relative =
-            ((white_mg - black_mg) * phase + (white_eg - black_eg) * (MAX_PHASE - phase)) / MAX_PHASE;
-        let side_relative = if position.turn == Color::White { white_relative } else { -white_relative };
+        let white_relative = ((white_mg - black_mg) * phase
+            + (white_eg - black_eg) * (MAX_PHASE - phase))
+            / MAX_PHASE;
+        let side_relative = if position.turn == Color::White {
+            white_relative
+        } else {
+            -white_relative
+        };
         side_relative + TEMPO
     }
 }
@@ -133,7 +157,10 @@ mod tests {
                 "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
                 "rnbqk2r/pppp1ppp/5n2/2b1p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R b KQkq - 4 4",
             ),
-            ("8/5k2/8/3K4/8/8/1P6/8 b - - 0 1", "8/1p6/8/8/3k4/8/5K2/8 w - - 0 1"),
+            (
+                "8/5k2/8/3K4/8/8/1P6/8 b - - 0 1",
+                "8/1p6/8/8/3k4/8/5K2/8 w - - 0 1",
+            ),
         ];
         for (fen, mirrored) in pairs {
             assert_eq!(eval(fen), eval(mirrored), "{fen}");

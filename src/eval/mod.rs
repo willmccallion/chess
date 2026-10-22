@@ -25,11 +25,19 @@ pub struct PositionView<'b> {
 }
 
 /// Piece-square changes of `m` in `position` (before the move), in removal-then-add order.
-pub fn record_piece_changes(position: PositionView, m: Move, out: &mut StackVec<UpdateBody, MAX_PIECE_CHANGES>) {
+pub fn record_piece_changes(
+    position: PositionView,
+    m: Move,
+    out: &mut StackVec<UpdateBody, MAX_PIECE_CHANGES>,
+) {
     let from = m.from as usize;
     let to = m.to as usize;
     let moving = position.piece_on[from];
-    out.push(UpdateBody { piece: moving, sq: from, add: false });
+    out.push(UpdateBody {
+        piece: moving,
+        sq: from,
+        add: false,
+    });
     if m.capture {
         let cap_sq = match (m.en_passant, position.turn) {
             (true, Color::White) => to - 8,
@@ -38,16 +46,38 @@ pub fn record_piece_changes(position: PositionView, m: Move, out: &mut StackVec<
         };
         let captured = position.piece_on[cap_sq];
         if !captured.is_empty() {
-            out.push(UpdateBody { piece: captured, sq: cap_sq, add: false });
+            out.push(UpdateBody {
+                piece: captured,
+                sq: cap_sq,
+                add: false,
+            });
         }
     }
-    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, position.turn));
-    out.push(UpdateBody { piece: placed, sq: to, add: true });
+    let placed = m
+        .promotion
+        .map_or(moving, |kind| Piece::from_kind(kind, position.turn));
+    out.push(UpdateBody {
+        piece: placed,
+        sq: to,
+        add: true,
+    });
     if m.castle {
-        let (rook_from, rook_to) = if to > from { (to + 1, to - 1) } else { (to - 2, to + 1) };
+        let (rook_from, rook_to) = if to > from {
+            (to + 1, to - 1)
+        } else {
+            (to - 2, to + 1)
+        };
         let rook = position.piece_on[rook_from];
-        out.push(UpdateBody { piece: rook, sq: rook_from, add: false });
-        out.push(UpdateBody { piece: rook, sq: rook_to, add: true });
+        out.push(UpdateBody {
+            piece: rook,
+            sq: rook_from,
+            add: false,
+        });
+        out.push(UpdateBody {
+            piece: rook,
+            sq: rook_to,
+            add: true,
+        });
     }
 }
 
@@ -106,10 +136,17 @@ impl std::str::FromStr for EvalKind {
     type Err = String;
 
     fn from_str(name: &str) -> Result<Self, String> {
-        Self::ALL.iter().copied().find(|kind| kind.name().eq_ignore_ascii_case(name)).ok_or_else(|| {
-            let names: Vec<&str> = Self::ALL.iter().map(|kind| kind.name()).collect();
-            format!("unknown evaluator '{name}'; expected one of: {}", names.join(", "))
-        })
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.name().eq_ignore_ascii_case(name))
+            .ok_or_else(|| {
+                let names: Vec<&str> = Self::ALL.iter().map(|kind| kind.name()).collect();
+                format!(
+                    "unknown evaluator '{name}'; expected one of: {}",
+                    names.join(", ")
+                )
+            })
     }
 }
 
@@ -132,19 +169,34 @@ impl EvalOptions {
     }
 
     pub fn with_kind(kind: EvalKind) -> Self {
-        Self { kind, ..Self::built_in() }
+        Self {
+            kind,
+            ..Self::built_in()
+        }
     }
 
     /// UCI `option` lines for these settings.
     pub fn uci_options(&self) -> Vec<String> {
-        let kinds: String = EvalKind::ALL.iter().map(|kind| format!(" var {}", kind.name())).collect();
+        let kinds: String = EvalKind::ALL
+            .iter()
+            .map(|kind| format!(" var {}", kind.name()))
+            .collect();
         #[cfg_attr(not(feature = "stockfish-nnue"), expect(unused_mut))]
-        let mut lines = vec![format!("option name Evaluator type combo default {}{kinds}", self.kind.name())];
+        let mut lines = vec![format!(
+            "option name Evaluator type combo default {}{kinds}",
+            self.kind.name()
+        )];
         #[cfg(feature = "stockfish-nnue")]
         {
             let nets = &self.stockfish_nets;
-            lines.push(format!("option name EvalFile type string default {}", nets.big.display()));
-            lines.push(format!("option name EvalFileSmall type string default {}", nets.small.display()));
+            lines.push(format!(
+                "option name EvalFile type string default {}",
+                nets.big.display()
+            ));
+            lines.push(format!(
+                "option name EvalFileSmall type string default {}",
+                nets.small.display()
+            ));
         }
         lines
     }
@@ -177,7 +229,10 @@ impl EvalOptions {
             return if loaded.kind() == self.kind {
                 Ok(())
             } else {
-                Err(format!("the {} evaluator is already loaded", loaded.kind().name()))
+                Err(format!(
+                    "the {} evaluator is already loaded",
+                    loaded.kind().name()
+                ))
             };
         }
         let active = match self.kind {

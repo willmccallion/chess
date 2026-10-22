@@ -178,7 +178,9 @@ fn get_book() -> Option<&'static OpeningBook> {
     let loaded = load_book();
     LOAD_REPORTED.get_or_init(|| match loaded {
         Ok((_, path)) => println!("info string Loaded opening book from: {}", path.display()),
-        Err(_) => println!("info string Opening book 'moves/book.bin' not found in any standard location."),
+        Err(_) => println!(
+            "info string Opening book 'moves/book.bin' not found in any standard location."
+        ),
     });
     loaded.as_ref().ok().map(|(book, _)| book)
 }
@@ -198,7 +200,12 @@ pub fn book_moves(b: &Board) -> Vec<WeightedMove> {
     let key = polyglot_zobrist::calculate_key(b);
     book.find_entries(key)
         .iter()
-        .filter_map(|e| e.to_move().map(|m| WeightedMove { m, weight: e.weight }))
+        .filter_map(|e| {
+            e.to_move().map(|m| WeightedMove {
+                m,
+                weight: e.weight,
+            })
+        })
         .collect()
 }
 
@@ -213,7 +220,10 @@ pub fn legal_book_moves(b: &Board) -> Vec<WeightedMove> {
                 .as_slice()
                 .iter()
                 .find(|m| m.from == w.m.from && m.to == w.m.to && m.promotion == w.m.promotion)
-                .map(|&m| WeightedMove { m, weight: w.weight })
+                .map(|&m| WeightedMove {
+                    m,
+                    weight: w.weight,
+                })
         })
         .collect()
 }

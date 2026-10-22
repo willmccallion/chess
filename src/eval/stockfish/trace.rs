@@ -21,7 +21,12 @@ fn win_rate_scale(position: PositionView) -> f64 {
         + 5 * count([Piece::WR, Piece::BR])
         + 9 * count([Piece::WQ, Piece::BQ]);
     let m = f64::from(material.clamp(17, 78)) / 58.0;
-    const AS: [f64; 4] = [-72.325_658_36, 185.938_320_38, -144.588_621_93, 416.449_504_46];
+    const AS: [f64; 4] = [
+        -72.325_658_36,
+        185.938_320_38,
+        -144.588_621_93,
+        416.449_504_46,
+    ];
     ((AS[0] * m + AS[1]) * m + AS[2]) * m + AS[3]
 }
 
@@ -44,11 +49,19 @@ fn aligned_pawns(value: i32, board: &Board) -> String {
 pub fn format_trace(big: &BigNetwork, board: &Board) -> String {
     let outputs = evaluate_all_buckets(&big.net, Some(&big.threats), board);
     let used = bucket_for(board.position_view());
-    let side = if board.turn == Color::White { "White" } else { "Black" };
+    let side = if board.turn == Color::White {
+        "White"
+    } else {
+        "Black"
+    };
     let mut out = String::new();
     let _ = writeln!(out, " NNUE network contributions ({side} to move)");
     for (bucket, NetOutput { psqt, positional }) in outputs.iter().copied().enumerate() {
-        let marker = if bucket == used { " <-- this bucket is used" } else { "" };
+        let marker = if bucket == used {
+            " <-- this bucket is used"
+        } else {
+            ""
+        };
         let _ = writeln!(
             out,
             "|  {bucket}         |  {}   |  {}   |  {}   |{marker}",

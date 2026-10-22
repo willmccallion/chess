@@ -6,7 +6,9 @@ use super::review::{material_gain_along, points_text};
 use crate::board::Board;
 use crate::game_runner::{GameEndReason, position_outcome};
 use crate::notation::{line_in_san, san_of};
-use crate::types::{BK_CASTLE, BQ_CASTLE, Color, Move, MoveList, Piece, PieceKind, WK_CASTLE, WQ_CASTLE};
+use crate::types::{
+    BK_CASTLE, BQ_CASTLE, Color, Move, MoveList, Piece, PieceKind, WK_CASTLE, WQ_CASTLE,
+};
 
 /// Moves of a line shown in text; the rest is summed up in its outcome.
 const SHOWN_PLIES: usize = 8;
@@ -31,7 +33,10 @@ pub fn line_story(board: &Board, line: &[Move], side: Color) -> Option<LineStory
     if line.len() > shown.len() {
         moves.push_str(" …");
     }
-    Some(LineStory { moves, outcome: outcome_of(board, line, side) })
+    Some(LineStory {
+        moves,
+        outcome: outcome_of(board, line, side),
+    })
 }
 
 fn outcome_of(board: &Board, line: &[Move], side: Color) -> String {
@@ -46,7 +51,11 @@ fn outcome_of(board: &Board, line: &[Move], side: Color) -> String {
         return format!("{} is checkmated", color_name(end.turn));
     }
     let gain = material_gain_along(board, line, side);
-    let (winner, points) = if gain >= 0 { (side, gain) } else { (side.other(), -gain) };
+    let (winner, points) = if gain >= 0 {
+        (side, gain)
+    } else {
+        (side.other(), -gain)
+    };
     if points == 0 {
         "material stays level".to_string()
     } else {
@@ -63,9 +72,15 @@ const fn color_name(color: Color) -> &'static str {
 
 /// How the position after `played` is worse than after `better`, beyond the evaluation:
 /// castling, the king's pawn cover, pawn weaknesses, development and room for the pieces.
-pub fn positional_differences(before: &Board, played: Move, better: Move, phase: Phase) -> Vec<String> {
+pub fn positional_differences(
+    before: &Board,
+    played: Move,
+    better: Move,
+    phase: Phase,
+) -> Vec<String> {
     let mover = before.turn;
-    let (Some(played_san), Some(better_san)) = (san_of(before, played), san_of(before, better)) else {
+    let (Some(played_san), Some(better_san)) = (san_of(before, played), san_of(before, better))
+    else {
         return Vec::new();
     };
     let after = |m: Move| {
@@ -77,10 +92,14 @@ pub fn positional_differences(before: &Board, played: Move, better: Move, phase:
     let mut notes = Vec::new();
     let rights = |b: &Board| castling_rights(b, mover);
     if rights(&worse) < rights(before) && !played.castle && rights(&good) == rights(before) {
-        notes.push(format!("{played_san} gives up the right to castle; {better_san} keeps it."));
+        notes.push(format!(
+            "{played_san} gives up the right to castle; {better_san} keeps it."
+        ));
     }
     if king_cover(&worse, mover) < king_cover(&good, mover) {
-        notes.push(format!("{played_san} loosens the pawns in front of the king."));
+        notes.push(format!(
+            "{played_san} loosens the pawns in front of the king."
+        ));
     }
     if doubled_pawns(&worse, mover) > doubled_pawns(&good, mover) {
         notes.push(format!("{played_san} leaves doubled pawns."));
@@ -89,7 +108,9 @@ pub fn positional_differences(before: &Board, played: Move, better: Move, phase:
         notes.push(format!("{played_san} leaves an isolated pawn."));
     }
     if phase == Phase::Opening && develops(before, better) && !develops(before, played) {
-        notes.push(format!("{better_san} brings a new piece into play; {played_san} doesn't."));
+        notes.push(format!(
+            "{better_san} brings a new piece into play; {played_san} doesn't."
+        ));
     }
     let (own_worse, own_good) = (mobility(&worse, mover), mobility(&good, mover));
     if own_good - own_worse >= MOBILITY_NOTE {
@@ -97,7 +118,10 @@ pub fn positional_differences(before: &Board, played: Move, better: Move, phase:
             "After {better_san} the pieces have more room: {own_good} moves against {own_worse}."
         ));
     }
-    let (their_worse, their_good) = (mobility(&worse, mover.other()), mobility(&good, mover.other()));
+    let (their_worse, their_good) = (
+        mobility(&worse, mover.other()),
+        mobility(&good, mover.other()),
+    );
     if their_worse - their_good >= MOBILITY_NOTE {
         notes.push(format!(
             "{played_san} gives the opponent's pieces more room: {their_worse} moves against {their_good}."
@@ -122,7 +146,11 @@ fn king_cover(board: &Board, color: Color) -> u32 {
         return 0;
     }
     let (file, rank) = (king % 8, king / 8);
-    let (home, step): (u32, i32) = if color == Color::White { (0, 1) } else { (7, -1) };
+    let (home, step): (u32, i32) = if color == Color::White {
+        (0, 1)
+    } else {
+        (7, -1)
+    };
     if rank != home {
         return 0;
     }
@@ -145,7 +173,10 @@ fn pawns_per_file(board: &Board, color: Color) -> [u32; 8] {
 }
 
 fn doubled_pawns(board: &Board, color: Color) -> u32 {
-    pawns_per_file(board, color).iter().map(|&n| n.saturating_sub(1)).sum()
+    pawns_per_file(board, color)
+        .iter()
+        .map(|&n| n.saturating_sub(1))
+        .sum()
 }
 
 fn isolated_pawns(board: &Board, color: Color) -> u32 {
@@ -215,7 +246,12 @@ mod tests {
     #[test]
     fn long_lines_are_cut_short() {
         let b = board(START_FEN);
-        let line = moves(&b, &["d4", "d5", "c4", "e6", "Nc3", "Nf6", "Bg5", "Be7", "e3", "O-O"]);
+        let line = moves(
+            &b,
+            &[
+                "d4", "d5", "c4", "e6", "Nc3", "Nf6", "Bg5", "Be7", "e3", "O-O",
+            ],
+        );
 
         let story = line_story(&b, &line, Color::White).unwrap();
 
@@ -230,8 +266,18 @@ mod tests {
 
         let notes = positional_differences(&b, ke2, nf3, Phase::Opening);
 
-        assert!(notes.iter().any(|n| n.contains("gives up the right to castle")), "{notes:?}");
-        assert!(notes.iter().any(|n| n.contains("brings a new piece into play")), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("gives up the right to castle")),
+            "{notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("brings a new piece into play")),
+            "{notes:?}"
+        );
     }
 
     #[test]
@@ -241,7 +287,10 @@ mod tests {
 
         let notes = positional_differences(&b, g4, bg5, Phase::Middlegame);
 
-        assert!(notes.iter().any(|n| n.contains("loosens the pawns")), "{notes:?}");
+        assert!(
+            notes.iter().any(|n| n.contains("loosens the pawns")),
+            "{notes:?}"
+        );
     }
 
     #[test]
@@ -251,7 +300,10 @@ mod tests {
 
         let notes = positional_differences(&b, gxf3, qxf3, Phase::Opening);
 
-        assert!(notes.iter().any(|n| n.contains("doubled pawns")), "{notes:?}");
+        assert!(
+            notes.iter().any(|n| n.contains("doubled pawns")),
+            "{notes:?}"
+        );
     }
 
     #[test]

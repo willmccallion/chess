@@ -1,9 +1,9 @@
 use super::app::{App, EngineLine, GameEnd, Mode, PieceStyle, TaskKind, TimeSetting};
 use super::octants;
 use super::sprites::{self, Pixel};
+use crate::board::Board;
 use crate::game_runner::GameResult;
 use crate::search::Score;
-use crate::board::Board;
 use crate::types::{Color, Move, Piece, PieceKind};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -44,8 +44,12 @@ pub const DIM: Rgb = Rgb::DarkGray;
 pub const ACCENT: Rgb = Rgb::Yellow;
 
 /// The order promotion choices are shown in.
-pub const PROMOTION_KINDS: [PieceKind; 4] =
-    [PieceKind::Queen, PieceKind::Rook, PieceKind::Bishop, PieceKind::Knight];
+pub const PROMOTION_KINDS: [PieceKind; 4] = [
+    PieceKind::Queen,
+    PieceKind::Rook,
+    PieceKind::Bishop,
+    PieceKind::Knight,
+];
 
 /// Where the squares are on screen; labels sit outside this area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +71,11 @@ impl BoardGeometry {
 
     fn square_rect(self, square: u8, flipped: bool) -> Rect {
         let (file, rank) = (u16::from(square % 8), u16::from(square / 8));
-        let (column, row) = if flipped { (7 - file, rank) } else { (file, 7 - rank) };
+        let (column, row) = if flipped {
+            (7 - file, rank)
+        } else {
+            (file, 7 - rank)
+        };
         Rect::new(
             self.x + column * self.square_width,
             self.y + row * self.square_height,
@@ -83,7 +91,11 @@ impl BoardGeometry {
         if column >= 8 || row >= 8 {
             return None;
         }
-        let (file, rank) = if flipped { (7 - column, row) } else { (column, 7 - row) };
+        let (file, rank) = if flipped {
+            (7 - column, row)
+        } else {
+            (column, 7 - row)
+        };
         Some((rank * 8 + file) as u8)
     }
 
@@ -91,7 +103,12 @@ impl BoardGeometry {
         let left = self.x + 2 * self.square_width;
         let top = self.y + self.height() / 2 - self.square_height / 2;
         std::array::from_fn(|i| {
-            Rect::new(left + i as u16 * self.square_width, top, self.square_width, self.square_height)
+            Rect::new(
+                left + i as u16 * self.square_width,
+                top,
+                self.square_width,
+                self.square_height,
+            )
         })
     }
 
@@ -163,10 +180,17 @@ pub fn layout(area: Rect, app: &App) -> ScreenLayout {
 /// A board on the left, with an evaluation bar beside it if `with_bar`, a side panel on the
 /// right and a status line at the bottom.
 pub fn board_layout(area: Rect, with_bar: bool) -> ScreenLayout {
-    let status = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
+    let status = Rect::new(
+        area.x,
+        area.bottom().saturating_sub(1),
+        area.width,
+        area.height.min(1),
+    );
     let main = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
     let bar_width = if with_bar { EVAL_BAR_WIDTH + GAP } else { 0 };
-    let available_width = main.width.saturating_sub(bar_width + RANK_LABEL_WIDTH + GAP + SIDE_MIN_WIDTH);
+    let available_width = main
+        .width
+        .saturating_sub(bar_width + RANK_LABEL_WIDTH + GAP + SIDE_MIN_WIDTH);
     let available_height = main.height.saturating_sub(1);
     let square_height = (available_height / 8).min((available_width / 8).saturating_sub(1) / 2);
     if square_height == 0 {
@@ -190,7 +214,12 @@ pub fn board_layout(area: Rect, with_bar: bool) -> ScreenLayout {
     ScreenLayout {
         board: Some(board),
         eval_bar: (bar_width > 0).then(|| Rect::new(main.x, top, EVAL_BAR_WIDTH, board.height())),
-        side: Rect::new(side_x, main.y, main.right().saturating_sub(side_x).min(SIDE_MAX_WIDTH), main.height),
+        side: Rect::new(
+            side_x,
+            main.y,
+            main.right().saturating_sub(side_x).min(SIDE_MAX_WIDTH),
+            main.height,
+        ),
         status,
     }
 }
@@ -201,12 +230,15 @@ pub fn draw(frame: &mut Frame, app: &App, now: Instant) {
         Some(board) => {
             draw_board(frame.buffer_mut(), &app_scene(app), board);
             if let Some(bar) = screen.eval_bar {
-                let share = app.engine_line().map_or(0.5, |line| white_share(line.score));
+                let share = app
+                    .engine_line()
+                    .map_or(0.5, |line| white_share(line.score));
                 draw_eval_bar(frame.buffer_mut(), share, app.flipped, bar);
             }
         }
         None => frame.render_widget(
-            Paragraph::new("Make the terminal larger to see the board").style(Style::new().fg(ACCENT)),
+            Paragraph::new("Make the terminal larger to see the board")
+                .style(Style::new().fg(ACCENT)),
             screen.side,
         ),
     }
@@ -228,7 +260,11 @@ pub fn draw_board(buf: &mut Buffer, scene: &BoardScene, geometry: BoardGeometry)
     for square in 0..64u8 {
         let piece = board.piece_on[square as usize];
         let is_light = (square / 8 + square % 8) % 2 == 1;
-        let mark = scene.marks.iter().find(|(s, _)| *s == square).map(|&(_, color)| color);
+        let mark = scene
+            .marks
+            .iter()
+            .find(|(s, _)| *s == square)
+            .map(|&(_, color)| color);
         let background = if Some(square) == scene.selected {
             SELECTED
         } else if Some(square) == checked_king {
@@ -238,7 +274,11 @@ pub fn draw_board(buf: &mut Buffer, scene: &BoardScene, geometry: BoardGeometry)
         } else if let Some(color) = mark {
             color
         } else if last_move.is_some_and(|m| m.from == square || m.to == square) {
-            if is_light { LAST_MOVE_LIGHT } else { LAST_MOVE_DARK }
+            if is_light {
+                LAST_MOVE_LIGHT
+            } else {
+                LAST_MOVE_DARK
+            }
         } else if is_light {
             LIGHT_SQUARE
         } else {
@@ -260,10 +300,20 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
     for i in 0..8u8 {
         let rank_square = geometry.square_rect(i * 8, flipped);
         let rank_row = rank_square.y + rank_square.height / 2;
-        buf.set_string(geometry.x - RANK_LABEL_WIDTH, rank_row, ((b'1' + i) as char).to_string(), label);
+        buf.set_string(
+            geometry.x - RANK_LABEL_WIDTH,
+            rank_row,
+            ((b'1' + i) as char).to_string(),
+            label,
+        );
         let file_square = geometry.square_rect(i, flipped);
         let file_column = file_square.x + file_square.width / 2;
-        buf.set_string(file_column, geometry.y + geometry.height(), ((b'a' + i) as char).to_string(), label);
+        buf.set_string(
+            file_column,
+            geometry.y + geometry.height(),
+            ((b'a' + i) as char).to_string(),
+            label,
+        );
     }
 }
 
@@ -278,12 +328,22 @@ fn draw_target_dot(buf: &mut Buffer, rect: Rect, background: Rgb) {
     let dot_width = centred_length(width / 3, width);
     let dot_height = centred_length(height / 3, height);
     let (left, top) = ((width - dot_width) / 2, (height - dot_height) / 2);
-    let in_dot = |x: u16, y: u16| (left..left + dot_width).contains(&x) && (top..top + dot_height).contains(&y);
+    let in_dot = |x: u16, y: u16| {
+        (left..left + dot_width).contains(&x) && (top..top + dot_height).contains(&y)
+    };
     for row in 0..rect.height {
         for column in 0..rect.width {
-            let paint = |y: u16| if in_dot(column, y) { TARGET_DOT } else { background };
+            let paint = |y: u16| {
+                if in_dot(column, y) {
+                    TARGET_DOT
+                } else {
+                    background
+                }
+            };
             if let Some(cell) = buf.cell_mut((rect.x + column, rect.y + row)) {
-                cell.set_symbol("▀").set_fg(paint(2 * row)).set_bg(paint(2 * row + 1));
+                cell.set_symbol("▀")
+                    .set_fg(paint(2 * row))
+                    .set_bg(paint(2 * row + 1));
             }
         }
     }
@@ -292,7 +352,11 @@ fn draw_target_dot(buf: &mut Buffer, rect: Rect, background: Rgb) {
 /// `length` (at least 1) adjusted to the parity of `total`, so it centres exactly.
 fn centred_length(length: u16, total: u16) -> u16 {
     let length = length.max(1);
-    if (total - length).is_multiple_of(2) { length } else { length + 1 }
+    if (total - length).is_multiple_of(2) {
+        length
+    } else {
+        length + 1
+    }
 }
 
 /// Draws `piece` filling `rect`, whose empty parts show `background`.
@@ -304,7 +368,11 @@ fn draw_piece(buf: &mut Buffer, rect: Rect, piece: Piece, style: PieceStyle, bac
         draw_sprite(buf, rect, kind, color, background);
         return;
     }
-    let style = if style == PieceStyle::Letters { PieceStyle::Letters } else { PieceStyle::Glyphs };
+    let style = if style == PieceStyle::Letters {
+        PieceStyle::Letters
+    } else {
+        PieceStyle::Glyphs
+    };
     if let Some((symbol, cell_style)) = piece_symbol(piece, style)
         && let Some(cell) = buf.cell_mut((rect.x + rect.width / 2, rect.y + rect.height / 2))
     {
@@ -323,11 +391,17 @@ fn draw_sprite(buf: &mut Buffer, rect: Rect, kind: PieceKind, color: Color, back
         Pixel::Fill => fill,
         Pixel::Outline => outline,
     };
-    let pixels = sprites::render(kind, 2 * usize::from(rect.width), 4 * usize::from(rect.height));
+    let pixels = sprites::render(
+        kind,
+        2 * usize::from(rect.width),
+        4 * usize::from(rect.height),
+    );
     for row in 0..rect.height {
         for column in 0..rect.width {
             let (top, left) = (4 * usize::from(row), 2 * usize::from(column));
-            let cell = octants::Cell::from_pixels(std::array::from_fn(|i| pixels[top + i / 2][left + i % 2]));
+            let cell = octants::Cell::from_pixels(std::array::from_fn(|i| {
+                pixels[top + i / 2][left + i % 2]
+            }));
             if let Some(buffer_cell) = buf.cell_mut((rect.x + column, rect.y + row)) {
                 buffer_cell
                     .set_symbol(cell.symbol())
@@ -355,8 +429,15 @@ fn piece_symbol(piece: Piece, style: PieceStyle) -> Option<(&'static str, Style)
         (PieceStyle::Letters, PieceKind::Knight) => "N",
         (PieceStyle::Letters, PieceKind::Pawn) => "P",
     };
-    let foreground = if color == Color::White { WHITE_PIECE } else { BLACK_PIECE };
-    Some((symbol, Style::new().fg(foreground).add_modifier(Modifier::BOLD)))
+    let foreground = if color == Color::White {
+        WHITE_PIECE
+    } else {
+        BLACK_PIECE
+    };
+    Some((
+        symbol,
+        Style::new().fg(foreground).add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// White's share of the bar, from the expected score of the evaluation.
@@ -377,10 +458,21 @@ pub fn white_share(score: Score) -> f64 {
 pub fn draw_eval_bar(buf: &mut Buffer, share: f64, flipped: bool, bar: Rect) {
     let white_rows = (share.clamp(0.0, 1.0) * f64::from(bar.height)).round() as u16;
     let (white, black) = if flipped {
-        (Rect::new(bar.x, bar.y, bar.width, white_rows), Rect::new(bar.x, bar.y + white_rows, bar.width, bar.height - white_rows))
+        (
+            Rect::new(bar.x, bar.y, bar.width, white_rows),
+            Rect::new(
+                bar.x,
+                bar.y + white_rows,
+                bar.width,
+                bar.height - white_rows,
+            ),
+        )
     } else {
         let black_rows = bar.height - white_rows;
-        (Rect::new(bar.x, bar.y + black_rows, bar.width, white_rows), Rect::new(bar.x, bar.y, bar.width, black_rows))
+        (
+            Rect::new(bar.x, bar.y + black_rows, bar.width, white_rows),
+            Rect::new(bar.x, bar.y, bar.width, black_rows),
+        )
     };
     buf.set_style(white, Style::new().bg(BAR_WHITE));
     buf.set_style(black, Style::new().bg(BAR_BLACK));
@@ -393,7 +485,10 @@ fn draw_side_panel(frame: &mut Frame, app: &App, area: Rect, now: Instant) {
     let mut top = players.bottom();
     if app.panels.eval {
         let height = ENGINE_HEIGHT.min(area.bottom() - top);
-        frame.render_widget(engine_panel(app), Rect::new(area.x, top, area.width, height));
+        frame.render_widget(
+            engine_panel(app),
+            Rect::new(area.x, top, area.width, height),
+        );
         top += height;
     }
     if app.panels.moves && top < area.bottom() {
@@ -403,7 +498,11 @@ fn draw_side_panel(frame: &mut Frame, app: &App, area: Rect, now: Instant) {
 }
 
 fn player_name(app: &App, color: Color) -> &'static str {
-    if app.mode() != Mode::Watch && color == app.human() { "You" } else { "Engine" }
+    if app.mode() != Mode::Watch && color == app.human() {
+        "You"
+    } else {
+        "Engine"
+    }
 }
 
 fn players_panel(app: &App, now: Instant) -> Paragraph<'static> {
@@ -411,14 +510,22 @@ fn players_panel(app: &App, now: Instant) -> Paragraph<'static> {
     let player_line = |color: Color| {
         let to_move = board.turn == color && app.outcome().is_none();
         let marker = if to_move { "▶ " } else { "  " };
-        let side = if color == Color::White { "White" } else { "Black" };
+        let side = if color == Color::White {
+            "White"
+        } else {
+            "Black"
+        };
         let mut spans = vec![
             Span::styled(marker, Style::new().fg(ACCENT)),
             Span::raw(format!("{side:<6} {:<7}", player_name(app, color))),
         ];
         if let Some(clocks) = app.clocks() {
             let ms = clocks.remaining_ms(color, board.turn, now).max(0);
-            let style = if to_move { Style::new().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::new() };
+            let style = if to_move {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
             spans.push(Span::styled(format_clock(ms), style));
         }
         Line::from(spans)
@@ -451,12 +558,19 @@ fn mode_text(app: &App) -> String {
 
 fn format_minutes(ms: u64) -> String {
     let minutes = ms as f64 / 60_000.0;
-    if minutes.fract() == 0.0 { format!("{minutes:.0}") } else { format!("{minutes:.1}") }
+    if minutes.fract() == 0.0 {
+        format!("{minutes:.0}")
+    } else {
+        format!("{minutes:.1}")
+    }
 }
 
 fn game_state_line(app: &App) -> Line<'static> {
     if let Some(end) = app.outcome() {
-        return Line::styled(result_text(end), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD));
+        return Line::styled(
+            result_text(end),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        );
     }
     let text = if app.is_paused() {
         "Paused"
@@ -482,7 +596,11 @@ fn result_text(end: GameEnd) -> String {
 fn engine_panel(app: &App) -> Paragraph<'static> {
     let block = Block::bordered().title(" Engine ");
     if !app.assistance_allowed() {
-        return Paragraph::new(Line::styled("Hidden until the game ends", Style::new().fg(DIM))).block(block);
+        return Paragraph::new(Line::styled(
+            "Hidden until the game ends",
+            Style::new().fg(DIM),
+        ))
+        .block(block);
     }
     let Some(line) = app.engine_line() else {
         let idle = if app.engine_task().is_some() {
@@ -494,7 +612,9 @@ fn engine_panel(app: &App) -> Paragraph<'static> {
         };
         return Paragraph::new(Line::styled(idle, Style::new().fg(DIM))).block(block);
     };
-    Paragraph::new(engine_lines(line)).wrap(Wrap { trim: true }).block(block)
+    Paragraph::new(engine_lines(line))
+        .wrap(Wrap { trim: true })
+        .block(block)
 }
 
 fn engine_lines(line: &EngineLine) -> Vec<Line<'static>> {
@@ -504,7 +624,10 @@ fn engine_lines(line: &EngineLine) -> Vec<Line<'static>> {
     };
     vec![
         Line::from(vec![
-            Span::styled(format_score(line.score), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format_score(line.score),
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(format!("  {source}"), Style::new().fg(DIM)),
         ]),
         Line::styled(
@@ -555,22 +678,42 @@ fn status_line(app: &App) -> Paragraph<'static> {
         return Paragraph::new(Line::styled(message.clone(), Style::new().fg(ACCENT)));
     }
     let hints = match app.mode() {
-        Mode::Casual => "click or drag to move · Enter type a move · u undo · a analysis · e engine · l moves · f flip · ? help · q quit",
-        Mode::Game => "click or drag to move · Enter type a move · f flip · n new game · s swap sides · ? help · q quit",
+        Mode::Casual => {
+            "click or drag to move · Enter type a move · u undo · a analysis · e engine · l moves · f flip · ? help · q quit"
+        }
+        Mode::Game => {
+            "click or drag to move · Enter type a move · f flip · n new game · s swap sides · ? help · q quit"
+        }
         Mode::Watch => "space pause · e engine · l moves · f flip · n new game · ? help · q quit",
     };
     Paragraph::new(Line::styled(hints, Style::new().fg(DIM)))
 }
 
-pub fn draw_promotion_choice(frame: &mut Frame, color: Color, piece_style: PieceStyle, geometry: BoardGeometry) {
+pub fn draw_promotion_choice(
+    frame: &mut Frame,
+    color: Color,
+    piece_style: PieceStyle,
+    geometry: BoardGeometry,
+) {
     let rects = geometry.promotion_rects();
-    let outline = Rect::new(rects[0].x - 1, rects[0].y - 1, 4 * geometry.square_width + 2, geometry.square_height + 2);
+    let outline = Rect::new(
+        rects[0].x - 1,
+        rects[0].y - 1,
+        4 * geometry.square_width + 2,
+        geometry.square_height + 2,
+    );
     frame.render_widget(Clear, outline);
     frame.render_widget(Block::bordered().title(" Promote "), outline);
     let buf = frame.buffer_mut();
     for (rect, kind) in rects.into_iter().zip(PROMOTION_KINDS) {
         buf.set_style(rect, Style::new().bg(LIGHT_SQUARE));
-        draw_piece(buf, rect, Piece::from_kind(kind, color), piece_style, LIGHT_SQUARE);
+        draw_piece(
+            buf,
+            rect,
+            Piece::from_kind(kind, color),
+            piece_style,
+            LIGHT_SQUARE,
+        );
     }
 }
 
@@ -600,15 +743,26 @@ pub fn draw_key_help(frame: &mut Frame, keys: &[(&str, &str)]) {
     let area = frame.area();
     let width = 52.min(area.width);
     let height = (keys.len() as u16 + 2).min(area.height);
-    let popup = Rect::new(area.x + (area.width - width) / 2, area.y + (area.height - height) / 2, width, height);
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
     let lines: Vec<Line> = keys
         .iter()
         .map(|(key, action)| {
-            Line::from(vec![Span::styled(format!("{key:>13}  "), Style::new().fg(ACCENT)), Span::raw(*action)])
+            Line::from(vec![
+                Span::styled(format!("{key:>13}  "), Style::new().fg(ACCENT)),
+                Span::raw(*action),
+            ])
         })
         .collect();
     frame.render_widget(Clear, popup);
-    frame.render_widget(Paragraph::new(lines).block(Block::bordered().title(" Keys ")), popup);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title(" Keys ")),
+        popup,
+    );
 }
 
 pub fn format_score(score: Score) -> String {
@@ -668,15 +822,27 @@ mod tests {
     fn a1_is_bottom_left_unless_flipped() {
         let bottom_left = (GEOMETRY.x, GEOMETRY.y + GEOMETRY.height() - 1);
 
-        assert_eq!(GEOMETRY.square_at(bottom_left.0, bottom_left.1, false), Some(0));
-        assert_eq!(GEOMETRY.square_at(bottom_left.0, bottom_left.1, true), Some(63));
+        assert_eq!(
+            GEOMETRY.square_at(bottom_left.0, bottom_left.1, false),
+            Some(0)
+        );
+        assert_eq!(
+            GEOMETRY.square_at(bottom_left.0, bottom_left.1, true),
+            Some(63)
+        );
     }
 
     #[test]
     fn cells_outside_the_board_are_no_square() {
         assert_eq!(GEOMETRY.square_at(GEOMETRY.x - 1, GEOMETRY.y, false), None);
-        assert_eq!(GEOMETRY.square_at(GEOMETRY.x + GEOMETRY.width(), GEOMETRY.y, false), None);
-        assert_eq!(GEOMETRY.square_at(GEOMETRY.x, GEOMETRY.y + GEOMETRY.height(), false), None);
+        assert_eq!(
+            GEOMETRY.square_at(GEOMETRY.x + GEOMETRY.width(), GEOMETRY.y, false),
+            None
+        );
+        assert_eq!(
+            GEOMETRY.square_at(GEOMETRY.x, GEOMETRY.y + GEOMETRY.height(), false),
+            None
+        );
     }
 
     #[test]
@@ -706,7 +872,9 @@ mod tests {
 
     fn render(app: &App, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| draw(frame, app, Instant::now())).unwrap();
+        terminal
+            .draw(|frame| draw(frame, app, Instant::now()))
+            .unwrap();
         let buffer = terminal.backend().buffer();
         buffer.content().iter().map(|cell| cell.symbol()).collect()
     }
@@ -716,7 +884,10 @@ mod tests {
             start: Board::from_fen(fen).unwrap(),
             mode,
             human: Color::White,
-            time: TimeSetting::Clock(crate::game_runner::GameClock { base_ms: 60_000, increment_ms: 0 }),
+            time: TimeSetting::Clock(crate::game_runner::GameClock {
+                base_ms: 60_000,
+                increment_ms: 0,
+            }),
         };
         App::new(config, Instant::now())
     }
@@ -728,7 +899,11 @@ mod tests {
         promoting.release_square(60, Instant::now());
         let mut help = app_with(Mode::Watch, crate::types::START_FEN);
         help.panels.help = true;
-        let apps = [app_with(Mode::Game, crate::types::START_FEN), promoting, help];
+        let apps = [
+            app_with(Mode::Game, crate::types::START_FEN),
+            promoting,
+            help,
+        ];
         for app in &apps {
             for (width, height) in [(1, 1), (20, 6), (40, 12), (80, 24), (120, 40), (250, 80)] {
                 render(app, width, height);

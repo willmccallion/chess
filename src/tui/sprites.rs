@@ -169,7 +169,11 @@ fn coverage(rows: &[&str; GRID], x: usize, y: usize, width: usize, height: usize
 pub fn render(kind: PieceKind, width: usize, height: usize) -> Vec<Vec<Pixel>> {
     let rows = silhouette(kind);
     let inside: Vec<Vec<bool>> = (0..height)
-        .map(|y| (0..width).map(|x| coverage(rows, x, y, width, height) >= 0.5).collect())
+        .map(|y| {
+            (0..width)
+                .map(|x| coverage(rows, x, y, width, height) >= 0.5)
+                .collect()
+        })
         .collect();
     let is_inside = |x: isize, y: isize| {
         usize::try_from(y)
@@ -228,8 +232,15 @@ mod tests {
 
                 assert_eq!(pixels.len(), height);
                 assert!(pixels.iter().all(|row| row.len() == width));
-                let fill = pixels.iter().flatten().filter(|&&p| p == Pixel::Fill).count();
-                assert!(fill > 0 || width < 9, "{kind:?} at {width}x{height} has no interior");
+                let fill = pixels
+                    .iter()
+                    .flatten()
+                    .filter(|&&p| p == Pixel::Fill)
+                    .count();
+                assert!(
+                    fill > 0 || width < 9,
+                    "{kind:?} at {width}x{height} has no interior"
+                );
             }
         }
     }

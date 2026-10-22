@@ -113,7 +113,12 @@ impl Searcher {
                 Some(_) => Score::Centipawns(0),
                 None => {
                     let child_control = SearchControl::new(None);
-                    let outcome = self.search(&child, SearchLimit::Nodes(nodes_per_move), &child_control, &|_| {});
+                    let outcome = self.search(
+                        &child,
+                        SearchLimit::Nodes(nodes_per_move),
+                        &child_control,
+                        &|_| {},
+                    );
                     for_parent(outcome.score.unwrap_or(Score::Centipawns(0)))
                 }
             };

@@ -47,7 +47,11 @@ impl Eval {
     /// The chance `side` wins when `side_to_move` is to move.
     pub fn win_chance_for(self, side_to_move: Color, side: Color) -> WinChance {
         let chance = self.win_chance();
-        if side == side_to_move { chance } else { chance.for_opponent() }
+        if side == side_to_move {
+            chance
+        } else {
+            chance.for_opponent()
+        }
     }
 
     /// Moves until the side to move mates (positive) or is mated (negative), if forced.
@@ -66,7 +70,11 @@ impl Eval {
             Self::Checkmated => if sign > 0 { "0-1" } else { "1-0" }.to_string(),
             Self::Score(Score::MateIn(moves)) => {
                 let moves = moves * sign;
-                if moves >= 0 { format!("#{moves}") } else { format!("#-{}", -moves) }
+                if moves >= 0 {
+                    format!("#{moves}")
+                } else {
+                    format!("#-{}", -moves)
+                }
             }
             Self::Score(Score::Centipawns(cp)) => format!("{:+.1}", f64::from(cp * sign) / 100.0),
         }
@@ -184,7 +192,9 @@ impl Phase {
 
     /// The phase of a position reached after `ply` half-moves of a game.
     pub fn of(board: &Board, ply: usize) -> Self {
-        if non_pawn_material(board, Color::White) + non_pawn_material(board, Color::Black) <= ENDGAME_MATERIAL {
+        if non_pawn_material(board, Color::White) + non_pawn_material(board, Color::Black)
+            <= ENDGAME_MATERIAL
+        {
             Self::Endgame
         } else if ply < OPENING_PLIES {
             Self::Opening
@@ -213,8 +223,13 @@ pub const fn piece_points(kind: PieceKind) -> i32 {
     }
 }
 
-const COUNTED_KINDS: [PieceKind; 5] =
-    [PieceKind::Pawn, PieceKind::Knight, PieceKind::Bishop, PieceKind::Rook, PieceKind::Queen];
+const COUNTED_KINDS: [PieceKind; 5] = [
+    PieceKind::Pawn,
+    PieceKind::Knight,
+    PieceKind::Bishop,
+    PieceKind::Rook,
+    PieceKind::Queen,
+];
 
 /// `color`'s material in points.
 pub fn material(board: &Board, color: Color) -> i32 {
@@ -288,9 +303,18 @@ mod tests {
 
     #[test]
     fn scores_read_from_whites_side() {
-        assert_eq!(Eval::Score(Score::Centipawns(130)).text_for_white(Color::Black), "-1.3");
-        assert_eq!(Eval::Score(Score::MateIn(2)).text_for_white(Color::White), "#2");
-        assert_eq!(Eval::Score(Score::MateIn(2)).text_for_white(Color::Black), "#-2");
+        assert_eq!(
+            Eval::Score(Score::Centipawns(130)).text_for_white(Color::Black),
+            "-1.3"
+        );
+        assert_eq!(
+            Eval::Score(Score::MateIn(2)).text_for_white(Color::White),
+            "#2"
+        );
+        assert_eq!(
+            Eval::Score(Score::MateIn(2)).text_for_white(Color::Black),
+            "#-2"
+        );
     }
 
     #[test]

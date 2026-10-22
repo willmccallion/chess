@@ -119,7 +119,10 @@ fn non_pawn_material(position: PositionView) -> (i32, i32) {
     NON_PAWN_VALUES
         .iter()
         .fold((0, 0), |(white, black), &(wp, bp, value)| {
-            (white + value * count(position, wp), black + value * count(position, bp))
+            (
+                white + value * count(position, wp),
+                black + value * count(position, bp),
+            )
         })
 }
 
@@ -211,7 +214,11 @@ pub fn trace_text(board: &Board) -> Option<String> {
     let mut text = trace::format_trace(&nets.big, board);
     let position = board.position_view();
     let internal = stockfish_eval(nets, &mut nets.new_state(), position);
-    let white_relative = if board.turn == Color::White { internal } else { -internal };
+    let white_relative = if board.turn == Color::White {
+        internal
+    } else {
+        -internal
+    };
     text.push_str(&format!(
         "Final evaluation       {:+.2} (white side)\n",
         0.01 * f64::from(trace::to_cp(white_relative, position))
@@ -229,12 +236,18 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     fn nets() -> &'static Networks {
-        crate::eval::EvalOptions::with_kind(crate::eval::EvalKind::Stockfish).load().unwrap();
+        crate::eval::EvalOptions::with_kind(crate::eval::EvalKind::Stockfish)
+            .load()
+            .unwrap();
         NETWORKS.get().unwrap()
     }
 
     fn assert_same(view: SumsView, expected: &Accumulation, what: &str, fen: &str) {
-        assert_eq!(view.values, expected.values.as_slice(), "{what} values differ in {fen}");
+        assert_eq!(
+            view.values,
+            expected.values.as_slice(),
+            "{what} values differ in {fen}"
+        );
         assert_eq!(view.psqt, &expected.psqt, "{what} psqt differs in {fen}");
     }
 
@@ -325,7 +338,10 @@ mod tests {
                 "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
                 "rnbqk2r/pppp1ppp/5n2/2b1p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R b KQkq - 4 4",
             ),
-            ("8/5k2/8/3K4/8/8/1P6/8 b - - 0 1", "8/1p6/8/8/3k4/8/5K2/8 w - - 0 1"),
+            (
+                "8/5k2/8/3K4/8/8/1P6/8 b - - 0 1",
+                "8/1p6/8/8/3k4/8/5K2/8 w - - 0 1",
+            ),
         ];
         for (fen, flipped) in pairs {
             let a = evaluate(&mut Board::from_fen(fen).unwrap());

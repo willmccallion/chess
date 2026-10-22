@@ -1,4 +1,4 @@
-use crate::game_runner::{play_game, GameClock, GameConfig, GameEndReason, GameResult};
+use crate::game_runner::{GameClock, GameConfig, GameEndReason, GameResult, play_game};
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::uci_client::UciEngine;
 use std::collections::HashMap;
@@ -181,7 +181,10 @@ pub(crate) fn spawn_and_init_pinned(
 ) -> Result<UciEngine, String> {
     let mut engine = UciEngine::spawn_pinned(path, cpus)?;
     engine.init_uci()?;
-    if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("Threads")) {
+    if !options
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("Threads"))
+    {
         engine.set_options(&[("Threads".to_string(), "1".to_string())])?;
     }
     engine.set_options(options)?;
@@ -223,14 +226,8 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         Some(e) => format!("{} +/- {:.0} Elo", elo, e),
         None => format!("{} Elo", elo),
     };
-    println!(
-        "  Score: {:.1} - {:.1}  [{elo_str}]",
-        e1_score, e2_score
-    );
-    println!(
-        "  Games: {}    Draw rate: {:.1}%",
-        total, draw_rate
-    );
+    println!("  Score: {:.1} - {:.1}  [{elo_str}]", e1_score, e2_score);
+    println!("  Games: {}    Draw rate: {:.1}%", total, draw_rate);
     if s.penta.pairs() > 0 {
         let [ll, ld, even, wd, ww] = s.penta.counts();
         println!(
@@ -253,22 +250,31 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     }
     if elapsed > 0.0 {
         let gps = total as f64 / elapsed;
-        println!(
-            "  Time:  {:.1}s ({:.1} games/sec)",
-            elapsed, gps
-        );
+        println!("  Time:  {:.1}s ({:.1} games/sec)", elapsed, gps);
     }
     println!();
 
     // Head-to-head table
-    println!("  +-{0:-<w$}-+------+------+------+-------+-------+",
-        "", w = w);
+    println!(
+        "  +-{0:-<w$}-+------+------+------+-------+-------+",
+        "",
+        w = w
+    );
     println!(
         "  | {0:<w$} | {1:>4} | {2:>4} | {3:>4} | {4:>5} | {5:>5} |",
-        "Engine", "W", "L", "D", "Score", "Pts", w = w
+        "Engine",
+        "W",
+        "L",
+        "D",
+        "Score",
+        "Pts",
+        w = w
     );
-    println!("  +-{0:-<w$}-+------+------+------+-------+-------+",
-        "", w = w);
+    println!(
+        "  +-{0:-<w$}-+------+------+------+-------+-------+",
+        "",
+        w = w
+    );
     println!(
         "  | {name:<w$} | {wins:>4} | {losses:>4} | {draws:>4} | {pct} | {pts:>5.1} |",
         name = e1_name,
@@ -289,8 +295,11 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         pts = e2_score,
         w = w,
     );
-    println!("  +-{0:-<w$}-+------+------+------+-------+-------+",
-        "", w = w);
+    println!(
+        "  +-{0:-<w$}-+------+------+------+-------+-------+",
+        "",
+        w = w
+    );
     println!();
 
     // White/Black breakdown
@@ -299,7 +308,10 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
 
     println!("  White/Black Breakdown (from {}'s perspective):", e1_name);
     println!("  +-----------+------+------+------+-------+");
-    println!("  | Color     | {0:>4} | {1:>4} | {2:>4} | {3:>5} |", "W", "L", "D", "Score");
+    println!(
+        "  | Color     | {0:>4} | {1:>4} | {2:>4} | {3:>5} |",
+        "W", "L", "D", "Score"
+    );
     println!("  +-----------+------+------+------+-------+");
     if e1_as_white > 0 {
         println!(
@@ -349,7 +361,11 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
 
     // Game length stats
     println!("  Game Length:");
-    println!("    Average:  {:.0} plies ({:.0} moves)", avg_len, avg_len / 2.0);
+    println!(
+        "    Average:  {:.0} plies ({:.0} moves)",
+        avg_len,
+        avg_len / 2.0
+    );
     if s.shortest_game != usize::MAX {
         println!(
             "    Shortest: {} plies ({} moves)",
@@ -373,7 +389,10 @@ fn format_clock(clock: GameClock) -> String {
 pub fn run_tournament(mut config: TournamentConfig) {
     if config.rounds % 2 == 1 {
         config.rounds += 1;
-        println!("Rounding games up to {} so every opening is played twice.", config.rounds);
+        println!(
+            "Rounding games up to {} so every opening is played twice.",
+            config.rounds
+        );
     }
 
     if !std::path::Path::new(&config.engine1_path).exists() {
@@ -413,7 +432,10 @@ pub fn run_tournament(mut config: TournamentConfig) {
         config.rounds, config.concurrency
     );
     if !config.openings.is_empty() {
-        println!("Openings: {} positions, each played as a color-swapped pair", config.openings.len());
+        println!(
+            "Openings: {} positions, each played as a color-swapped pair",
+            config.openings.len()
+        );
     } else if let Some(ref fen) = config.start_fen {
         println!("Start FEN: {}", fen);
     }
@@ -621,14 +643,10 @@ pub fn run_tournament(mut config: TournamentConfig) {
 
                 // If an engine crashed, try to respawn it
                 if outcome.reason == GameEndReason::EngineCrash {
-                    if let Ok(new_e1) =
-                        spawn_and_init(&config.engine1_path, &config.e1_options)
-                    {
+                    if let Ok(new_e1) = spawn_and_init(&config.engine1_path, &config.e1_options) {
                         e1 = new_e1;
                     }
-                    if let Ok(new_e2) =
-                        spawn_and_init(&config.engine2_path, &config.e2_options)
-                    {
+                    if let Ok(new_e2) = spawn_and_init(&config.engine2_path, &config.e2_options) {
                         e2 = new_e2;
                     }
                 }

@@ -15,8 +15,8 @@ use app::{App, EngineTask, TaskKind};
 use engine::{Engine, Reply, SearchId, SearchLimit};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
@@ -47,7 +47,12 @@ struct Session {
 }
 
 impl Session {
-    fn run(&mut self, terminal: &mut DefaultTerminal, app: &mut App, engine: &mut Engine) -> io::Result<()> {
+    fn run(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        app: &mut App,
+        engine: &mut Engine,
+    ) -> io::Result<()> {
         let mut area = Rect::default();
         while !app.quit {
             let now = Instant::now();

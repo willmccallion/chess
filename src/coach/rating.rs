@@ -39,7 +39,11 @@ pub fn expected_score(player: Elo, opponent: Elo) -> f64 {
 
 /// `player`'s rating after `outcome` against `opponent`, having played `games_before` before.
 pub fn updated(player: Elo, opponent: Elo, outcome: Outcome, games_before: usize) -> Elo {
-    let k = if games_before < PROVISIONAL_GAMES { PROVISIONAL_K } else { SETTLED_K };
+    let k = if games_before < PROVISIONAL_GAMES {
+        PROVISIONAL_K
+    } else {
+        SETTLED_K
+    };
     let change = k * (outcome.points() - expected_score(player, opponent));
     Elo((f64::from(player.0) + change).round() as i32).max(Elo::FLOOR)
 }
@@ -49,7 +53,9 @@ pub fn rating_after(results: impl IntoIterator<Item = (Elo, Outcome)>) -> Elo {
     results
         .into_iter()
         .enumerate()
-        .fold(Elo::START, |rating, (played, (opponent, outcome))| updated(rating, opponent, outcome, played))
+        .fold(Elo::START, |rating, (played, (opponent, outcome))| {
+            updated(rating, opponent, outcome, played)
+        })
 }
 
 #[cfg(test)]

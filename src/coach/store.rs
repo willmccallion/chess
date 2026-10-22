@@ -3,7 +3,9 @@
 
 use super::bot::Level;
 use super::judgement::Eval;
-use super::puzzles::{LichessPuzzle, PuzzleId, lichess_from_line, lichess_to_line, parse_lichess_csv_row};
+use super::puzzles::{
+    LichessPuzzle, PuzzleId, lichess_from_line, lichess_to_line, parse_lichess_csv_row,
+};
 use super::rating::Elo;
 use super::review::AnalysedPosition;
 use super::srs::UnixTime;
@@ -59,12 +61,17 @@ impl Ending {
             GameEndReason::FiftyMoveRule => Some(Self::FiftyMoves),
             GameEndReason::InsufficientMaterial => Some(Self::InsufficientMaterial),
             GameEndReason::FlagFall => Some(Self::Timeout),
-            GameEndReason::MoveLimitExceeded | GameEndReason::IllegalMove | GameEndReason::EngineCrash => None,
+            GameEndReason::MoveLimitExceeded
+            | GameEndReason::IllegalMove
+            | GameEndReason::EngineCrash => None,
         }
     }
 
     fn token(self) -> &'static str {
-        Self::ALL.iter().find(|(e, _)| *e == self).map_or("", |(_, t)| t)
+        Self::ALL
+            .iter()
+            .find(|(e, _)| *e == self)
+            .map_or("", |(_, t)| t)
     }
 
     fn from_token(token: &str) -> Option<Self> {
@@ -115,7 +122,9 @@ impl GameRecord {
         use super::rating::Outcome;
         match (self.result, self.human) {
             (GameResult::Draw, _) => Outcome::Draw,
-            (GameResult::WhiteWin, Color::White) | (GameResult::BlackWin, Color::Black) => Outcome::Win,
+            (GameResult::WhiteWin, Color::White) | (GameResult::BlackWin, Color::Black) => {
+                Outcome::Win
+            }
             _ => Outcome::Loss,
         }
     }
@@ -186,7 +195,9 @@ impl Store {
         let data_home = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))?;
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+            })?;
         Some(data_home.join("chess").join("coach"))
     }
 
@@ -250,10 +261,18 @@ impl Store {
 fn read_lines<T>(path: &Path, parse: impl Fn(&str) -> Option<T>) -> io::Result<Loaded<T>> {
     let file = match File::open(path) {
         Ok(file) => file,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Loaded { items: Vec::new(), bad_lines: Vec::new() }),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(Loaded {
+                items: Vec::new(),
+                bad_lines: Vec::new(),
+            });
+        }
         Err(e) => return Err(e),
     };
-    let mut loaded = Loaded { items: Vec::new(), bad_lines: Vec::new() };
+    let mut loaded = Loaded {
+        items: Vec::new(),
+        bad_lines: Vec::new(),
+    };
     for (index, line) in BufReader::new(file).lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
@@ -277,7 +296,10 @@ fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
     {
         let mut writer = BufWriter::new(File::create(&temporary)?);
         writer.write_all(text.as_bytes())?;
-        writer.into_inner().map_err(io::IntoInnerError::into_error)?.sync_all()?;
+        writer
+            .into_inner()
+            .map_err(io::IntoInnerError::into_error)?
+            .sync_all()?;
     }
     fs::rename(&temporary, path)
 }
@@ -333,7 +355,11 @@ fn eval_from_token(token: &str) -> Option<Eval> {
 }
 
 fn moves_text(moves: &[Move]) -> String {
-    moves.iter().map(|&m| format_uci(m)).collect::<Vec<_>>().join(" ")
+    moves
+        .iter()
+        .map(|&m| format_uci(m))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Reads UCI moves played in order from `board`.
@@ -372,8 +398,19 @@ fn format_game(game: &GameRecord) -> String {
 
 fn parse_game(line: &str) -> Option<GameRecord> {
     let fields: Vec<&str> = line.split('\t').collect();
-    let [tag, id, played_at, human, level, result, ending, blunder_check, start_fen, moves, analysis] =
-        fields.as_slice()
+    let [
+        tag,
+        id,
+        played_at,
+        human,
+        level,
+        result,
+        ending,
+        blunder_check,
+        start_fen,
+        moves,
+        analysis,
+    ] = fields.as_slice()
     else {
         return None;
     };
@@ -452,7 +489,11 @@ fn parse_attempt(line: &str) -> Option<AttemptRecord> {
 
 /// A field that is `-` when absent: Some(None) for `-`, None if it does not parse.
 fn optional_field<T: std::str::FromStr>(text: &str) -> Option<Option<T>> {
-    if text == "-" { Some(None) } else { text.parse().ok().map(Some) }
+    if text == "-" {
+        Some(None)
+    } else {
+        text.parse().ok().map(Some)
+    }
 }
 
 /// Which Lichess puzzles to keep from the full database.
@@ -468,7 +509,13 @@ pub struct ImportFilter {
 
 impl Default for ImportFilter {
     fn default() -> Self {
-        Self { min_rating: 400, max_rating: 2400, min_popularity: 85, min_plays: 500, per_band: 2500 }
+        Self {
+            min_rating: 400,
+            max_rating: 2400,
+            min_popularity: 85,
+            min_plays: 500,
+            per_band: 2500,
+        }
     }
 }
 
@@ -518,7 +565,8 @@ mod tests {
     use rand::rngs::StdRng;
 
     fn temp_store(name: &str) -> Store {
-        let dir = std::env::temp_dir().join(format!("chess-coach-test-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("chess-coach-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         Store::open(dir).unwrap()
     }
@@ -550,7 +598,10 @@ mod tests {
 
         assert!(loaded.bad_lines.is_empty());
         let back = &loaded.items[0];
-        assert_eq!((back.id, back.human, back.level, back.result), (game.id, game.human, game.level, game.result));
+        assert_eq!(
+            (back.id, back.human, back.level, back.result),
+            (game.id, game.human, game.level, game.result)
+        );
         assert_eq!(back.moves, game.moves);
         assert_eq!(back.ending, Ending::Checkmate);
         assert!(back.blunder_check);
@@ -563,8 +614,14 @@ mod tests {
         store.append_game(&sample_game(2)).unwrap();
         let start = Board::from_fen(START_FEN).unwrap();
         let analysis = vec![
-            AnalysedPosition { eval: Eval::Score(Score::Centipawns(25)), best_line: parse_san_line(&start, &["e4", "e5"]).unwrap() },
-            AnalysedPosition { eval: Eval::Score(Score::MateIn(-3)), best_line: Vec::new() },
+            AnalysedPosition {
+                eval: Eval::Score(Score::Centipawns(25)),
+                best_line: parse_san_line(&start, &["e4", "e5"]).unwrap(),
+            },
+            AnalysedPosition {
+                eval: Eval::Score(Score::MateIn(-3)),
+                best_line: Vec::new(),
+            },
         ];
 
         store.save_analysis(GameId(2), &analysis).unwrap();

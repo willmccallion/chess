@@ -1,9 +1,9 @@
 //! The repertoire by chapter, with where you stand on each line.
 
+use super::super::view::{ACCENT, DIM};
 use super::common::{GOOD, INFO, TEXT, WARN, centred, dim, panel};
 use super::data::{CoachData, now};
 use super::line::LineScreen;
-use super::super::view::{ACCENT, DIM};
 use super::{Nav, Screen};
 use crate::coach::profile::{LineStatus, line_status};
 use crate::coach::repertoire::{CHAPTERS, Chapter, Line as RepLine};
@@ -35,7 +35,12 @@ impl Openings {
         let rows: Vec<Row> = CHAPTERS
             .iter()
             .flat_map(|chapter| {
-                std::iter::once(Row::Chapter(chapter)).chain(chapter.lines.iter().map(move |line| Row::Line(chapter, line)))
+                std::iter::once(Row::Chapter(chapter)).chain(
+                    chapter
+                        .lines
+                        .iter()
+                        .map(move |line| Row::Line(chapter, line)),
+                )
             })
             .collect();
         let now = now();
@@ -48,17 +53,29 @@ impl Openings {
                 )
             })
             .unwrap_or(1);
-        Self { rows, selected: first_due_or_new }
+        Self {
+            rows,
+            selected: first_due_or_new,
+        }
     }
 
     fn line_indices(&self) -> Vec<usize> {
-        self.rows.iter().enumerate().filter(|(_, r)| matches!(r, Row::Line(..))).map(|(i, _)| i).collect()
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| matches!(r, Row::Line(..)))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     fn step(&mut self, forward: bool) {
         let lines = self.line_indices();
         let position = lines.iter().position(|&i| i == self.selected).unwrap_or(0);
-        let next = if forward { (position + 1).min(lines.len() - 1) } else { position.saturating_sub(1) };
+        let next = if forward {
+            (position + 1).min(lines.len() - 1)
+        } else {
+            position.saturating_sub(1)
+        };
         self.selected = lines[next];
     }
 
@@ -108,7 +125,10 @@ impl Openings {
 fn status_span(status: LineStatus) -> Span<'static> {
     match status {
         LineStatus::New => Span::styled("new     ", Style::new().fg(INFO)),
-        LineStatus::Due => Span::styled("review  ", Style::new().fg(WARN).add_modifier(Modifier::BOLD)),
+        LineStatus::Due => Span::styled(
+            "review  ",
+            Style::new().fg(WARN).add_modifier(Modifier::BOLD),
+        ),
         LineStatus::Learning => Span::styled("learning", Style::new().fg(DIM)),
         LineStatus::Learned => Span::styled("learned ", Style::new().fg(GOOD)),
     }
@@ -117,7 +137,12 @@ fn status_span(status: LineStatus) -> Span<'static> {
 fn layout(area: Rect) -> (Rect, Rect) {
     let page = centred(area, WIDTH, area.height.saturating_sub(1));
     let intro = Rect::new(page.x, page.y, page.width, INTRO_HEIGHT.min(page.height));
-    let list = Rect::new(page.x, page.y + intro.height, page.width, page.height.saturating_sub(intro.height));
+    let list = Rect::new(
+        page.x,
+        page.y + intro.height,
+        page.width,
+        page.height.saturating_sub(intro.height),
+    );
     (intro, list)
 }
 
@@ -148,29 +173,51 @@ impl Screen for Openings {
             .take(rows)
             .map(|(i, row)| match row {
                 Row::Chapter(chapter) => {
-                    let side = if chapter.side == crate::types::Color::White { "as White" } else { "as Black" };
+                    let side = if chapter.side == crate::types::Color::White {
+                        "as White"
+                    } else {
+                        "as Black"
+                    };
                     Line::from(vec![
-                        Span::styled(chapter.name, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            chapter.name,
+                            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(format!("  {side}"), Style::new().fg(DIM)),
                     ])
                 }
                 Row::Line(_, line) => {
                     let chosen = i == self.selected;
                     Line::from(vec![
-                        Span::styled(if chosen { "  ▸ " } else { "    " }, Style::new().fg(ACCENT)),
+                        Span::styled(
+                            if chosen { "  ▸ " } else { "    " },
+                            Style::new().fg(ACCENT),
+                        ),
                         status_span(line_status(line, &data.schedules, now)),
                         Span::raw("  "),
                         Span::styled(
                             line.name,
-                            if chosen { Style::new().fg(TEXT).add_modifier(Modifier::BOLD) } else { Style::new().fg(TEXT) },
+                            if chosen {
+                                Style::new().fg(TEXT).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::new().fg(TEXT)
+                            },
                         ),
-                        Span::styled(format!("  {} moves", line.your_move_count()), Style::new().fg(DIM)),
+                        Span::styled(
+                            format!("  {} moves", line.your_move_count()),
+                            Style::new().fg(DIM),
+                        ),
                     ])
                 }
             })
             .collect();
         frame.render_widget(Paragraph::new(lines).block(panel("Lines")), list_area);
-        let status = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
+        let status = Rect::new(
+            area.x,
+            area.bottom().saturating_sub(1),
+            area.width,
+            area.height.min(1),
+        );
         frame.render_widget(
             Paragraph::new(dim("  ↑↓ choose · Enter learn or drill · l lesson · d drill · r review all due · Esc back")),
             status,

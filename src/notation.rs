@@ -62,7 +62,13 @@ fn san_parts(san: &str) -> Option<SanParts> {
     }
     let target = chars.split_off(chars.len() - 2);
     let to = square_of(target[0], target[1])?;
-    let mut parts = SanParts { kind, from_file: None, from_rank: None, to, promotion };
+    let mut parts = SanParts {
+        kind,
+        from_file: None,
+        from_rank: None,
+        to,
+        promotion,
+    };
     for c in chars {
         match c {
             'a'..='h' => parts.from_file = Some(c as u8 - b'a'),
@@ -101,7 +107,10 @@ fn normalize_san(san: &str) -> String {
 pub fn san_of(board: &Board, m: Move) -> Option<String> {
     let mut legal = MoveList::new();
     board.generate_legal_moves(&mut legal);
-    legal.as_slice().contains(&m).then(|| board.to_san(m, legal.as_slice()))
+    legal
+        .as_slice()
+        .contains(&m)
+        .then(|| board.to_san(m, legal.as_slice()))
 }
 
 /// `moves` from `root` in numbered SAN, stopping at the first move that is not legal.
@@ -176,7 +185,8 @@ mod tests {
 
     #[test]
     fn over_specified_san_still_reads() {
-        let board = Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 2").unwrap();
+        let board = Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 2")
+            .unwrap();
         let mut legal = MoveList::new();
         board.generate_legal_moves(&mut legal);
 
@@ -187,7 +197,9 @@ mod tests {
 
     #[test]
     fn ambiguous_san_reads_as_nothing() {
-        let board = Board::from_fen("rnbqkb1r/ppp1pppp/5n2/3p4/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 2").unwrap();
+        let board =
+            Board::from_fen("rnbqkb1r/ppp1pppp/5n2/3p4/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 2")
+                .unwrap();
         let mut legal = MoveList::new();
         board.generate_legal_moves(&mut legal);
 
@@ -196,7 +208,8 @@ mod tests {
 
     #[test]
     fn pv_is_numbered_from_the_side_to_move() {
-        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
+        let board =
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
         let line = parse_san_line(&board, &["e5", "Nf3"]).unwrap();
 
         assert_eq!(line_in_san(&board, &line), "1... e5 2. Nf3");

@@ -19,8 +19,13 @@ pub enum Habit {
 }
 
 impl Habit {
-    pub const ALL: [Self; 5] =
-        [Self::EarlyQueen, Self::SamePieceTwice, Self::KingWalk, Self::SlowDevelopment, Self::NoCastling];
+    pub const ALL: [Self; 5] = [
+        Self::EarlyQueen,
+        Self::SamePieceTwice,
+        Self::KingWalk,
+        Self::SlowDevelopment,
+        Self::NoCastling,
+    ];
 
     pub const fn name(self) -> &'static str {
         match self {
@@ -88,7 +93,11 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
         own_moves += 1;
         let kind = board.piece_on[usize::from(m.from)].kind();
         let undeveloped = undeveloped_minors(&board, side);
-        if kind == Some(PieceKind::Queen) && !m.capture && own_moves <= EARLY_QUEEN_MOVES && undeveloped >= 2 {
+        if kind == Some(PieceKind::Queen)
+            && !m.capture
+            && own_moves <= EARLY_QUEEN_MOVES
+            && undeveloped >= 2
+        {
             note(Habit::EarlyQueen, ply);
         }
         let is_minor = matches!(kind, Some(PieceKind::Knight | PieceKind::Bishop));
@@ -102,7 +111,11 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
         {
             note(Habit::SamePieceTwice, ply);
         }
-        if kind == Some(PieceKind::King) && !m.castle && own_moves <= KING_WALK_MOVES && queens_on(&board) {
+        if kind == Some(PieceKind::King)
+            && !m.castle
+            && own_moves <= KING_WALK_MOVES
+            && queens_on(&board)
+        {
             note(Habit::KingWalk, ply);
         }
         castled |= m.castle;
@@ -148,12 +161,18 @@ mod tests {
     fn habits(sans: &[&str], side: Color) -> Vec<Habit> {
         let start = Board::from_fen(START_FEN).unwrap();
         let moves = parse_san_line(&start, sans).unwrap();
-        opening_habits(&start, &moves, side).into_iter().map(|n| n.habit).collect()
+        opening_habits(&start, &moves, side)
+            .into_iter()
+            .map(|n| n.habit)
+            .collect()
     }
 
     #[test]
     fn bringing_the_queen_out_on_move_two_is_an_early_queen() {
-        assert_eq!(habits(&["e4", "e5", "Qh5", "Nc6"], Color::White), vec![Habit::EarlyQueen]);
+        assert_eq!(
+            habits(&["e4", "e5", "Qh5", "Nc6"], Color::White),
+            vec![Habit::EarlyQueen]
+        );
     }
 
     #[test]
@@ -163,7 +182,10 @@ mod tests {
 
     #[test]
     fn moving_a_knight_again_for_no_reason_is_noted() {
-        assert_eq!(habits(&["Nf3", "e5", "Ng5", "d5"], Color::White), vec![Habit::SamePieceTwice]);
+        assert_eq!(
+            habits(&["Nf3", "e5", "Ng5", "d5"], Color::White),
+            vec![Habit::SamePieceTwice]
+        );
     }
 
     #[test]
@@ -173,14 +195,17 @@ mod tests {
 
     #[test]
     fn walking_the_king_with_queens_on_is_noted() {
-        assert_eq!(habits(&["e4", "e5", "Ke2"], Color::White), vec![Habit::KingWalk]);
+        assert_eq!(
+            habits(&["e4", "e5", "Ke2"], Color::White),
+            vec![Habit::KingWalk]
+        );
     }
 
     #[test]
     fn a_good_opening_shows_no_bad_habits() {
         let italian = [
-            "e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6", "d3", "d6", "O-O", "O-O", "Re1", "a6", "Bb3",
-            "Ba7", "Nbd2", "h6", "Nf1", "Re8", "Ng3", "Be6", "h3", "Qd7",
+            "e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6", "d3", "d6", "O-O", "O-O", "Re1",
+            "a6", "Bb3", "Ba7", "Nbd2", "h6", "Nf1", "Re8", "Ng3", "Be6", "h3", "Qd7",
         ];
 
         assert!(habits(&italian, Color::White).is_empty());
@@ -190,10 +215,13 @@ mod tests {
     #[test]
     fn shuffling_pawns_for_ten_moves_is_slow_development_and_late_castling() {
         let pawns = [
-            "a3", "a6", "b3", "b6", "c3", "c6", "d3", "d6", "e3", "e6", "f3", "f6", "g3", "g6", "h3", "h6", "a4",
-            "a5", "b4", "b5", "c4", "c5", "d4", "d5",
+            "a3", "a6", "b3", "b6", "c3", "c6", "d3", "d6", "e3", "e6", "f3", "f6", "g3", "g6",
+            "h3", "h6", "a4", "a5", "b4", "b5", "c4", "c5", "d4", "d5",
         ];
 
-        assert_eq!(habits(&pawns, Color::White), vec![Habit::SlowDevelopment, Habit::NoCastling]);
+        assert_eq!(
+            habits(&pawns, Color::White),
+            vec![Habit::SlowDevelopment, Habit::NoCastling]
+        );
     }
 }

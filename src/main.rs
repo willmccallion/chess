@@ -6,8 +6,8 @@ use chess::game_runner::GameClock;
 use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search_params::PARAM_SPECS;
-use chess::spsa;
 use chess::sprt::SprtConfig;
+use chess::spsa;
 use chess::tournament::{self, TournamentConfig};
 use chess::tui;
 use chess::types::{Color, START_FEN};
@@ -276,22 +276,32 @@ fn open_coach_store(dir: Option<std::path::PathBuf>) -> chess::coach::store::Sto
 fn import_puzzles(path: &str, store: &chess::coach::store::Store, per_band: usize) {
     use chess::coach::store::{ImportFilter, sample_lichess_csv};
     use std::io::BufReader;
-    let filter = ImportFilter { per_band, ..ImportFilter::default() };
+    let filter = ImportFilter {
+        per_band,
+        ..ImportFilter::default()
+    };
     let mut rng = rand::thread_rng();
     let sampled = if path == "-" {
         sample_lichess_csv(std::io::stdin().lock(), filter, &mut rng)
     } else {
-        let file = std::fs::File::open(path).unwrap_or_else(|e| exit_with_error(&format!("cannot open {path}: {e}")));
+        let file = std::fs::File::open(path)
+            .unwrap_or_else(|e| exit_with_error(&format!("cannot open {path}: {e}")));
         sample_lichess_csv(BufReader::new(file), filter, &mut rng)
     };
     let puzzles = sampled.unwrap_or_else(|e| exit_with_error(&format!("reading {path}: {e}")));
     if puzzles.is_empty() {
-        exit_with_error("no puzzles found: expected the Lichess puzzle CSV, decompressed (zstd -dc)");
+        exit_with_error(
+            "no puzzles found: expected the Lichess puzzle CSV, decompressed (zstd -dc)",
+        );
     }
     store
         .save_lichess_puzzles(&puzzles)
         .unwrap_or_else(|e| exit_with_error(&format!("saving puzzles: {e}")));
-    println!("Imported {} puzzles into {}", puzzles.len(), store.dir().display());
+    println!(
+        "Imported {} puzzles into {}",
+        puzzles.len(),
+        store.dir().display()
+    );
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -315,7 +325,10 @@ impl SideChoice {
 /// Loads the networks baked in at build time, or exits: nothing can be evaluated without them.
 fn require_networks(kind: eval::EvalKind) {
     if let Err(e) = eval::EvalOptions::with_kind(kind).load() {
-        exit_with_error(&format!("failed to load the {} evaluator: {e}", kind.name()));
+        exit_with_error(&format!(
+            "failed to load the {} evaluator: {e}",
+            kind.name()
+        ));
     }
 }
 
@@ -362,13 +375,18 @@ fn main() {
                 threads: threads.unwrap_or_else(num_cpus::get).max(1),
                 nodes: chess::search::NodeLimit {
                     soft: soft_nodes.max(1),
-                    hard: hard_nodes.unwrap_or(soft_nodes.saturating_mul(8)).max(soft_nodes.max(1)),
+                    hard: hard_nodes
+                        .unwrap_or(soft_nodes.saturating_mul(8))
+                        .max(soft_nodes.max(1)),
                 },
                 random_plies,
                 seed,
                 hash_mb: hash.max(1),
             };
-            eprintln!("datagen with the {} evaluator, seed {seed}", cli.eval.name());
+            eprintln!(
+                "datagen with the {} evaluator, seed {seed}",
+                cli.eval.name()
+            );
             match chess::datagen::run(&config) {
                 Ok(summary) => println!(
                     "{} positions from {} games in {:.0}s",
@@ -408,14 +426,21 @@ fn main() {
                 start,
                 mode: board_mode,
                 human: side.color(),
-                time: clock.map_or(tui::TimeSetting::PerMove { ms: movetime }, tui::TimeSetting::Clock),
+                time: clock.map_or(
+                    tui::TimeSetting::PerMove { ms: movetime },
+                    tui::TimeSetting::Clock,
+                ),
             };
             match tui::run(config, engine) {
                 Ok(record) => println!("{record}"),
                 Err(e) => exit_with_error(&format!("terminal error: {e}")),
             }
         }
-        Cmd::ImportPuzzles { path, coach_dir, per_band } => {
+        Cmd::ImportPuzzles {
+            path,
+            coach_dir,
+            per_band,
+        } => {
             let store = open_coach_store(coach_dir);
             import_puzzles(&path, &store, per_band.max(1));
         }
@@ -426,7 +451,11 @@ fn main() {
                 std::process::exit(1);
             });
             let score = eval::evaluate(&mut b);
-            let side = if b.turn == Color::White { "white" } else { "black" };
+            let side = if b.turn == Color::White {
+                "white"
+            } else {
+                "black"
+            };
             let sign = if score >= 0 { "+" } else { "" };
             println!("{sign}{score} cp ({side} to move)");
         }
@@ -435,19 +464,28 @@ fn main() {
             use eval::stockfish::{NetPaths, ensure_loaded, trace_text};
             let built_in = NetPaths::built_in();
             let paths = match (big, small, built_in) {
-                (Some(big), Some(small), _) => NetPaths { big: big.into(), small: small.into() },
+                (Some(big), Some(small), _) => NetPaths {
+                    big: big.into(),
+                    small: small.into(),
+                },
                 (big, small, Some(defaults)) => NetPaths {
                     big: big.map_or(defaults.big, Into::into),
                     small: small.map_or(defaults.small, Into::into),
                 },
-                _ => exit_with_error("no networks: pass --big and --small or build inside the dev shell"),
+                _ => exit_with_error(
+                    "no networks: pass --big and --small or build inside the dev shell",
+                ),
             };
             if let Err(e) = ensure_loaded(&paths) {
                 exit_with_error(&format!("failed to load NNUE: {e}"));
             }
             let fens: Vec<String> = match fen {
                 Some(fen) => vec![fen],
-                None => std::io::stdin().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect(),
+                None => std::io::stdin()
+                    .lines()
+                    .map_while(Result::ok)
+                    .filter(|l| !l.trim().is_empty())
+                    .collect(),
             };
             for fen in fens {
                 let board = Board::from_fen(&fen)
@@ -488,24 +526,30 @@ fn main() {
         } => {
             let e1_opts: Vec<_> = e1_options
                 .iter()
-                .map(|s| tournament::parse_option(s).unwrap_or_else(|e| {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }))
+                .map(|s| {
+                    tournament::parse_option(s).unwrap_or_else(|e| {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    })
+                })
                 .collect();
             let e2_opts: Vec<_> = e2_options
                 .iter()
-                .map(|s| tournament::parse_option(s).unwrap_or_else(|e| {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }))
+                .map(|s| {
+                    tournament::parse_option(s).unwrap_or_else(|e| {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    })
+                })
                 .collect();
             let pair_count = rounds.div_ceil(2);
             let openings = match openings {
-                Some(path) => openings::sample_openings(&path, pair_count, seed).unwrap_or_else(|e| {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }),
+                Some(path) => {
+                    openings::sample_openings(&path, pair_count, seed).unwrap_or_else(|e| {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    })
+                }
                 None => Vec::new(),
             };
             let sprt = sprt.map(|spec| {
@@ -553,8 +597,10 @@ fn main() {
                     .unwrap_or_else(|e| exit_with_error(&e)),
                 (true, None) => bench::BENCH_FENS.iter().map(|f| f.to_string()).collect(),
             };
-            let engine_go = movetime.map_or_else(|| format!("depth {depth}"), |ms| format!("movetime {ms}"));
-            let reference_go = ref_depth.map_or_else(|| engine_go.clone(), |d| format!("depth {d}"));
+            let engine_go =
+                movetime.map_or_else(|| format!("depth {depth}"), |ms| format!("movetime {ms}"));
+            let reference_go =
+                ref_depth.map_or_else(|| engine_go.clone(), |d| format!("depth {d}"));
             let engine_path = engine.unwrap_or_else(|| {
                 std::env::current_exe()
                     .map(|p| p.to_string_lossy().into_owned())
@@ -579,9 +625,15 @@ fn main() {
             }
         }
         Cmd::Params => {
-            println!("{:<24} {:>8} {:>8} {:>8} {:>6}", "name", "default", "min", "max", "step");
+            println!(
+                "{:<24} {:>8} {:>8} {:>8} {:>6}",
+                "name", "default", "min", "max", "step"
+            );
             for spec in PARAM_SPECS {
-                println!("{:<24} {:>8} {:>8} {:>8} {:>6}", spec.name, spec.default, spec.min, spec.max, spec.step);
+                println!(
+                    "{:<24} {:>8} {:>8} {:>8} {:>6}",
+                    spec.name, spec.default, spec.min, spec.max, spec.step
+                );
             }
         }
         Cmd::Tune {
@@ -598,12 +650,23 @@ fn main() {
             options,
         } => {
             let workers = match workers {
-                Some(spec) => spsa::parse_worker_groups(&spec).unwrap_or_else(|e| exit_with_error(&e)),
-                None => vec![spsa::WorkerGroup { cpus: None, count: concurrency }],
+                Some(spec) => {
+                    spsa::parse_worker_groups(&spec).unwrap_or_else(|e| exit_with_error(&e))
+                }
+                None => vec![spsa::WorkerGroup {
+                    cpus: None,
+                    count: concurrency,
+                }],
             };
             let engine = engine
-                .or_else(|| std::env::current_exe().ok().map(|p| p.display().to_string()))
-                .unwrap_or_else(|| exit_with_error("cannot locate the engine binary; pass --engine"));
+                .or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .map(|p| p.display().to_string())
+                })
+                .unwrap_or_else(|| {
+                    exit_with_error("cannot locate the engine binary; pass --engine")
+                });
             let start = match resume {
                 Some(path) => std::fs::read_to_string(&path)
                     .map_err(|e| format!("{path}: {e}"))
@@ -634,7 +697,12 @@ fn main() {
                 Ok(theta) => {
                     println!("final estimate (rounded):");
                     for (spec, value) in PARAM_SPECS.iter().zip(theta) {
-                        println!("  {:<24} {:>6} (default {})", spec.name, value.round() as i32, spec.default);
+                        println!(
+                            "  {:<24} {:>6} (default {})",
+                            spec.name,
+                            value.round() as i32,
+                            spec.default
+                        );
                     }
                 }
                 Err(e) => exit_with_error(&e),
@@ -655,4 +723,3 @@ fn parse_options(options: &[String]) -> Vec<(String, String)> {
         .map(|s| tournament::parse_option(s).unwrap_or_else(|e| exit_with_error(&e)))
         .collect()
 }
-

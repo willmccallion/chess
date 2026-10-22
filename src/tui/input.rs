@@ -35,7 +35,11 @@ impl MoveInput {
         let Some(from) = self.selected else {
             return Vec::new();
         };
-        legal.iter().filter(|m| m.from == from).map(|m| m.to).collect()
+        legal
+            .iter()
+            .filter(|m| m.from == from)
+            .map(|m| m.to)
+            .collect()
     }
 
     /// A press of the left mouse button on `square`; returns a completed move.
@@ -98,7 +102,11 @@ impl MoveInput {
 /// Legal moves taking the piece on `from` to `to`; several when promoting. Moving the king
 /// onto its own rook castles on that side.
 fn moves_between(board: &Board, legal: &[Move], from: u8, to: u8) -> Vec<Move> {
-    let direct: Vec<Move> = legal.iter().filter(|m| m.from == from && m.to == to).copied().collect();
+    let direct: Vec<Move> = legal
+        .iter()
+        .filter(|m| m.from == from && m.to == to)
+        .copied()
+        .collect();
     if !direct.is_empty() {
         return direct;
     }

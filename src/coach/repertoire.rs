@@ -36,13 +36,19 @@ impl Line {
 
     /// Whether you make the move at `ply`.
     pub fn is_yours(&self, ply: usize) -> bool {
-        let mover = if ply.is_multiple_of(2) { Color::White } else { Color::Black };
+        let mover = if ply.is_multiple_of(2) {
+            Color::White
+        } else {
+            Color::Black
+        };
         mover == self.side
     }
 
     /// How many of the moves are yours.
     pub fn your_move_count(&self) -> usize {
-        (0..self.steps.len()).filter(|&ply| self.is_yours(ply)).count()
+        (0..self.steps.len())
+            .filter(|&ply| self.is_yours(ply))
+            .count()
     }
 }
 
@@ -57,10 +63,18 @@ pub struct Chapter {
 
 /// The starting position, without evaluation state so it is cheap to copy.
 pub fn start_board() -> Board {
-    Board::from_fen(START_FEN).unwrap_or_else(|_| Board::empty()).without_eval_state()
+    Board::from_fen(START_FEN)
+        .unwrap_or_else(|_| Board::empty())
+        .without_eval_state()
 }
 
-pub const CHAPTERS: &[Chapter] = &[QUEENS_GAMBIT, INDIAN_DEFENCES, BLACK_VS_E4, BLACK_VS_D4, BLACK_VS_OTHERS];
+pub const CHAPTERS: &[Chapter] = &[
+    QUEENS_GAMBIT,
+    INDIAN_DEFENCES,
+    BLACK_VS_E4,
+    BLACK_VS_D4,
+    BLACK_VS_OTHERS,
+];
 
 pub fn all_lines() -> impl Iterator<Item = &'static Line> {
     CHAPTERS.iter().flat_map(|chapter| chapter.lines.iter())
@@ -94,7 +108,15 @@ const INDIAN_DEFENCES: Chapter = Chapter {
     side: Color::White,
     intro: "When Black answers 1.d4 with 1...Nf6, keep playing 2.c4 and take the centre with \
             Nc3 and often e4. The same ideas work against 1...g6 and 1...f5.",
-    lines: &[NIMZO, INDIAN_INTO_QGD, KINGS_INDIAN, GRUNFELD, BENONI, BUDAPEST, DUTCH],
+    lines: &[
+        NIMZO,
+        INDIAN_INTO_QGD,
+        KINGS_INDIAN,
+        GRUNFELD,
+        BENONI,
+        BUDAPEST,
+        DUTCH,
+    ],
 };
 
 const BLACK_VS_E4: Chapter = Chapter {
@@ -102,7 +124,19 @@ const BLACK_VS_E4: Chapter = Chapter {
     side: Color::Black,
     intro: "Meet 1.e4 with 1...e5: a pawn in the centre, open lines for your bishop and queen, \
             and natural development with ...Nc6, ...Nf6 and ...Bc5 or ...Be7.",
-    lines: &[SCHOLARS_DEFENCE, ITALIAN, EVANS, RUY_LOPEZ, RUY_EXCHANGE, SCOTCH, FOUR_KNIGHTS, VIENNA, KINGS_GAMBIT, CENTER_GAME, PONZIANI],
+    lines: &[
+        SCHOLARS_DEFENCE,
+        ITALIAN,
+        EVANS,
+        RUY_LOPEZ,
+        RUY_EXCHANGE,
+        SCOTCH,
+        FOUR_KNIGHTS,
+        VIENNA,
+        KINGS_GAMBIT,
+        CENTER_GAME,
+        PONZIANI,
+    ],
 };
 
 const BLACK_VS_D4: Chapter = Chapter {
@@ -125,15 +159,33 @@ const QGD_EXCHANGE: Line = Line {
     name: "Declined: Exchange Variation",
     side: Color::White,
     steps: &[
-        step("d4", "Take the centre. The queen already protects this pawn."),
+        step(
+            "d4",
+            "Take the centre. The queen already protects this pawn.",
+        ),
         step("d5", "Black takes the centre too."),
-        step("c4", "The Queen's Gambit: offer the c-pawn to tempt Black's d-pawn away from the centre."),
-        step("e6", "Black declines and keeps d5 protected: the Queen's Gambit Declined."),
+        step(
+            "c4",
+            "The Queen's Gambit: offer the c-pawn to tempt Black's d-pawn away from the centre.",
+        ),
+        step(
+            "e6",
+            "Black declines and keeps d5 protected: the Queen's Gambit Declined.",
+        ),
         step("Nc3", "Develop and put a third piece on d5."),
         step("Nf6", "Black develops and guards d5 again."),
-        step("cxd5", "The Exchange Variation: trade now to fix Black's pawns and give yourself a clear plan."),
-        step("exd5", "Recapturing with the pawn keeps a pawn on d5. ...Nxd5 would let you take the centre with e4."),
-        step("Bg5", "Pin the knight to the queen: it cannot move without exposing the queen."),
+        step(
+            "cxd5",
+            "The Exchange Variation: trade now to fix Black's pawns and give yourself a clear plan.",
+        ),
+        step(
+            "exd5",
+            "Recapturing with the pawn keeps a pawn on d5. ...Nxd5 would let you take the centre with e4.",
+        ),
+        step(
+            "Bg5",
+            "Pin the knight to the queen: it cannot move without exposing the queen.",
+        ),
         step("Be7", "Black blocks the pin."),
         step("e3", "Open the way for your other bishop and support d4."),
         step("O-O", "Black castles."),
@@ -143,7 +195,10 @@ const QGD_EXCHANGE: Line = Line {
         step("Re8", "The rook takes the half-open e-file."),
         step("Nf3", "Develop the last minor piece; it also eyes e5."),
         step("c6", "Black supports d5 with a pawn."),
-        step("O-O", "Castle. Now the plan is the minority attack on the queenside."),
+        step(
+            "O-O",
+            "Castle. Now the plan is the minority attack on the queenside.",
+        ),
     ],
     plan: "The minority attack: rooks to b1 and c1, then push b4 and b5 and trade on c6. Black is \
            left with a weak pawn on c6 or d5 to attack. Keep your pieces on Bd3, Qc2 and Nc3.",
@@ -157,20 +212,38 @@ const SLAV: Line = Line {
         step("d4", "Take the centre."),
         step("d5", "Black mirrors you."),
         step("c4", "The Queen's Gambit."),
-        step("c6", "The Slav: Black guards d5 with a pawn and keeps the light-squared bishop free."),
+        step(
+            "c6",
+            "The Slav: Black guards d5 with a pawn and keeps the light-squared bishop free.",
+        ),
         step("Nf3", "Develop and control e5."),
         step("Nf6", "Black develops."),
-        step("e3", "Solid: support d4 and free your light-squared bishop."),
+        step(
+            "e3",
+            "Solid: support d4 and free your light-squared bishop.",
+        ),
         step("Bf5", "Black's bishop comes out before ...e6 locks it in."),
         step("Nc3", "Develop and add pressure on d5."),
         step("e6", "Black builds a solid triangle of pawns."),
-        step("Nh4", "Chase the bishop: you are aiming to win the bishop pair."),
+        step(
+            "Nh4",
+            "Chase the bishop: you are aiming to win the bishop pair.",
+        ),
         step("Bg6", "The bishop steps back but stays on its diagonal."),
-        step("Nxg6", "Take the bishop: now you have two bishops against bishop and knight."),
-        step("hxg6", "Black recaptures towards the centre and opens the h-file."),
+        step(
+            "Nxg6",
+            "Take the bishop: now you have two bishops against bishop and knight.",
+        ),
+        step(
+            "hxg6",
+            "Black recaptures towards the centre and opens the h-file.",
+        ),
         step("Bd3", "Develop and aim at g6."),
         step("Nbd7", "Black develops."),
-        step("O-O", "Castle short. Black's h-file is half-open, so don't hurry with h3."),
+        step(
+            "O-O",
+            "Castle short. Black's h-file is half-open, so don't hurry with h3.",
+        ),
     ],
     plan: "Your two bishops are a lasting advantage: open the position with e4 or c5 at the right \
            moment, keep the bishops, and play Qc2 and Rd1.",
@@ -184,8 +257,14 @@ const QGA: Line = Line {
         step("d4", "Take the centre."),
         step("d5", "Black mirrors you."),
         step("c4", "The Queen's Gambit."),
-        step("dxc4", "Black accepts. Holding on to the pawn is hard, and Black gives up the centre."),
-        step("e3", "Simple and strong: open the diagonal so your bishop wins the pawn back."),
+        step(
+            "dxc4",
+            "Black accepts. Holding on to the pawn is hard, and Black gives up the centre.",
+        ),
+        step(
+            "e3",
+            "Simple and strong: open the diagonal so your bishop wins the pawn back.",
+        ),
         step("Nf6", "Black develops."),
         step("Bxc4", "Pawn back, and your bishop is on a fine diagonal."),
         step("e6", "Black opens a path for the dark-squared bishop."),
@@ -195,7 +274,10 @@ const QGA: Line = Line {
         step("a6", "Black prepares ...b5 to chase your bishop."),
         step("a4", "Stop ...b5 for good: your bishop keeps its diagonal."),
         step("cxd4", "Black trades in the centre."),
-        step("exd4", "Recapture with the pawn: you get an isolated d-pawn, which brings active pieces."),
+        step(
+            "exd4",
+            "Recapture with the pawn: you get an isolated d-pawn, which brings active pieces.",
+        ),
         step("Nc6", "Black attacks d4."),
         step("Nc3", "Develop and defend d4 indirectly."),
         step("Be7", "Black develops."),
@@ -215,12 +297,21 @@ const QGA_TRAP: Line = Line {
         step("c4", "The Queen's Gambit."),
         step("dxc4", "Black accepts."),
         step("e3", "Attack the pawn on c4 with your bishop."),
-        step("b5", "A common beginner's mistake: Black tries to keep the pawn."),
+        step(
+            "b5",
+            "A common beginner's mistake: Black tries to keep the pawn.",
+        ),
         step("a4", "Undermine the b5 pawn straight away."),
         step("c6", "Black holds b5 with a pawn."),
         step("axb5", "Take."),
-        step("cxb5", "The natural recapture, but it opens the long diagonal to the rook on a8."),
-        step("Qf3", "Double attack: the queen hits the rook on a8 and Black cannot keep everything."),
+        step(
+            "cxb5",
+            "The natural recapture, but it opens the long diagonal to the rook on a8.",
+        ),
+        step(
+            "Qf3",
+            "Double attack: the queen hits the rook on a8 and Black cannot keep everything.",
+        ),
     ],
     plan: "Black is losing material: if the knight blocks on c6, take it with check from the \
            queen. Lesson: pawns grabbed early in the Queen's Gambit are hard to keep.",
@@ -236,14 +327,26 @@ const ALBIN: Line = Line {
         step("c4", "The Queen's Gambit."),
         step("e5", "The Albin: Black gambits a pawn for quick play."),
         step("dxe5", "Take the pawn."),
-        step("d4", "The d4 pawn cramps you. Don't play e3? here: ...Bb4+ sets up a famous trap."),
-        step("Nf3", "Develop and attack d4, keeping your extra pawn on e5."),
+        step(
+            "d4",
+            "The d4 pawn cramps you. Don't play e3? here: ...Bb4+ sets up a famous trap.",
+        ),
+        step(
+            "Nf3",
+            "Develop and attack d4, keeping your extra pawn on e5.",
+        ),
         step("Nc6", "Black attacks e5."),
-        step("g3", "Prepare Bg2: the bishop will hit Black's queenside along the long diagonal."),
+        step(
+            "g3",
+            "Prepare Bg2: the bishop will hit Black's queenside along the long diagonal.",
+        ),
         step("Be6", "Black develops and eyes your c4 pawn."),
         step("Nbd2", "Develop and keep c4 protected."),
         step("Qd7", "Black prepares to castle queenside."),
-        step("Bg2", "Your bishop on the long diagonal is your best piece."),
+        step(
+            "Bg2",
+            "Your bishop on the long diagonal is your best piece.",
+        ),
         step("O-O-O", "Black castles long, towards your bishop."),
         step("O-O", "Castle, then attack with b4 and Qa4."),
     ],
@@ -259,12 +362,21 @@ const CHIGORIN: Line = Line {
         step("d4", "Take the centre."),
         step("d5", "Black mirrors you."),
         step("c4", "The Queen's Gambit."),
-        step("Nc6", "The Chigorin: Black develops fast and plans to give up a bishop for a knight."),
+        step(
+            "Nc6",
+            "The Chigorin: Black develops fast and plans to give up a bishop for a knight.",
+        ),
         step("Nf3", "Develop and stop ...e5."),
         step("Bg4", "Black pins the knight."),
-        step("cxd5", "Trade to open the c-file and gain time on Black's queen."),
+        step(
+            "cxd5",
+            "Trade to open the c-file and gain time on Black's queen.",
+        ),
         step("Bxf3", "Black takes before you can play e4."),
-        step("gxf3", "Recapture with the pawn: you get the two bishops and a strong centre."),
+        step(
+            "gxf3",
+            "Recapture with the pawn: you get the two bishops and a strong centre.",
+        ),
         step("Qxd5", "Black wins the pawn back."),
         step("e3", "Solid: defend d4 and open the light-squared bishop."),
         step("e5", "Black challenges your centre."),
@@ -272,7 +384,10 @@ const CHIGORIN: Line = Line {
         step("Bb4", "Black pins the knight."),
         step("Bd2", "Unpin and get ready to recapture."),
         step("Bxc3", "Black gives up the second bishop."),
-        step("bxc3", "Recapture: your two bishops and centre make up for the doubled pawns."),
+        step(
+            "bxc3",
+            "Recapture: your two bishops and centre make up for the doubled pawns.",
+        ),
     ],
     plan: "You have the bishop pair. Open the position with c4 and Rb1 against b7, keep your king \
            safe on the queenside or in the centre, and use the half-open g-file.",
@@ -288,7 +403,10 @@ const NIMZO: Line = Line {
         step("c4", "Grab more space."),
         step("e6", "Black opens the dark-squared bishop."),
         step("Nc3", "Develop and prepare e4."),
-        step("Bb4", "The Nimzo-Indian: Black pins your knight so e4 is hard to play."),
+        step(
+            "Bb4",
+            "The Nimzo-Indian: Black pins your knight so e4 is hard to play.",
+        ),
         step("e3", "Calm and solid: support d4 and develop the bishop."),
         step("O-O", "Black castles."),
         step("Bd3", "Develop towards Black's king."),
@@ -299,7 +417,10 @@ const NIMZO: Line = Line {
         step("Nc6", "Black adds pressure on d4."),
         step("a3", "Ask the bishop to decide."),
         step("Bxc3", "Black gives up the bishop for your knight."),
-        step("bxc3", "Recapture: the bishop pair and the centre are yours."),
+        step(
+            "bxc3",
+            "Recapture: the bishop pair and the centre are yours.",
+        ),
     ],
     plan: "With the two bishops, aim for e4 to open lines for them. Keep the c3 pawn protected \
            and use Qc2 and Re1 to support e4.",
@@ -316,7 +437,10 @@ const INDIAN_INTO_QGD: Line = Line {
         step("e6", "Black opens the dark-squared bishop."),
         step("Nc3", "Develop."),
         step("d5", "Black plays ...d5 after all."),
-        step("cxd5", "This is the Exchange Variation of the Queen's Gambit Declined, reached in another order."),
+        step(
+            "cxd5",
+            "This is the Exchange Variation of the Queen's Gambit Declined, reached in another order.",
+        ),
         step("exd5", "Black keeps a pawn on d5."),
         step("Bg5", "Pin the knight, just as in the Exchange Variation."),
     ],
@@ -344,8 +468,14 @@ const KINGS_INDIAN: Line = Line {
         step("O-O", "Castle."),
         step("Nc6", "Black adds pressure on d4."),
         step("d5", "Close the centre with gain of time on the knight."),
-        step("Ne7", "The knight heads for the kingside, where Black will attack."),
-        step("b4", "Attack on your side: you play on the queenside with c5."),
+        step(
+            "Ne7",
+            "The knight heads for the kingside, where Black will attack.",
+        ),
+        step(
+            "b4",
+            "Attack on your side: you play on the queenside with c5.",
+        ),
     ],
     plan: "Black attacks your king with ...f5; you attack on the queenside with c5 and opening the \
            c-file. Move fast, and keep a knight or bishop near your king.",
@@ -361,16 +491,25 @@ const GRUNFELD: Line = Line {
         step("c4", "Grab more space."),
         step("g6", "Black prepares the fianchetto."),
         step("Nc3", "Develop."),
-        step("d5", "The Grünfeld: Black lets you take the centre and will attack it."),
+        step(
+            "d5",
+            "The Grünfeld: Black lets you take the centre and will attack it.",
+        ),
         step("cxd5", "The Exchange Variation: take the centre at once."),
         step("Nxd5", "Black recaptures."),
         step("e4", "Gain time on the knight and build a big centre."),
         step("Nxc3", "Black trades."),
-        step("bxc3", "Recapture towards the centre: d4 is now well protected."),
+        step(
+            "bxc3",
+            "Recapture towards the centre: d4 is now well protected.",
+        ),
         step("Bg7", "The bishop aims at your centre."),
         step("Bc4", "Develop actively."),
         step("c5", "Black attacks d4."),
-        step("Ne2", "Knight to e2 so it can't be pinned, and it guards d4."),
+        step(
+            "Ne2",
+            "Knight to e2 so it can't be pinned, and it guards d4.",
+        ),
         step("Nc6", "Black piles up on d4."),
         step("Be3", "Defend d4 again."),
         step("O-O", "Black castles."),
@@ -393,7 +532,10 @@ const BENONI: Line = Line {
         step("e6", "Black attacks your d5 pawn."),
         step("Nc3", "Defend d5."),
         step("exd5", "Black trades."),
-        step("cxd5", "Recapture with the pawn: you have more space in the centre."),
+        step(
+            "cxd5",
+            "Recapture with the pawn: you have more space in the centre.",
+        ),
         step("d6", "Black blocks your d-pawn and watches e5."),
         step("e4", "Build the centre."),
         step("g6", "The bishop goes to g7."),
@@ -424,11 +566,17 @@ const BUDAPEST: Line = Line {
         step("Bb4+", "Black checks."),
         step("Nbd2", "Block with a piece that develops."),
         step("Qe7", "Black attacks e5 a fourth time."),
-        step("e3", "Free your bishop: e5 will fall, but you develop smoothly."),
+        step(
+            "e3",
+            "Free your bishop: e5 will fall, but you develop smoothly.",
+        ),
         step("Ngxe5", "Black wins the pawn back."),
         step("Nxe5", "Trade."),
         step("Nxe5", "Black recaptures."),
-        step("Be2", "Develop and castle next; your position is comfortable."),
+        step(
+            "Be2",
+            "Develop and castle next; your position is comfortable.",
+        ),
     ],
     plan: "Castle, play a3 to question the bishop, and use your extra central pawn and space on \
            the queenside.",
@@ -469,11 +617,17 @@ const SCHOLARS_DEFENCE: Line = Line {
         step("Bc4", "Now White threatens Qxf7, checkmate."),
         step("g6", "Block the queen's line to f7, gaining time."),
         step("Qf3", "The queen tries again on f7."),
-        step("Nf6", "Block the f-file with a knight. Develop and defend at the same time."),
+        step(
+            "Nf6",
+            "Block the f-file with a knight. Develop and defend at the same time.",
+        ),
         step("Ne2", "White develops."),
         step("Bg7", "Your bishop now has a great diagonal."),
         step("Nbc3", "White develops."),
-        step("d6", "Open the other bishop and support e5. You are ahead in development."),
+        step(
+            "d6",
+            "Open the other bishop and support e5. You are ahead in development.",
+        ),
     ],
     plan: "White's queen came out too early and you developed with gain of time. Castle, then \
            look for ...Nd4 to chase the queen and ...Bg4 to harass it again.",
@@ -497,7 +651,10 @@ const ITALIAN: Line = Line {
         step("O-O", "White castles."),
         step("O-O", "Castle too."),
         step("Re1", "White's rook supports e4."),
-        step("a6", "Make room for the bishop on a7 so d4 can't chase it with gain of time."),
+        step(
+            "a6",
+            "Make room for the bishop on a7 so d4 can't chase it with gain of time.",
+        ),
         step("Bb3", "White tucks the bishop away from ...Na5 and ...d5."),
         step("Ba7", "Your bishop is safe and still aims at f2."),
     ],
@@ -519,7 +676,10 @@ const EVANS: Line = Line {
         step("b4", "The Evans Gambit: a pawn to gain time for c3 and d4."),
         step("Bxb4", "Take the pawn."),
         step("c3", "White chases the bishop and prepares d4."),
-        step("Be7", "A safe retreat that keeps your king's side well covered."),
+        step(
+            "Be7",
+            "A safe retreat that keeps your king's side well covered.",
+        ),
         step("d4", "White opens the centre."),
         step("Na5", "Hit the strong bishop on c4."),
         step("Be2", "The bishop steps back."),
@@ -529,7 +689,10 @@ const EVANS: Line = Line {
         step("Qa4+", "White checks to win the pawn back."),
         step("c6", "Block with a pawn."),
         step("Nxe5", "White takes back the pawn."),
-        step("Nf6", "Develop and get ready to castle: material is level and your position is solid."),
+        step(
+            "Nf6",
+            "Develop and get ready to castle: material is level and your position is solid.",
+        ),
     ],
     plan: "Castle, play ...Qc7 and ...Be6, and bring the knight on a5 back via b7 or c4. White's \
            pawns are scattered, so trade pieces and aim for a good endgame.",
@@ -544,7 +707,10 @@ const RUY_LOPEZ: Line = Line {
         step("e5", "Take your share."),
         step("Nf3", "White attacks e5."),
         step("Nc6", "Defend with development."),
-        step("Bb5", "The Ruy Lopez: White pressures the knight that defends e5."),
+        step(
+            "Bb5",
+            "The Ruy Lopez: White pressures the knight that defends e5.",
+        ),
         step("a6", "Ask the bishop at once."),
         step("Ba4", "The bishop keeps the pin."),
         step("Nf6", "Develop and attack e4."),
@@ -577,7 +743,10 @@ const RUY_EXCHANGE: Line = Line {
         step("Bb5", "The Ruy Lopez."),
         step("a6", "Ask the bishop."),
         step("Bxc6", "The Exchange Variation: White gives up the bishop."),
-        step("dxc6", "Recapture towards the centre, opening your queen and bishop."),
+        step(
+            "dxc6",
+            "Recapture towards the centre, opening your queen and bishop.",
+        ),
         step("O-O", "White castles; Nxe5 is now a threat."),
         step("f6", "Protect e5 solidly."),
         step("d4", "White opens the centre."),
@@ -585,7 +754,10 @@ const RUY_EXCHANGE: Line = Line {
         step("Nxd4", "White recaptures."),
         step("c5", "Chase the knight."),
         step("Nb3", "The knight retreats."),
-        step("Qxd1", "Trade queens: your two bishops shine in the endgame."),
+        step(
+            "Qxd1",
+            "Trade queens: your two bishops shine in the endgame.",
+        ),
         step("Rxd1", "White recaptures."),
         step("Bg4", "Develop with gain of time on the rook."),
     ],
@@ -609,11 +781,17 @@ const SCOTCH: Line = Line {
         step("Be3", "White defends the knight."),
         step("Qf6", "Add pressure on d4."),
         step("c3", "White defends d4 with a pawn."),
-        step("Nge7", "Develop the knight to e7 so the f-file stays open for your queen."),
+        step(
+            "Nge7",
+            "Develop the knight to e7 so the f-file stays open for your queen.",
+        ),
         step("Bc4", "White develops."),
         step("O-O", "Castle."),
         step("O-O", "White castles."),
-        step("Bb6", "Step out of the way of any Nxc6 tricks and keep the pressure on d4."),
+        step(
+            "Bb6",
+            "Step out of the way of any Nxc6 tricks and keep the pressure on d4.",
+        ),
     ],
     plan: "Play ...d6, ...Ne5 or ...Ng6, and ...Be6 to trade White's strong bishop. Your pieces \
            are active and the centre is balanced.",
@@ -651,7 +829,10 @@ const VIENNA: Line = Line {
         step("Nc3", "The Vienna: White prepares f4."),
         step("Nf6", "Develop and hit e4."),
         step("f4", "White's gambit-style f4."),
-        step("d5", "Strike in the centre: the best answer to a wing attack."),
+        step(
+            "d5",
+            "Strike in the centre: the best answer to a wing attack.",
+        ),
         step("fxe5", "White takes."),
         step("Nxe4", "Your knight takes a great central square."),
         step("Nf3", "White develops."),
@@ -668,7 +849,10 @@ const KINGS_GAMBIT: Line = Line {
     steps: &[
         step("e4", "White takes the centre."),
         step("e5", "Take your share."),
-        step("f4", "The King's Gambit: White offers a pawn to open the f-file."),
+        step(
+            "f4",
+            "The King's Gambit: White offers a pawn to open the f-file.",
+        ),
         step("exf4", "Accept the pawn."),
         step("Nf3", "White stops ...Qh4+."),
         step("d5", "Hit back in the centre and open your pieces."),
@@ -697,7 +881,10 @@ const CENTER_GAME: Line = Line {
         step("Bd2", "White unpins."),
         step("O-O", "Castle; your development is faster."),
         step("O-O-O", "White castles long."),
-        step("Re8", "Put pressure on the e-file against e4 and the queen."),
+        step(
+            "Re8",
+            "Put pressure on the e-file against e4 and the queen.",
+        ),
     ],
     plan: "You are ahead in development. Attack e4, and push ...d5 or ...b5 against White's king \
            on the queenside.",
@@ -713,11 +900,17 @@ const PONZIANI: Line = Line {
         step("Nf3", "White attacks e5."),
         step("Nc6", "Defend with development."),
         step("c3", "The Ponziani: White prepares d4."),
-        step("d5", "Strike in the centre: c3 took away the knight's best square, so White is slower."),
+        step(
+            "d5",
+            "Strike in the centre: c3 took away the knight's best square, so White is slower.",
+        ),
         step("Qa4", "White pins your knight and eyes e5."),
         step("Bd7", "Unpin with a developing move."),
         step("exd5", "White takes, attacking your knight."),
-        step("Nd4", "Counterattack: the knight jumps forward and hits the queen's defender on f3."),
+        step(
+            "Nd4",
+            "Counterattack: the knight jumps forward and hits the queen's defender on f3.",
+        ),
         step("Qd1", "The queen goes home."),
         step("Nxf3+", "Trade knights: you are ahead in development."),
         step("Qxf3", "White recaptures."),
@@ -747,15 +940,24 @@ const QGD_BLACK: Line = Line {
         step("Rc1", "White's rook goes to the c-file."),
         step("c6", "Solidify d5."),
         step("Bd3", "White develops the last bishop."),
-        step("dxc4", "Take now, because White's bishop has just moved and must move again."),
+        step(
+            "dxc4",
+            "Take now, because White's bishop has just moved and must move again.",
+        ),
         step("Bxc4", "White recaptures."),
-        step("Nd5", "Capablanca's freeing idea: trade pieces to relieve your cramped position."),
+        step(
+            "Nd5",
+            "Capablanca's freeing idea: trade pieces to relieve your cramped position.",
+        ),
         step("Bxe7", "White trades."),
         step("Qxe7", "Recapture."),
         step("O-O", "White castles."),
         step("Nxc3", "Trade another pair."),
         step("Rxc3", "White recaptures."),
-        step("e5", "Free your light-squared bishop: Black's problems are solved."),
+        step(
+            "e5",
+            "Free your light-squared bishop: Black's problems are solved.",
+        ),
     ],
     plan: "After ...e5 your bishop on c8 comes to life. Trade on d4 or keep the tension, put rooks \
            on the d- and e-files, and the position is equal.",
@@ -773,7 +975,10 @@ const QGD_EXCHANGE_BLACK: Line = Line {
         step("Nc3", "White develops."),
         step("Nf6", "Develop."),
         step("cxd5", "The Exchange Variation."),
-        step("exd5", "Recapture with the pawn, keeping one in the centre."),
+        step(
+            "exd5",
+            "Recapture with the pawn, keeping one in the centre.",
+        ),
         step("Bg5", "White pins your knight."),
         step("c6", "Support d5 and give your queen a path to b6 or a5."),
         step("e3", "White develops."),
@@ -794,10 +999,16 @@ const LONDON: Line = Line {
     steps: &[
         step("d4", "White takes the centre."),
         step("d5", "Take your share."),
-        step("Bf4", "The London System: White develops the bishop before e3."),
+        step(
+            "Bf4",
+            "The London System: White develops the bishop before e3.",
+        ),
         step("Nf6", "Develop."),
         step("e3", "White builds a solid triangle."),
-        step("c5", "Challenge d4 at once: the best way to meet the London."),
+        step(
+            "c5",
+            "Challenge d4 at once: the best way to meet the London.",
+        ),
         step("c3", "White supports d4."),
         step("Nc6", "Add pressure on d4."),
         step("Nd2", "White develops."),
@@ -848,7 +1059,10 @@ const CATALAN: Line = Line {
         step("e6", "Decline."),
         step("Nf3", "White develops."),
         step("Nf6", "Develop."),
-        step("g3", "The Catalan: White's bishop will aim down the long diagonal."),
+        step(
+            "g3",
+            "The Catalan: White's bishop will aim down the long diagonal.",
+        ),
         step("Be7", "Develop and get ready to castle."),
         step("Bg2", "The fianchetto."),
         step("O-O", "Castle."),
@@ -897,7 +1111,10 @@ const RETI: Line = Line {
         step("Bg2", "White's bishop on the long diagonal."),
         step("c6", "Blunt the bishop's diagonal."),
         step("O-O", "White castles."),
-        step("Bg4", "Develop the bishop outside the pawn chain before ...e6."),
+        step(
+            "Bg4",
+            "Develop the bishop outside the pawn chain before ...e6.",
+        ),
         step("d3", "White prepares e4."),
         step("Nbd7", "Develop and support ...e5."),
     ],
@@ -927,15 +1144,27 @@ mod tests {
     #[test]
     fn lines_end_on_your_own_move_and_have_notes() {
         for line in all_lines() {
-            assert!(line.is_yours(line.steps.len() - 1), "{} ends on the opponent's move", line.id);
-            assert!(line.steps.iter().all(|s| !s.note.is_empty()), "{} has a move without a note", line.id);
+            assert!(
+                line.is_yours(line.steps.len() - 1),
+                "{} ends on the opponent's move",
+                line.id
+            );
+            assert!(
+                line.steps.iter().all(|s| !s.note.is_empty()),
+                "{} has a move without a note",
+                line.id
+            );
         }
     }
 
     #[test]
     fn chapter_lines_are_played_from_the_chapters_side() {
         for chapter in CHAPTERS {
-            assert!(chapter.lines.iter().all(|line| line.side == chapter.side), "{}", chapter.name);
+            assert!(
+                chapter.lines.iter().all(|line| line.side == chapter.side),
+                "{}",
+                chapter.name
+            );
         }
     }
 

@@ -63,7 +63,8 @@ pub fn psq_index(perspective: Color, sq: usize, piece: SfPiece, king_sq: usize) 
         let theirs = piece.is_black() != (perspective == Color::Black);
         piece.kind_index() * 128 + usize::from(theirs) * 64
     };
-    let index = (sq ^ psq_orientation(king_sq) ^ flip) + piece_base + king_bucket(king_sq ^ flip) * PS_NB;
+    let index =
+        (sq ^ psq_orientation(king_sq) ^ flip) + piece_base + king_bucket(king_sq ^ flip) * PS_NB;
     debug_assert!(index < PSQ_DIMENSIONS);
     index
 }
@@ -149,7 +150,8 @@ fn build_threat_tables() -> Box<ThreatTables> {
             let Some(slot) = TARGET_SLOT[attacker.kind_index()][attacked.kind_index()] else {
                 continue;
             };
-            let color_offset = usize::from(attacked.is_black()) * (VALID_TARGETS[attacker.kind_index()] / 2);
+            let color_offset =
+                usize::from(attacked.is_black()) * (VALID_TARGETS[attacker.kind_index()] / 2);
             let feature = piece_base[attacker_code as usize]
                 + (color_offset + slot) * squares_per_piece[attacker_code as usize];
             let entry = &mut tables.pair_base[attacker_code as usize][attacked_code as usize];
@@ -163,7 +165,8 @@ fn build_threat_tables() -> Box<ThreatTables> {
             let attacks = pseudo_attacks(attacker, from);
             for to in 0..64 {
                 let below = if to == 0 { 0 } else { (1u64 << to) - 1 };
-                tables.target_rank[attacker_code as usize][from][to] = (below & attacks).count_ones() as u8;
+                tables.target_rank[attacker_code as usize][from][to] =
+                    (below & attacks).count_ones() as u8;
             }
         }
     }

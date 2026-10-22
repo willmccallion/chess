@@ -1,7 +1,7 @@
 use crate::board::Board;
 use crate::eval::evaluate;
-use crate::legality::LegalityInfo;
 use crate::history::{ContinuationKey, CorrectionHistory, Histories, captured_kind, stat_bonus};
+use crate::legality::LegalityInfo;
 use crate::movepicker::{MovePicker, OrderingContext};
 use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
@@ -191,8 +191,14 @@ struct LmrTables {
 impl LmrTables {
     fn new(params: &SearchParams) -> Self {
         let ratio = |x100: i32| f64::from(x100) / 100.0;
-        let (quiet_base, quiet_divisor) = (ratio(params.lmr_quiet_base_x100), ratio(params.lmr_quiet_divisor_x100));
-        let (capture_base, capture_divisor) = (ratio(params.lmr_capture_base_x100), ratio(params.lmr_capture_divisor_x100));
+        let (quiet_base, quiet_divisor) = (
+            ratio(params.lmr_quiet_base_x100),
+            ratio(params.lmr_quiet_divisor_x100),
+        );
+        let (capture_base, capture_divisor) = (
+            ratio(params.lmr_capture_base_x100),
+            ratio(params.lmr_capture_divisor_x100),
+        );
         let mut tables = Self {
             quiet: [[0; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
             capture: [[0; LMR_TABLE_SIZE]; LMR_TABLE_SIZE],
@@ -229,7 +235,11 @@ struct TimeManager {
 }
 
 impl TimeManager {
-    fn new(control: Arc<SearchControl>, is_main_thread: bool, node_limit: Option<NodeLimit>) -> Self {
+    fn new(
+        control: Arc<SearchControl>,
+        is_main_thread: bool,
+        node_limit: Option<NodeLimit>,
+    ) -> Self {
         Self {
             control,
             is_main_thread,
@@ -272,7 +282,11 @@ impl TimeManager {
         }
         self.previous_best_move = best_move;
 
-        if self.is_main_thread && self.node_limit.is_some_and(|limit| self.nodes >= limit.soft) {
+        if self.is_main_thread
+            && self
+                .node_limit
+                .is_some_and(|limit| self.nodes >= limit.soft)
+        {
             return true;
         }
         if !self.is_main_thread || !self.control.is_timed() || self.control.is_fixed_time() {
@@ -486,7 +500,11 @@ impl Search<'_> {
     }
 
     fn record_root_move_nodes(&mut self, m: Move, nodes: u64) {
-        match self.root_move_nodes.iter_mut().find(|(root_move, _)| *root_move == m) {
+        match self
+            .root_move_nodes
+            .iter_mut()
+            .find(|(root_move, _)| *root_move == m)
+        {
             Some((_, total)) => *total += nodes,
             None => self.root_move_nodes.push((m, nodes)),
         }
@@ -577,9 +595,13 @@ impl Search<'_> {
         }
         let piece = self.board.piece_on[m.from as usize];
         let continuations = self.continuation_keys();
-        self.td
-            .histories
-            .update_quiet(self.board.turn, m, piece, &continuations, stat_bonus(depth, &self.params));
+        self.td.histories.update_quiet(
+            self.board.turn,
+            m,
+            piece,
+            &continuations,
+            stat_bonus(depth, &self.params),
+        );
     }
 
     /// The opponent's last move refuted everything here, so it was a good quiet move.
@@ -707,7 +729,15 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     };
     if stand_pat >= beta {
         if tt_entry.is_none() {
-            s.tt.store(key, 0, score_to_tt(stand_pat, s.ply), Some(raw_eval), Bound::Lower, None, tt_pv);
+            s.tt.store(
+                key,
+                0,
+                score_to_tt(stand_pat, s.ply),
+                Some(raw_eval),
+                Bound::Lower,
+                None,
+                tt_pv,
+            );
         }
         return stand_pat;
     }
@@ -752,7 +782,15 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
-    s.tt.store(key, 0, score_to_tt(best_score, s.ply), Some(raw_eval), bound, best_move, tt_pv);
+    s.tt.store(
+        key,
+        0,
+        score_to_tt(best_score, s.ply),
+        Some(raw_eval),
+        bound,
+        best_move,
+        tt_pv,
+    );
     best_score
 }
 
@@ -886,7 +924,13 @@ fn singular_extension(
     let singular_beta = tt_score - s.params.singular_beta_per_depth_x16 * depth / 16;
     let singular_depth = (depth - 1) / 2;
     s.stack[s.ply].excluded_move = Some(tt_move);
-    let singular_score = negamax(s, singular_beta - 1, singular_beta, singular_depth, cut_node);
+    let singular_score = negamax(
+        s,
+        singular_beta - 1,
+        singular_beta,
+        singular_depth,
+        cut_node,
+    );
     s.stack[s.ply].excluded_move = None;
     if s.tm.check_hard_limit() {
         return Singularity::Aborted;
@@ -1005,7 +1049,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             }
         }
 
-        if depth <= s.params.rfp_max_depth && eval - s.params.rfp_margin * (depth - i32::from(improving)) >= beta {
+        if depth <= s.params.rfp_max_depth
+            && eval - s.params.rfp_margin * (depth - i32::from(improving)) >= beta
+        {
             return eval;
         }
 
@@ -1026,7 +1072,11 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 return 0;
             }
             if null_score >= beta {
-                return if null_score > MATE_THRESHOLD { beta } else { null_score };
+                return if null_score > MATE_THRESHOLD {
+                    beta
+                } else {
+                    null_score
+                };
             }
         }
     }
@@ -1159,19 +1209,40 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         let score = if moves_searched == 1 {
             -negamax(s, -beta, -alpha, new_depth, !is_pv && !cut_node)
         } else {
-            let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv) {
+            let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv)
+            {
                 let gives_check = side_to_move_in_check(&s.board);
                 let p = &s.params;
                 let mut r_1024 = 1024 * s.lmr.base_reduction(depth, moves_searched, is_quiet);
                 r_1024 += if is_pv { 0 } else { p.lmr_non_pv_x1024 };
                 r_1024 += if cut_node { p.lmr_cut_node_x1024 } else { 0 };
-                r_1024 += if improving { 0 } else { p.lmr_not_improving_x1024 };
-                r_1024 -= if is_killer_or_counter { p.lmr_killer_or_counter_x1024 } else { 0 };
-                r_1024 -= if gives_check { p.lmr_gives_check_x1024 } else { 0 };
-                r_1024 += if tt_capture { p.lmr_tt_capture_x1024 } else { 0 };
+                r_1024 += if improving {
+                    0
+                } else {
+                    p.lmr_not_improving_x1024
+                };
+                r_1024 -= if is_killer_or_counter {
+                    p.lmr_killer_or_counter_x1024
+                } else {
+                    0
+                };
+                r_1024 -= if gives_check {
+                    p.lmr_gives_check_x1024
+                } else {
+                    0
+                };
+                r_1024 += if tt_capture {
+                    p.lmr_tt_capture_x1024
+                } else {
+                    0
+                };
                 r_1024 -= if tt_pv { p.lmr_tt_pv_x1024 } else { 0 };
                 let child_cutoffs = i32::from(s.stack[node_ply + 1].cutoff_count);
-                r_1024 += if child_cutoffs > p.child_cutoff_threshold { p.lmr_child_cutoffs_x1024 } else { 0 };
+                r_1024 += if child_cutoffs > p.child_cutoff_threshold {
+                    p.lmr_child_cutoffs_x1024
+                } else {
+                    0
+                };
                 let r = r_1024 / 1024 - quiet_history / p.lmr_history_divisor;
                 r.clamp(0, (new_depth - 1).max(0))
             } else {
@@ -1216,9 +1287,16 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 best_move = Some(m);
                 alpha = score;
                 if alpha >= beta {
-                    s.update_cutoff_stats(m, depth, tried_quiets.as_slice(), tried_captures.as_slice());
+                    s.update_cutoff_stats(
+                        m,
+                        depth,
+                        tried_quiets.as_slice(),
+                        tried_captures.as_slice(),
+                    );
                     let entry = &mut s.stack[s.ply];
-                    entry.cutoff_count = entry.cutoff_count.saturating_add(1 + u8::from(tt_move.is_none()));
+                    entry.cutoff_count = entry
+                        .cutoff_count
+                        .saturating_add(1 + u8::from(tt_move.is_none()));
                     break;
                 }
             }
@@ -1254,8 +1332,13 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         && search_disagrees_with_eval(bound, best_score, static_eval)
     {
         let pawn_key = s.board.pawn_key();
-        s.td.correction
-            .update(s.board.turn, pawn_key, best_score - static_eval, depth, s.params.correction_max_weight);
+        s.td.correction.update(
+            s.board.turn,
+            pawn_key,
+            best_score - static_eval,
+            depth,
+            s.params.correction_max_weight,
+        );
     }
     s.tt.store(
         key,
@@ -1326,10 +1409,22 @@ pub fn print_uci_info(info: &IterationInfo) {
         Score::Centipawns(cp) => format!("cp {cp}"),
         Score::MateIn(moves) => format!("mate {moves}"),
     };
-    let pv = info.pv.iter().map(|&m| format_uci(m)).collect::<Vec<_>>().join(" ");
+    let pv = info
+        .pv
+        .iter()
+        .map(|&m| format_uci(m))
+        .collect::<Vec<_>>()
+        .join(" ");
     println!(
         "info depth {} seldepth {} score {} hashfull {} nodes {} nps {} time {} pv {}",
-        info.depth, info.seldepth, score, info.hashfull_permill, info.nodes, info.nps, info.time_ms, pv
+        info.depth,
+        info.seldepth,
+        score,
+        info.hashfull_permill,
+        info.nodes,
+        info.nps,
+        info.time_ms,
+        pv
     );
 }
 
@@ -1392,7 +1487,10 @@ fn iterative_deepening(
         search.seldepth = 0;
         let mut delta = search.params.aspiration_delta;
         let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
-            ((score - delta).max(-INFINITY), (score + delta).min(INFINITY))
+            (
+                (score - delta).max(-INFINITY),
+                (score + delta).min(INFINITY),
+            )
         } else {
             (-INFINITY, INFINITY)
         };
@@ -1516,8 +1614,7 @@ pub fn search_reporting(
                     .name(format!("search-helper-{}", i + 1))
                     .stack_size(SEARCH_THREAD_STACK)
                     .spawn_scoped(scope, move || {
-                        iterative_deepening(board, tt, td, limits, helper_control, None)
-                            .nodes
+                        iterative_deepening(board, tt, td, limits, helper_control, None).nodes
                     })
                     .ok()
             })

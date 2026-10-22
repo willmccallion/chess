@@ -1,9 +1,9 @@
 //! Your past games against the coach, newest first, to pick one to review.
 
+use super::super::view::{ACCENT, DIM};
 use super::common::{BAD, GOOD, TEXT, centred, dim, panel};
 use super::data::CoachData;
 use super::review::ReviewScreen;
-use super::super::view::{ACCENT, DIM};
 use super::{Nav, Screen};
 use crate::coach::profile::ReviewedGame;
 use crate::coach::rating::Outcome;
@@ -47,19 +47,34 @@ fn game_line(game: &ReviewedGame, chosen: bool) -> Line<'static> {
     let analysed = if record.is_fully_analysed() {
         format!(
             "accuracy {:>3}  ·  ?? {}  ? {}",
-            summary.accuracy.map_or_else(|| "–".to_string(), |a| format!("{a:.0}%")),
+            summary
+                .accuracy
+                .map_or_else(|| "–".to_string(), |a| format!("{a:.0}%")),
             summary.blunders,
             summary.mistakes
         )
     } else {
         "not reviewed yet".to_string()
     };
-    let side = if record.human == crate::types::Color::White { "White" } else { "Black" };
+    let side = if record.human == crate::types::Color::White {
+        "White"
+    } else {
+        "Black"
+    };
     Line::from(vec![
         Span::styled(if chosen { "▸ " } else { "  " }, Style::new().fg(ACCENT)),
-        Span::styled(format!("{:<5}", outcome_word(outcome)), Style::new().fg(color).add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" {side:<6} level {:<3}", record.level.number()), Style::new().fg(TEXT)),
-        Span::styled(format!("{:>3} moves  ", record.moves.len().div_ceil(2)), Style::new().fg(DIM)),
+        Span::styled(
+            format!("{:<5}", outcome_word(outcome)),
+            Style::new().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {side:<6} level {:<3}", record.level.number()),
+            Style::new().fg(TEXT),
+        ),
+        Span::styled(
+            format!("{:>3} moves  ", record.moves.len().div_ceil(2)),
+            Style::new().fg(DIM),
+        ),
         Span::styled(analysed, Style::new().fg(if chosen { TEXT } else { DIM })),
     ])
 }
@@ -76,13 +91,28 @@ impl Screen for GamesList {
         let rows = usize::from(list.height.saturating_sub(2));
         let skip = (self.selected + 1).saturating_sub(rows);
         let lines: Vec<Line> = if games.is_empty() {
-            vec![dim("No games yet. Play one from the menu, then come back here to review it.")]
+            vec![dim(
+                "No games yet. Play one from the menu, then come back here to review it.",
+            )]
         } else {
-            games.iter().enumerate().skip(skip).map(|(i, g)| game_line(g, i == self.selected)).collect()
+            games
+                .iter()
+                .enumerate()
+                .skip(skip)
+                .map(|(i, g)| game_line(g, i == self.selected))
+                .collect()
         };
         frame.render_widget(Paragraph::new(lines).block(panel("Your games")), list);
-        let status = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
-        frame.render_widget(Paragraph::new(dim("  ↑↓ choose · Enter review · Esc back")), status);
+        let status = Rect::new(
+            area.x,
+            area.bottom().saturating_sub(1),
+            area.width,
+            area.height.min(1),
+        );
+        frame.render_widget(
+            Paragraph::new(dim("  ↑↓ choose · Enter review · Esc back")),
+            status,
+        );
     }
 
     fn key(&mut self, key: KeyEvent, data: &mut CoachData, _now: Instant) -> Nav {

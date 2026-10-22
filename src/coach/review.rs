@@ -1,6 +1,8 @@
 //! Judging every move of a game from engine analysis, and explaining what went wrong.
 
-use super::judgement::{Eval, MoveClass, Phase, WinChance, material_balance, move_accuracy, overall_accuracy};
+use super::judgement::{
+    Eval, MoveClass, Phase, WinChance, material_balance, move_accuracy, overall_accuracy,
+};
 use crate::board::Board;
 use crate::notation::{line_in_san, numbered, san_of};
 use crate::see::see;
@@ -27,16 +29,40 @@ pub struct AnalysedPosition {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cause {
     /// The moved piece went to a square where it can be won.
-    MovedIntoCapture { piece: PieceKind, square: u8, capture: String },
+    MovedIntoCapture {
+        piece: PieceKind,
+        square: u8,
+        capture: String,
+    },
     /// Another piece lost its defence and can be won.
-    LeftHanging { piece: PieceKind, square: u8, capture: String },
+    LeftHanging {
+        piece: PieceKind,
+        square: u8,
+        capture: String,
+    },
     /// A piece that was already attacked stayed attacked.
-    IgnoredThreat { piece: PieceKind, square: u8, capture: String },
+    IgnoredThreat {
+        piece: PieceKind,
+        square: u8,
+        capture: String,
+    },
     /// The opponent gets a combination (a fork, pin or the like) that wins material.
-    AllowedTactic { points: i32, first_move: String },
-    AllowedMate { moves: i32, first_move: String },
-    MissedMate { moves: i32, first_move: String },
-    MissedMaterial { points: i32, first_move: String },
+    AllowedTactic {
+        points: i32,
+        first_move: String,
+    },
+    AllowedMate {
+        moves: i32,
+        first_move: String,
+    },
+    MissedMate {
+        moves: i32,
+        first_move: String,
+    },
+    MissedMaterial {
+        points: i32,
+        first_move: String,
+    },
     /// No tactic: the move was simply weaker than the alternative.
     Positional,
 }
@@ -127,17 +153,29 @@ impl Cause {
     /// One or two sentences saying what went wrong.
     pub fn explain(&self) -> String {
         match self {
-            Self::MovedIntoCapture { piece, square, capture } => format!(
+            Self::MovedIntoCapture {
+                piece,
+                square,
+                capture,
+            } => format!(
                 "Your {} on {} can be taken: {capture} wins it.",
                 piece_name(*piece),
                 sq_to_str(usize::from(*square))
             ),
-            Self::LeftHanging { piece, square, capture } => format!(
+            Self::LeftHanging {
+                piece,
+                square,
+                capture,
+            } => format!(
                 "This left your {} on {} without enough defence: {capture} wins it.",
                 piece_name(*piece),
                 sq_to_str(usize::from(*square))
             ),
-            Self::IgnoredThreat { piece, square, capture } => format!(
+            Self::IgnoredThreat {
+                piece,
+                square,
+                capture,
+            } => format!(
                 "Your {} on {} was already attacked and is still in danger: {capture} wins it.",
                 piece_name(*piece),
                 sq_to_str(usize::from(*square))
@@ -155,7 +193,9 @@ impl Cause {
             Self::MissedMaterial { points, first_move } => {
                 format!("{first_move} would have won {}.", points_text(*points))
             }
-            Self::Positional => "No tactic here, but the engine's move kept a better position.".to_string(),
+            Self::Positional => {
+                "No tactic here, but the engine's move kept a better position.".to_string()
+            }
         }
     }
 }
@@ -320,7 +360,9 @@ fn find_cause(
         return lost_material_cause(board, played, after_board, &after.best_line, opponent_gain);
     }
     let best_gain = material_gain_along(board, &before.best_line, mover);
-    let played_line: Vec<Move> = std::iter::once(played).chain(after.best_line.iter().copied()).collect();
+    let played_line: Vec<Move> = std::iter::once(played)
+        .chain(after.best_line.iter().copied())
+        .collect();
     let played_gain = material_gain_along(board, &played_line, mover);
     if best_gain >= MATERIAL_WIN_POINTS && best_gain - played_gain >= MATERIAL_WIN_POINTS {
         return Cause::MissedMaterial {
@@ -332,23 +374,45 @@ fn find_cause(
 }
 
 /// Names how the opponent's best line after `played` wins material.
-fn lost_material_cause(board: &Board, played: Move, after_board: &Board, reply_line: &[Move], points: i32) -> Cause {
+fn lost_material_cause(
+    board: &Board,
+    played: Move,
+    after_board: &Board,
+    reply_line: &[Move],
+    points: i32,
+) -> Cause {
     let Some(&reply) = reply_line.first() else {
         return Cause::Positional;
     };
     let capture = first_move_text(after_board, reply_line);
     let target = reply.to;
     let piece = after_board.piece_on[usize::from(target)].kind();
-    let wins_outright = reply.capture && !reply.en_passant && see(after_board, reply) >= WINNING_CAPTURE_SEE;
+    let wins_outright =
+        reply.capture && !reply.en_passant && see(after_board, reply) >= WINNING_CAPTURE_SEE;
     let Some(piece) = piece.filter(|_| wins_outright) else {
-        return Cause::AllowedTactic { points, first_move: capture };
+        return Cause::AllowedTactic {
+            points,
+            first_move: capture,
+        };
     };
     if target == played.to {
-        Cause::MovedIntoCapture { piece, square: target, capture }
+        Cause::MovedIntoCapture {
+            piece,
+            square: target,
+            capture,
+        }
     } else if was_already_attacked(board, target) {
-        Cause::IgnoredThreat { piece, square: target, capture }
+        Cause::IgnoredThreat {
+            piece,
+            square: target,
+            capture,
+        }
     } else {
-        Cause::LeftHanging { piece, square: target, capture }
+        Cause::LeftHanging {
+            piece,
+            square: target,
+            capture,
+        }
     }
 }
 
@@ -438,10 +502,18 @@ mod tests {
         next
     }
 
-    fn review_one(fen: &str, played: &str, before: (Eval, &[&str]), after_eval: (Eval, &[&str])) -> MoveReview {
+    fn review_one(
+        fen: &str,
+        played: &str,
+        before: (Eval, &[&str]),
+        after_eval: (Eval, &[&str]),
+    ) -> MoveReview {
         let board = Board::from_fen(fen).unwrap();
         let next = after(&board, played);
-        let analysis = [analysed(&board, before.0, before.1), analysed(&next, after_eval.0, after_eval.1)];
+        let analysis = [
+            analysed(&board, before.0, before.1),
+            analysed(&next, after_eval.0, after_eval.1),
+        ];
         let moves = parse_san_line(&board, &[played]).unwrap();
         review_moves(&board, &moves, &analysis, &|_, _| false).remove(0)
     }
@@ -472,7 +544,11 @@ mod tests {
         assert_eq!(review.class, MoveClass::Blunder);
         assert_eq!(
             review.cause,
-            Some(Cause::MovedIntoCapture { piece: PieceKind::Knight, square: 21, capture: "4... exf3".into() })
+            Some(Cause::MovedIntoCapture {
+                piece: PieceKind::Knight,
+                square: 21,
+                capture: "4... exf3".into()
+            })
         );
     }
 
@@ -487,7 +563,11 @@ mod tests {
 
         assert_eq!(
             review.cause,
-            Some(Cause::IgnoredThreat { piece: PieceKind::Bishop, square: 27, capture: "4... exd4".into() })
+            Some(Cause::IgnoredThreat {
+                piece: PieceKind::Bishop,
+                square: 27,
+                capture: "4... exd4".into()
+            })
         );
     }
 
@@ -500,7 +580,13 @@ mod tests {
             (cp(500), &["Nc2+", "Kd2", "Nxa1"]),
         );
 
-        assert_eq!(review.cause, Some(Cause::AllowedTactic { points: 5, first_move: "1... Nc2+".into() }));
+        assert_eq!(
+            review.cause,
+            Some(Cause::AllowedTactic {
+                points: 5,
+                first_move: "1... Nc2+".into()
+            })
+        );
     }
 
     #[test]
@@ -512,7 +598,13 @@ mod tests {
             (cp(-500), &["h6"]),
         );
 
-        assert_eq!(review.cause, Some(Cause::MissedMate { moves: 1, first_move: "1. Ra8#".into() }));
+        assert_eq!(
+            review.cause,
+            Some(Cause::MissedMate {
+                moves: 1,
+                first_move: "1. Ra8#".into()
+            })
+        );
     }
 
     #[test]
@@ -524,7 +616,13 @@ mod tests {
             (Eval::Score(Score::MateIn(1)), &["Qh4#"]),
         );
 
-        assert_eq!(review.cause, Some(Cause::AllowedMate { moves: 1, first_move: "2... Qh4#".into() }));
+        assert_eq!(
+            review.cause,
+            Some(Cause::AllowedMate {
+                moves: 1,
+                first_move: "2... Qh4#".into()
+            })
+        );
     }
 
     #[test]
@@ -536,7 +634,11 @@ mod tests {
             (cp(-400), &["Qe4+"]),
         );
 
-        assert!(matches!(review.cause, Some(Cause::MissedMaterial { points: 9, .. })), "{:?}", review.cause);
+        assert!(
+            matches!(review.cause, Some(Cause::MissedMaterial { points: 9, .. })),
+            "{:?}",
+            review.cause
+        );
     }
 
     #[test]
@@ -552,8 +654,13 @@ mod tests {
                 b
             })
             .collect();
-        let analysis: Vec<AnalysedPosition> =
-            positions.iter().map(|_| AnalysedPosition { eval: cp(20), best_line: Vec::new() }).collect();
+        let analysis: Vec<AnalysedPosition> = positions
+            .iter()
+            .map(|_| AnalysedPosition {
+                eval: cp(20),
+                best_line: Vec::new(),
+            })
+            .collect();
         let d4 = moves[0];
 
         let reviews = review_moves(&board, &moves, &analysis, &|_, m| m == d4);

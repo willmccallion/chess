@@ -1,12 +1,12 @@
 //! One opening line: a lesson that walks through it with notes, and a drill where you play
 //! your side from memory.
 
+use super::super::view::{ACCENT, DIM, board_layout};
 use super::common::{
-    BAD, BoardKey, BoardPanel, GOOD, INFO, MARK_GOOD, TEXT, colored, dim, draw_board, draw_help, draw_status, heading,
-    move_marks, panel, screen_layout,
+    BAD, BoardKey, BoardPanel, GOOD, INFO, MARK_GOOD, TEXT, colored, dim, draw_board, draw_help,
+    draw_status, heading, move_marks, panel, screen_layout,
 };
 use super::data::{CoachData, now};
-use super::super::view::{ACCENT, DIM, board_layout};
 use super::{Nav, Screen};
 use crate::board::Board;
 use crate::coach::repertoire::{CHAPTERS, Line as RepLine, start_board};
@@ -44,9 +44,19 @@ const DRILL_KEYS: &[(&str, &str)] = &[
 ];
 
 enum Mode {
-    Lesson { cursor: usize },
-    Drill { ply: usize, misses: usize, shown: bool, reply_at: Option<Instant> },
-    Done { misses: usize, saved: Result<(), String> },
+    Lesson {
+        cursor: usize,
+    },
+    Drill {
+        ply: usize,
+        misses: usize,
+        shown: bool,
+        reply_at: Option<Instant>,
+    },
+    Done {
+        misses: usize,
+        saved: Result<(), String>,
+    },
 }
 
 pub struct LineScreen {
@@ -67,7 +77,16 @@ impl LineScreen {
     }
 
     pub fn drill(line: &'static RepLine, queue: Vec<&'static RepLine>) -> Self {
-        Self::with_mode(line, queue, Mode::Drill { ply: 0, misses: 0, shown: false, reply_at: None })
+        Self::with_mode(
+            line,
+            queue,
+            Mode::Drill {
+                ply: 0,
+                misses: 0,
+                shown: false,
+                reply_at: None,
+            },
+        )
     }
 
     fn with_mode(line: &'static RepLine, queue: Vec<&'static RepLine>, mode: Mode) -> Self {
@@ -99,7 +118,12 @@ impl LineScreen {
     }
 
     fn start_drill(&mut self) {
-        self.mode = Mode::Drill { ply: 0, misses: 0, shown: false, reply_at: None };
+        self.mode = Mode::Drill {
+            ply: 0,
+            misses: 0,
+            shown: false,
+            reply_at: None,
+        };
         self.message = None;
         self.show(0);
     }
@@ -128,11 +152,23 @@ impl LineScreen {
             return;
         };
         if m != expected {
-            self.message = self.step_text(ply).map(|(san, note)| format!("Not this time: the line plays {san}. {note}"));
-            self.mode = Mode::Drill { ply, misses: misses + 1, shown: true, reply_at: None };
+            self.message = self
+                .step_text(ply)
+                .map(|(san, note)| format!("Not this time: the line plays {san}. {note}"));
+            self.mode = Mode::Drill {
+                ply,
+                misses: misses + 1,
+                shown: true,
+                reply_at: None,
+            };
             return;
         }
-        self.mode = Mode::Drill { ply: ply + 1, misses, shown: false, reply_at: None };
+        self.mode = Mode::Drill {
+            ply: ply + 1,
+            misses,
+            shown: false,
+            reply_at: None,
+        };
         self.message = None;
         self.show(ply + 1);
         if ply + 1 >= self.moves.len() {
@@ -145,20 +181,33 @@ impl LineScreen {
             return;
         };
         let saved = data
-            .record_attempt(TrainingItem::Opening(self.line.id.to_string()), misses == 0, None, None)
+            .record_attempt(
+                TrainingItem::Opening(self.line.id.to_string()),
+                misses == 0,
+                None,
+                None,
+            )
             .map_err(|e| format!("Could not save the result: {e}"));
         self.mode = Mode::Done { misses, saved };
     }
 
     fn marks(&self) -> Vec<(u8, ratatui::style::Color)> {
         match self.mode {
-            Mode::Drill { ply, shown: true, .. } => self.moves.get(ply).map_or_else(Vec::new, |&m| move_marks(m, MARK_GOOD)),
+            Mode::Drill {
+                ply, shown: true, ..
+            } => self
+                .moves
+                .get(ply)
+                .map_or_else(Vec::new, |&m| move_marks(m, MARK_GOOD)),
             _ => Vec::new(),
         }
     }
 
     fn chapter_name(&self) -> &'static str {
-        CHAPTERS.iter().find(|c| c.lines.iter().any(|l| l.id == self.line.id)).map_or("", |c| c.name)
+        CHAPTERS
+            .iter()
+            .find(|c| c.lines.iter().any(|l| l.id == self.line.id))
+            .map_or("", |c| c.name)
     }
 
     /// The line's moves up to `current`; the rest too unless `hide_rest`, so a drill is
@@ -171,10 +220,15 @@ impl LineScreen {
                 break;
             }
             if ply.is_multiple_of(2) {
-                spans.push(Span::styled(format!("{}.", ply / 2 + 1), Style::new().fg(DIM)));
+                spans.push(Span::styled(
+                    format!("{}.", ply / 2 + 1),
+                    Style::new().fg(DIM),
+                ));
             }
             let style = if ply + 1 == current {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                Style::new()
+                    .fg(ACCENT)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else if ply < current {
                 Style::new().fg(TEXT)
             } else {
@@ -187,7 +241,11 @@ impl LineScreen {
     }
 
     fn side_lines(&self, data: &CoachData) -> Vec<Line<'static>> {
-        let side = if self.line.side == Color::White { "White" } else { "Black" };
+        let side = if self.line.side == Color::White {
+            "White"
+        } else {
+            "Black"
+        };
         let mut lines = vec![
             heading(self.line.name),
             dim(format!("{} · you play {side}", self.chapter_name())),
@@ -201,8 +259,14 @@ impl LineScreen {
                     Some((san, note)) => {
                         let yours = self.line.is_yours(cursor - 1);
                         lines.push(Line::from(vec![
-                            Span::styled(format!("{san}  "), Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                            Span::styled(if yours { "your move" } else { "their move" }, Style::new().fg(DIM)),
+                            Span::styled(
+                                format!("{san}  "),
+                                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                if yours { "your move" } else { "their move" },
+                                Style::new().fg(DIM),
+                            ),
                         ]));
                         lines.push(Line::styled(note.to_string(), Style::new().fg(TEXT)));
                     }
@@ -211,22 +275,32 @@ impl LineScreen {
                 if *cursor >= self.moves.len() {
                     lines.push(Line::raw(""));
                     lines.push(heading("The plan from here"));
-                    lines.push(Line::styled(self.line.plan.to_string(), Style::new().fg(TEXT)));
+                    lines.push(Line::styled(
+                        self.line.plan.to_string(),
+                        Style::new().fg(TEXT),
+                    ));
                     lines.push(Line::raw(""));
-                    lines.push(Line::styled("Enter: drill this line from memory", Style::new().fg(ACCENT)));
+                    lines.push(Line::styled(
+                        "Enter: drill this line from memory",
+                        Style::new().fg(ACCENT),
+                    ));
                 }
             }
             Mode::Drill { ply, misses, .. } => {
                 lines.push(self.move_list(*ply, true));
                 lines.push(Line::raw(""));
-                let yours_left = (*ply..self.moves.len()).filter(|&p| self.line.is_yours(p)).count();
+                let yours_left = (*ply..self.moves.len())
+                    .filter(|&p| self.line.is_yours(p))
+                    .count();
                 let text = if self.your_turn_in_drill() {
                     "Your move: play the line from memory."
                 } else {
                     "Their move…"
                 };
                 lines.push(heading(text));
-                lines.push(dim(format!("{yours_left} of your moves to go · {misses} missed")));
+                lines.push(dim(format!(
+                    "{yours_left} of your moves to go · {misses} missed"
+                )));
                 if let Some(message) = &self.message {
                     lines.push(Line::raw(""));
                     lines.push(colored(message.clone(), BAD));
@@ -236,14 +310,29 @@ impl LineScreen {
                 lines.push(self.move_list(self.moves.len(), false));
                 lines.push(Line::raw(""));
                 if *misses == 0 {
-                    lines.push(Line::styled("Perfect! Every move from memory.", Style::new().fg(GOOD).add_modifier(Modifier::BOLD)));
+                    lines.push(Line::styled(
+                        "Perfect! Every move from memory.",
+                        Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
+                    ));
                 } else {
-                    lines.push(colored(format!("Done, with {misses} miss{}.", if *misses == 1 { "" } else { "es" }), BAD));
+                    lines.push(colored(
+                        format!(
+                            "Done, with {misses} miss{}.",
+                            if *misses == 1 { "" } else { "es" }
+                        ),
+                        BAD,
+                    ));
                     lines.push(dim("It will come back soon so you can try again."));
                 }
-                if let Some(schedule) = data.schedule(&TrainingItem::Opening(self.line.id.to_string())) {
+                if let Some(schedule) =
+                    data.schedule(&TrainingItem::Opening(self.line.id.to_string()))
+                {
                     let wait = schedule.due.0.saturating_sub(now().0);
-                    let when = if wait >= DAY { format!("in {} days", wait.div_ceil(DAY)) } else { "later today".to_string() };
+                    let when = if wait >= DAY {
+                        format!("in {} days", wait.div_ceil(DAY))
+                    } else {
+                        "later today".to_string()
+                    };
                     lines.push(colored(format!("Next review {when}."), INFO));
                 }
                 if let Err(e) = saved {
@@ -251,10 +340,20 @@ impl LineScreen {
                 }
                 lines.push(Line::raw(""));
                 lines.push(heading("The plan from here"));
-                lines.push(Line::styled(self.line.plan.to_string(), Style::new().fg(TEXT)));
+                lines.push(Line::styled(
+                    self.line.plan.to_string(),
+                    Style::new().fg(TEXT),
+                ));
                 lines.push(Line::raw(""));
-                let next = if self.queue.is_empty() { "Enter: back" } else { "Enter: next line" };
-                lines.push(Line::styled(format!("{next}   r: drill again   l: lesson"), Style::new().fg(ACCENT)));
+                let next = if self.queue.is_empty() {
+                    "Enter: back"
+                } else {
+                    "Enter: next line"
+                };
+                lines.push(Line::styled(
+                    format!("{next}   r: drill again   l: lesson"),
+                    Style::new().fg(ACCENT),
+                ));
             }
         }
         lines
@@ -264,23 +363,41 @@ impl LineScreen {
 impl Screen for LineScreen {
     fn draw(&self, frame: &mut Frame, data: &CoachData, _now: Instant) {
         let layout = screen_layout(frame.area());
-        draw_board(frame, &layout, &self.panel.scene(data.piece_style, self.marks()));
+        draw_board(
+            frame,
+            &layout,
+            &self.panel.scene(data.piece_style, self.marks()),
+        );
         let title = match self.mode {
             Mode::Lesson { .. } => "Lesson",
             Mode::Drill { .. } | Mode::Done { .. } => "Drill",
         };
         frame.render_widget(
-            Paragraph::new(self.side_lines(data)).wrap(Wrap { trim: false }).block(panel(title)),
+            Paragraph::new(self.side_lines(data))
+                .wrap(Wrap { trim: false })
+                .block(panel(title)),
             layout.side,
         );
         let hints = match self.mode {
             Mode::Lesson { .. } => "←→ step through · Enter drill it · f flip · ? help · Esc back",
-            Mode::Drill { .. } => "play your moves · h show move · r restart · l lesson · ? help · Esc back",
+            Mode::Drill { .. } => {
+                "play your moves · h show move · r restart · l lesson · ? help · Esc back"
+            }
             Mode::Done { .. } => "Enter continue · r drill again · l lesson · Esc back",
         };
-        draw_status(frame, layout.status, self.panel.typed.as_deref(), None, hints);
+        draw_status(
+            frame,
+            layout.status,
+            self.panel.typed.as_deref(),
+            None,
+            hints,
+        );
         if self.help {
-            let keys = if matches!(self.mode, Mode::Lesson { .. }) { LESSON_KEYS } else { DRILL_KEYS };
+            let keys = if matches!(self.mode, Mode::Lesson { .. }) {
+                LESSON_KEYS
+            } else {
+                DRILL_KEYS
+            };
             draw_help(frame, keys);
         }
     }
@@ -326,12 +443,16 @@ impl Screen for LineScreen {
                 KeyCode::Enter | KeyCode::Char('d') => self.start_drill(),
                 _ => {}
             },
-            Mode::Drill { ply, misses, shown, .. } => match key.code {
+            Mode::Drill {
+                ply, misses, shown, ..
+            } => match key.code {
                 KeyCode::Char('h') if self.line.is_yours(*ply) && !*shown => {
                     *misses += 1;
                     *shown = true;
                     let ply = *ply;
-                    self.message = self.step_text(ply).map(|(san, note)| format!("The line plays {san}. {note}"));
+                    self.message = self
+                        .step_text(ply)
+                        .map(|(san, note)| format!("The line plays {san}. {note}"));
                 }
                 KeyCode::Char('r') => self.start_drill(),
                 KeyCode::Char('l') => self.start_lesson(),

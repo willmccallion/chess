@@ -1,14 +1,14 @@
 //! A game against the coach's bot, with an optional check that stops you before a blunder.
 
-use super::common::{
-    BAD, GOOD, MARK_BAD, TEXT, WARN, colored, dim, draw_board, draw_help, draw_status, heading, move_marks, panel,
-    screen_layout,
-};
-use super::data::{CoachData, new_game_id, now};
-use super::review::ReviewScreen;
 use super::super::app::{App, Mode, PlayConfig, TimeSetting};
 use super::super::engine::SearchLimit;
 use super::super::view::{ACCENT, BoardScene, DIM, format_clock};
+use super::common::{
+    BAD, GOOD, MARK_BAD, TEXT, WARN, colored, dim, draw_board, draw_help, draw_status, heading,
+    move_marks, panel, screen_layout,
+};
+use super::data::{CoachData, new_game_id, now};
+use super::review::ReviewScreen;
 use super::{Job, JobKind, JobResult, Nav, Screen};
 use crate::board::Board;
 use crate::coach::bot::{Level, choose_move, pick_weighted};
@@ -124,7 +124,9 @@ impl CoachGame {
             start,
             mode: Mode::Game,
             human: settings.human,
-            time: settings.clock.map_or(TimeSetting::PerMove { ms: 0 }, TimeSetting::Clock),
+            time: settings
+                .clock
+                .map_or(TimeSetting::PerMove { ms: 0 }, TimeSetting::Clock),
         };
         let mut app = App::new(config, Instant::now());
         app.set_hold_moves(settings.blunder_check);
@@ -164,12 +166,18 @@ impl CoachGame {
     /// The bot's search size, cut down when its clock runs low.
     fn bot_nodes(&self) -> u64 {
         let bot = self.settings.human.other();
-        let remaining = self.app.clocks().map(|c| c.remaining_ms(bot, self.app.board().turn, Instant::now()));
+        let remaining = self
+            .app
+            .clocks()
+            .map(|c| c.remaining_ms(bot, self.app.board().turn, Instant::now()));
         self.settings.level.spec().nodes_for_clock(remaining)
     }
 
     fn baseline_for_now(&self) -> Option<&AnalysedPosition> {
-        self.baseline.as_ref().filter(|(ply, _)| *ply == self.ply()).map(|(_, a)| a)
+        self.baseline
+            .as_ref()
+            .filter(|(ply, _)| *ply == self.ply())
+            .map(|(_, a)| a)
     }
 
     fn guard_search(&self, tag: u64, board: Board) -> Job {
@@ -182,7 +190,11 @@ impl CoachGame {
 
     /// A book or repertoire move for the bot, when the opening allows one.
     fn opening_move(&self, rng: &mut impl Rng) -> Option<Move> {
-        if let Some(chapter) = self.settings.opening.and_then(|name| CHAPTERS.iter().find(|c| c.name == name)) {
+        if let Some(chapter) = self
+            .settings
+            .opening
+            .and_then(|name| CHAPTERS.iter().find(|c| c.name == name))
+        {
             let options: Vec<Move> = lines_continuing(&self.moves())
                 .into_iter()
                 .filter(|(line, _)| chapter.lines.iter().any(|l| l.id == line.id))
@@ -195,14 +207,22 @@ impl CoachGame {
         if self.ply() >= self.settings.level.spec().book_plies {
             return None;
         }
-        let moves: Vec<(Move, u16)> = legal_book_moves(self.app.board()).iter().map(|w| (w.m, w.weight)).collect();
+        let moves: Vec<(Move, u16)> = legal_book_moves(self.app.board())
+            .iter()
+            .map(|w| (w.m, w.weight))
+            .collect();
         pick_weighted(&moves, rng)
     }
 
     fn start_bot_turn(&mut self, data: &mut CoachData, now: Instant) {
-        let delay = BOT_MIN_THINK + Duration::from_millis(data.rng.gen_range(0..=BOT_EXTRA_THINK_MS));
+        let delay =
+            BOT_MIN_THINK + Duration::from_millis(data.rng.gen_range(0..=BOT_EXTRA_THINK_MS));
         let chosen = self.opening_move(&mut data.rng);
-        self.bot = Some(BotTurn { ply: self.ply(), ready_at: now + delay, chosen });
+        self.bot = Some(BotTurn {
+            ply: self.ply(),
+            ready_at: now + delay,
+            chosen,
+        });
     }
 
     fn finish(&mut self, result: GameResult, ending: Ending, data: &mut CoachData) {
@@ -218,8 +238,14 @@ impl CoachGame {
             moves: self.moves(),
             analysis: Vec::new(),
         };
-        let saved = data.add_game(record).map_err(|e| format!("Could not save the game: {e}"));
-        self.finished = Some(Finished { result, ending, saved });
+        let saved = data
+            .add_game(record)
+            .map_err(|e| format!("Could not save the game: {e}"));
+        self.finished = Some(Finished {
+            result,
+            ending,
+            saved,
+        });
         self.warning = None;
         self.app.discard_proposed();
     }
@@ -233,13 +259,19 @@ impl CoachGame {
         let mut after_board = board.without_eval_state();
         after_board.make_move(m);
         let punishment = line_story(&after_board, &after.best_line, board.turn);
-        let review = review_moves(&board, &[m], &[before, after], &|_, _| false).into_iter().next();
+        let review = review_moves(&board, &[m], &[before, after], &|_, _| false)
+            .into_iter()
+            .next();
         match review {
             Some(review) if review.class.is_serious() => {
                 self.warning = Some(Warning {
                     punishment,
                     san: review.san.clone(),
-                    verdict: format!("{} looks like a {}.", review.san, review.class.name().to_lowercase()),
+                    verdict: format!(
+                        "{} looks like a {}.",
+                        review.san,
+                        review.class.name().to_lowercase()
+                    ),
                     explanation: review.cause.map(|c| c.explain()).unwrap_or_default(),
                 });
             }
@@ -265,16 +297,26 @@ impl CoachGame {
             let (name, rating) = if color == self.settings.human {
                 ("You".to_string(), self.rating_before.0.to_string())
             } else {
-                (format!("Coach level {}", self.settings.level.number()), format!("≈{}", self.settings.level.spec().elo.0))
+                (
+                    format!("Coach level {}", self.settings.level.number()),
+                    format!("≈{}", self.settings.level.spec().elo.0),
+                )
             };
             let mut spans = vec![
                 Span::styled(if to_move { "▶ " } else { "  " }, Style::new().fg(ACCENT)),
-                Span::styled(format!("{name:<15}"), Style::new().fg(TEXT).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{name:<15}"),
+                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(format!("{rating:<7}"), Style::new().fg(DIM)),
             ];
             if let Some(clocks) = self.app.clocks() {
                 let ms = clocks.remaining_ms(color, board.turn, now).max(0);
-                let style = if to_move { Style::new().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::new().fg(TEXT) };
+                let style = if to_move {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(TEXT)
+                };
                 spans.push(Span::styled(format_clock(ms), style));
             }
             lines.push(Line::from(spans));
@@ -283,16 +325,25 @@ impl CoachGame {
         lines.push(self.state_line());
         if let Some(warning) = &self.warning {
             lines.push(Line::raw(""));
-            lines.push(Line::styled("Are you sure?", Style::new().fg(WARN).add_modifier(Modifier::BOLD)));
+            lines.push(Line::styled(
+                "Are you sure?",
+                Style::new().fg(WARN).add_modifier(Modifier::BOLD),
+            ));
             lines.push(colored(warning.verdict.clone(), WARN));
             if !warning.explanation.is_empty() {
-                lines.push(Line::styled(warning.explanation.clone(), Style::new().fg(TEXT)));
+                lines.push(Line::styled(
+                    warning.explanation.clone(),
+                    Style::new().fg(TEXT),
+                ));
             }
             if let Some(story) = &warning.punishment {
                 lines.push(dim(format!("For example: {}", story.moves)));
                 lines.push(colored(format!("→ {}", story.outcome), WARN));
             }
-            lines.push(dim(format!("Enter: play {} anyway   Esc: think again", warning.san)));
+            lines.push(dim(format!(
+                "Enter: play {} anyway   Esc: think again",
+                warning.san
+            )));
         }
         if let Some(confirm) = self.confirm {
             lines.push(Line::raw(""));
@@ -309,7 +360,10 @@ impl CoachGame {
             lines.push(Line::from(vec![
                 Span::styled("Rating ", Style::new().fg(DIM)),
                 Span::styled(
-                    format!("{} → {} ({change:+})", self.rating_before.0, data.profile.rating.0),
+                    format!(
+                        "{} → {} ({change:+})",
+                        self.rating_before.0, data.profile.rating.0
+                    ),
                     Style::new().fg(if change >= 0 { GOOD } else { BAD }),
                 ),
             ]));
@@ -317,7 +371,10 @@ impl CoachGame {
                 lines.push(colored(e.clone(), BAD));
             }
             lines.push(Line::raw(""));
-            lines.push(Line::styled("Enter: review this game with the coach", Style::new().fg(ACCENT)));
+            lines.push(Line::styled(
+                "Enter: review this game with the coach",
+                Style::new().fg(ACCENT),
+            ));
             lines.push(dim("n: play again   Esc: back to the menu"));
         }
         lines
@@ -330,7 +387,10 @@ impl CoachGame {
                 r if r == win_for(self.settings.human) => GOOD,
                 _ => BAD,
             };
-            return Line::styled(self.outcome_text(finished), Style::new().fg(color).add_modifier(Modifier::BOLD));
+            return Line::styled(
+                self.outcome_text(finished),
+                Style::new().fg(color).add_modifier(Modifier::BOLD),
+            );
         }
         let text = if self.app.proposed().is_some() && self.warning.is_none() {
             "Checking your move…"
@@ -345,7 +405,12 @@ impl CoachGame {
     }
 
     fn moves_lines(&self, rows: usize) -> Vec<Line<'static>> {
-        let sans: Vec<&str> = self.app.history().iter().map(|(_, san)| san.as_str()).collect();
+        let sans: Vec<&str> = self
+            .app
+            .history()
+            .iter()
+            .map(|(_, san)| san.as_str())
+            .collect();
         let mut out: Vec<Line> = sans
             .chunks(2)
             .enumerate()
@@ -353,7 +418,10 @@ impl CoachGame {
                 Line::from(vec![
                     Span::styled(format!("{:>3}. ", i + 1), Style::new().fg(DIM)),
                     Span::styled(format!("{:<8}", pair[0]), Style::new().fg(TEXT)),
-                    Span::styled(pair.get(1).copied().unwrap_or("").to_string(), Style::new().fg(TEXT)),
+                    Span::styled(
+                        pair.get(1).copied().unwrap_or("").to_string(),
+                        Style::new().fg(TEXT),
+                    ),
                 ])
             })
             .collect();
@@ -398,7 +466,14 @@ impl Screen for CoachGame {
         let layout = screen_layout(frame.area());
         let mut marks = Vec::new();
         if let Some(m) = self.app.proposed() {
-            marks = move_marks(m, if self.warning.is_some() { MARK_BAD } else { super::common::MARK_HINT });
+            marks = move_marks(
+                m,
+                if self.warning.is_some() {
+                    MARK_BAD
+                } else {
+                    super::common::MARK_HINT
+                },
+            );
         }
         let scene = BoardScene {
             board: self.app.board(),
@@ -416,20 +491,36 @@ impl Screen for CoachGame {
         let info_height = (info.len() as u16 + 2 + 3).min(side.height);
         let title = format!("Game · level {}", self.settings.level.number());
         frame.render_widget(
-            Paragraph::new(info).wrap(Wrap { trim: false }).block(panel(&title)),
+            Paragraph::new(info)
+                .wrap(Wrap { trim: false })
+                .block(panel(&title)),
             Rect::new(side.x, side.y, side.width, info_height),
         );
         if side.height > info_height + 3 {
-            let moves_area = Rect::new(side.x, side.y + info_height, side.width, side.height - info_height);
+            let moves_area = Rect::new(
+                side.x,
+                side.y + info_height,
+                side.width,
+                side.height - info_height,
+            );
             let rows = usize::from(moves_area.height.saturating_sub(2));
-            frame.render_widget(Paragraph::new(self.moves_lines(rows)).block(panel("Moves")), moves_area);
+            frame.render_widget(
+                Paragraph::new(self.moves_lines(rows)).block(panel("Moves")),
+                moves_area,
+            );
         }
         let hints = if self.finished.is_some() {
             "Enter review · n play again · Esc menu"
         } else {
             "click or drag to move · Enter type a move · f flip · r resign · ? help · Esc leave"
         };
-        draw_status(frame, layout.status, self.app.typed.as_deref(), self.message.as_deref(), hints);
+        draw_status(
+            frame,
+            layout.status,
+            self.app.typed.as_deref(),
+            self.message.as_deref(),
+            hints,
+        );
         if self.help {
             draw_help(frame, KEYS);
         }
@@ -448,7 +539,11 @@ impl Screen for CoachGame {
                     return match confirm {
                         Confirm::Leave => Nav::Back,
                         Confirm::Resign => {
-                            self.finish(win_for(self.settings.human.other()), Ending::Resigned, data);
+                            self.finish(
+                                win_for(self.settings.human.other()),
+                                Ending::Resigned,
+                                data,
+                            );
                             Nav::Stay
                         }
                     };
@@ -501,7 +596,9 @@ impl Screen for CoachGame {
                 self.app.piece_style = data.piece_style;
             }
             KeyCode::Char('?' | 'h') => self.help = true,
-            KeyCode::Enter | KeyCode::Char(':') if !self.is_bot_turn() => self.app.typed = Some(String::new()),
+            KeyCode::Enter | KeyCode::Char(':') if !self.is_bot_turn() => {
+                self.app.typed = Some(String::new())
+            }
             _ => {}
         }
         Nav::Stay
@@ -547,10 +644,15 @@ impl Screen for CoachGame {
         }
         let ply = self.ply();
         if self.is_bot_turn() {
-            let waiting = self.bot.as_ref().is_some_and(|bot| bot.ply == ply && bot.chosen.is_none());
+            let waiting = self
+                .bot
+                .as_ref()
+                .is_some_and(|bot| bot.ply == ply && bot.chosen.is_none());
             return waiting.then(|| Job {
                 tag: ply as u64,
-                kind: JobKind::ScoreMoves { nodes_per_move: self.bot_nodes() },
+                kind: JobKind::ScoreMoves {
+                    nodes_per_move: self.bot_nodes(),
+                },
                 board: self.app.board().clone(),
             });
         }
@@ -563,7 +665,10 @@ impl Screen for CoachGame {
         let proposed = self.app.proposed().filter(|_| self.warning.is_none())?;
         let mut after = self.app.board().clone();
         after.make_move(proposed);
-        let tag = PROPOSAL_TAG | (ply as u64) << 16 | u64::from(proposed.from) << 8 | u64::from(proposed.to);
+        let tag = PROPOSAL_TAG
+            | (ply as u64) << 16
+            | u64::from(proposed.from) << 8
+            | u64::from(proposed.to);
         Some(self.guard_search(tag, after))
     }
 
@@ -578,14 +683,27 @@ impl Screen for CoachGame {
             }
             JobResult::Done(outcome) if tag == BASELINE_TAG | ply as u64 => {
                 let eval = eval_after_search(self.app.board(), outcome.score);
-                self.baseline = Some((ply, AnalysedPosition { eval, best_line: outcome.pv }));
+                self.baseline = Some((
+                    ply,
+                    AnalysedPosition {
+                        eval,
+                        best_line: outcome.pv,
+                    },
+                ));
             }
             JobResult::Done(outcome) if tag & PROPOSAL_TAG != 0 => {
                 if let Some(m) = self.app.proposed() {
                     let mut after = self.app.board().clone();
                     after.make_move(m);
                     let eval = eval_after_search(&after, outcome.score);
-                    self.judge_proposal(m, AnalysedPosition { eval, best_line: outcome.pv }, now);
+                    self.judge_proposal(
+                        m,
+                        AnalysedPosition {
+                            eval,
+                            best_line: outcome.pv,
+                        },
+                        now,
+                    );
                 }
             }
             _ => {}
@@ -640,7 +758,8 @@ mod tests {
     use crate::notation::parse_san_line;
 
     fn data(name: &str) -> CoachData {
-        let dir = std::env::temp_dir().join(format!("chess-game-test-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("chess-game-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         CoachData::load(Store::open(dir).unwrap()).unwrap()
     }
@@ -664,7 +783,11 @@ mod tests {
     fn answer(game: &mut CoachGame, data: &mut CoachData, score: Score, line: &[&str]) {
         let job = game.job(data).unwrap();
         let pv = parse_san_line(&job.board, line).unwrap();
-        let outcome = SearchOutcome { best_move: pv.first().copied(), score: Some(score), pv };
+        let outcome = SearchOutcome {
+            best_move: pv.first().copied(),
+            score: Some(score),
+            pv,
+        };
         game.engine(job.tag, JobResult::Done(outcome), data, Instant::now());
     }
 
@@ -703,8 +826,15 @@ mod tests {
 
         assert_eq!(game.app.history().len(), 2);
         let warning = game.warning.as_ref().unwrap();
-        assert!(warning.explanation.contains("checkmate in 1"), "{}", warning.explanation);
-        assert_eq!(warning.punishment.as_ref().map(|p| p.outcome.as_str()), Some("White is checkmated"));
+        assert!(
+            warning.explanation.contains("checkmate in 1"),
+            "{}",
+            warning.explanation
+        );
+        assert_eq!(
+            warning.punishment.as_ref().map(|p| p.outcome.as_str()),
+            Some("White is checkmated")
+        );
         assert_eq!(game.job(&data).map(|j| j.tag), None);
     }
 
@@ -722,7 +852,9 @@ mod tests {
 
     #[test]
     fn a_checkmated_position_needs_no_search() {
-        let mated = Board::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3").unwrap();
+        let mated =
+            Board::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+                .unwrap();
         let stalemate = Board::from_fen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1").unwrap();
 
         assert_eq!(eval_after_search(&mated, None), Eval::Checkmated);

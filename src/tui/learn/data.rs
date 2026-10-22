@@ -41,12 +41,20 @@ pub fn is_book(board: &Board, m: Move) -> bool {
 }
 
 pub fn now() -> UnixTime {
-    UnixTime(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()))
+    UnixTime(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )
 }
 
 /// A fresh game id: the current time in milliseconds.
 pub fn new_game_id() -> GameId {
-    GameId(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64))
+    GameId(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64),
+    )
 }
 
 impl CoachData {
@@ -55,12 +63,23 @@ impl CoachData {
         let attempts = store.load_attempts()?;
         let lichess = store.load_lichess_puzzles()?;
         let mut warnings = Vec::new();
-        for (file, bad) in [("games", &games.bad_lines), ("attempts", &attempts.bad_lines), ("puzzles", &lichess.bad_lines)] {
+        for (file, bad) in [
+            ("games", &games.bad_lines),
+            ("attempts", &attempts.bad_lines),
+            ("puzzles", &lichess.bad_lines),
+        ] {
             if !bad.is_empty() {
-                warnings.push(format!("Skipped {} unreadable line(s) in the {file} file", bad.len()));
+                warnings.push(format!(
+                    "Skipped {} unreadable line(s) in the {file} file",
+                    bad.len()
+                ));
             }
         }
-        let reviewed: Vec<ReviewedGame> = games.items.into_iter().map(|g| ReviewedGame::new(g, &is_book)).collect();
+        let reviewed: Vec<ReviewedGame> = games
+            .items
+            .into_iter()
+            .map(|g| ReviewedGame::new(g, &is_book))
+            .collect();
         let mut data = Self {
             profile: Profile::build(&[], &[], now()),
             store,
@@ -110,8 +129,20 @@ impl CoachData {
         Ok(())
     }
 
-    pub fn record_attempt(&mut self, item: TrainingItem, success: bool, rating: Option<Elo>, moves: Option<u32>) -> io::Result<()> {
-        let attempt = AttemptRecord { at: now(), item, success, rating, moves };
+    pub fn record_attempt(
+        &mut self,
+        item: TrainingItem,
+        success: bool,
+        rating: Option<Elo>,
+        moves: Option<u32>,
+    ) -> io::Result<()> {
+        let attempt = AttemptRecord {
+            at: now(),
+            item,
+            success,
+            rating,
+            moves,
+        };
         self.store.append_attempt(&attempt)?;
         self.attempts.push(attempt);
         self.refresh();
@@ -154,7 +185,11 @@ impl CoachData {
         let PuzzleId::Game { game, ply } = id else {
             return None;
         };
-        self.game(GameId(*game))?.record.analysis.get(*ply).map(|a| a.eval)
+        self.game(GameId(*game))?
+            .record
+            .analysis
+            .get(*ply)
+            .map(|a| a.eval)
     }
 
     /// What you actually played in the game a puzzle comes from.
@@ -162,6 +197,10 @@ impl CoachData {
         let PuzzleId::Game { game, ply } = id else {
             return None;
         };
-        self.game(GameId(*game))?.reviews.iter().find(|r| r.ply == *ply).map(|r| r.numbered_san.clone())
+        self.game(GameId(*game))?
+            .reviews
+            .iter()
+            .find(|r| r.ply == *ply)
+            .map(|r| r.numbered_san.clone())
     }
 }

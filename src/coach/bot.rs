@@ -32,16 +32,76 @@ pub struct LevelSpec {
 /// Interpolated from matches between levels, anchored on Stockfish's UCI_Elo; the Elo is
 /// on an engine scale and only roughly a human rating.
 const LEVELS: [LevelSpec; 10] = [
-    LevelSpec { elo: Elo(400), nodes_per_move: 610, temperature: 8.95, mistake_chance: 0.129, book_plies: 4 },
-    LevelSpec { elo: Elo(580), nodes_per_move: 830, temperature: 7.36, mistake_chance: 0.105, book_plies: 6 },
-    LevelSpec { elo: Elo(760), nodes_per_move: 1_100, temperature: 6.26, mistake_chance: 0.088, book_plies: 6 },
-    LevelSpec { elo: Elo(930), nodes_per_move: 1_460, temperature: 5.38, mistake_chance: 0.073, book_plies: 6 },
-    LevelSpec { elo: Elo(1110), nodes_per_move: 1_940, temperature: 4.6, mistake_chance: 0.06, book_plies: 7 },
-    LevelSpec { elo: Elo(1290), nodes_per_move: 2_570, temperature: 3.93, mistake_chance: 0.049, book_plies: 8 },
-    LevelSpec { elo: Elo(1470), nodes_per_move: 3_330, temperature: 3.36, mistake_chance: 0.04, book_plies: 9 },
-    LevelSpec { elo: Elo(1640), nodes_per_move: 4_450, temperature: 2.82, mistake_chance: 0.032, book_plies: 10 },
-    LevelSpec { elo: Elo(1820), nodes_per_move: 6_400, temperature: 2.28, mistake_chance: 0.024, book_plies: 11 },
-    LevelSpec { elo: Elo(2000), nodes_per_move: 8_990, temperature: 1.82, mistake_chance: 0.018, book_plies: 12 },
+    LevelSpec {
+        elo: Elo(400),
+        nodes_per_move: 610,
+        temperature: 8.95,
+        mistake_chance: 0.129,
+        book_plies: 4,
+    },
+    LevelSpec {
+        elo: Elo(580),
+        nodes_per_move: 830,
+        temperature: 7.36,
+        mistake_chance: 0.105,
+        book_plies: 6,
+    },
+    LevelSpec {
+        elo: Elo(760),
+        nodes_per_move: 1_100,
+        temperature: 6.26,
+        mistake_chance: 0.088,
+        book_plies: 6,
+    },
+    LevelSpec {
+        elo: Elo(930),
+        nodes_per_move: 1_460,
+        temperature: 5.38,
+        mistake_chance: 0.073,
+        book_plies: 6,
+    },
+    LevelSpec {
+        elo: Elo(1110),
+        nodes_per_move: 1_940,
+        temperature: 4.6,
+        mistake_chance: 0.06,
+        book_plies: 7,
+    },
+    LevelSpec {
+        elo: Elo(1290),
+        nodes_per_move: 2_570,
+        temperature: 3.93,
+        mistake_chance: 0.049,
+        book_plies: 8,
+    },
+    LevelSpec {
+        elo: Elo(1470),
+        nodes_per_move: 3_330,
+        temperature: 3.36,
+        mistake_chance: 0.04,
+        book_plies: 9,
+    },
+    LevelSpec {
+        elo: Elo(1640),
+        nodes_per_move: 4_450,
+        temperature: 2.82,
+        mistake_chance: 0.032,
+        book_plies: 10,
+    },
+    LevelSpec {
+        elo: Elo(1820),
+        nodes_per_move: 6_400,
+        temperature: 2.28,
+        mistake_chance: 0.024,
+        book_plies: 11,
+    },
+    LevelSpec {
+        elo: Elo(2000),
+        nodes_per_move: 8_990,
+        temperature: 1.82,
+        mistake_chance: 0.018,
+        book_plies: 12,
+    },
 ];
 
 /// A playing strength of the coach, from 1 (weakest) up.
@@ -53,7 +113,9 @@ impl Level {
     pub const STRONGEST: Self = Self(LEVELS.len() as u8);
 
     pub fn new(number: u8) -> Option<Self> {
-        (Self::WEAKEST.0..=Self::STRONGEST.0).contains(&number).then_some(Self(number))
+        (Self::WEAKEST.0..=Self::STRONGEST.0)
+            .contains(&number)
+            .then_some(Self(number))
     }
 
     pub const fn number(self) -> u8 {
@@ -117,8 +179,14 @@ impl LevelSpec {
 
 /// Picks a move from every legal move's score for the side playing it.
 pub fn choose_move(scores: &[(Move, Score)], spec: &LevelSpec, rng: &mut impl Rng) -> Option<Move> {
-    let chances: Vec<(Move, f64)> = scores.iter().map(|&(m, score)| (m, utility(score))).collect();
-    let best = chances.iter().map(|&(_, chance)| chance).fold(f64::NEG_INFINITY, f64::max);
+    let chances: Vec<(Move, f64)> = scores
+        .iter()
+        .map(|&(m, score)| (m, utility(score)))
+        .collect();
+    let best = chances
+        .iter()
+        .map(|&(_, chance)| chance)
+        .fold(f64::NEG_INFINITY, f64::max);
     if rng.gen_bool(spec.mistake_chance.clamp(0.0, 1.0)) {
         let mistakes: Vec<Move> = chances
             .iter()
@@ -148,9 +216,17 @@ pub fn pick_weighted(moves: &[(Move, u16)], rng: &mut impl Rng) -> Option<Move> 
     None
 }
 
-fn softmax_pick(chances: &[(Move, f64)], best: f64, temperature: f64, rng: &mut impl Rng) -> Option<Move> {
+fn softmax_pick(
+    chances: &[(Move, f64)],
+    best: f64,
+    temperature: f64,
+    rng: &mut impl Rng,
+) -> Option<Move> {
     let temperature = temperature.max(f64::EPSILON);
-    let weights: Vec<f64> = chances.iter().map(|&(_, chance)| (-(best - chance) / temperature).exp()).collect();
+    let weights: Vec<f64> = chances
+        .iter()
+        .map(|&(_, chance)| (-(best - chance) / temperature).exp())
+        .collect();
     let total: f64 = weights.iter().sum();
     let mut target = rng.gen_range(0.0..total.max(f64::MIN_POSITIVE));
     for (&(m, _), weight) in chances.iter().zip(&weights) {
@@ -174,7 +250,9 @@ mod tests {
 
     fn picks(scores: &[(Move, Score)], level: Level, games: usize) -> Vec<Move> {
         let mut rng = StdRng::seed_from_u64(7);
-        (0..games).filter_map(|_| choose_move(scores, level.spec(), &mut rng)).collect()
+        (0..games)
+            .filter_map(|_| choose_move(scores, level.spec(), &mut rng))
+            .collect()
     }
 
     #[test]
@@ -197,7 +275,11 @@ mod tests {
     #[test]
     fn strong_levels_nearly_always_find_the_winning_move() {
         let m = moves(3);
-        let scores = [(m[0], Score::Centipawns(-50)), (m[1], Score::Centipawns(400)), (m[2], Score::Centipawns(0))];
+        let scores = [
+            (m[0], Score::Centipawns(-50)),
+            (m[1], Score::Centipawns(400)),
+            (m[2], Score::Centipawns(0)),
+        ];
 
         let chosen = picks(&scores, Level::STRONGEST, 500);
 
@@ -208,7 +290,8 @@ mod tests {
     #[test]
     fn weak_levels_often_miss_a_free_piece() {
         let m = moves(20);
-        let mut scores: Vec<(Move, Score)> = m.iter().map(|&mv| (mv, Score::Centipawns(0))).collect();
+        let mut scores: Vec<(Move, Score)> =
+            m.iter().map(|&mv| (mv, Score::Centipawns(0))).collect();
         scores[0].1 = Score::Centipawns(300);
 
         let chosen = picks(&scores, Level::WEAKEST, 1000);
@@ -222,7 +305,9 @@ mod tests {
         let m = moves(2);
         let mut rng = StdRng::seed_from_u64(3);
 
-        let picks: Vec<Move> = (0..1000).filter_map(|_| pick_weighted(&[(m[0], 1), (m[1], 9)], &mut rng)).collect();
+        let picks: Vec<Move> = (0..1000)
+            .filter_map(|_| pick_weighted(&[(m[0], 1), (m[1], 9)], &mut rng))
+            .collect();
 
         let heavy = picks.iter().filter(|&&p| p == m[1]).count();
         assert!((850..950).contains(&heavy), "{heavy}");
@@ -232,7 +317,8 @@ mod tests {
     #[test]
     fn weak_levels_still_take_mate_in_won_positions() {
         let m = moves(20);
-        let mut scores: Vec<(Move, Score)> = m.iter().map(|&mv| (mv, Score::Centipawns(1500))).collect();
+        let mut scores: Vec<(Move, Score)> =
+            m.iter().map(|&mv| (mv, Score::Centipawns(1500))).collect();
         scores[0].1 = Score::MateIn(1);
 
         let chosen = picks(&scores, Level::WEAKEST, 1000);

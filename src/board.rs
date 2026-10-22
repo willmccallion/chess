@@ -134,7 +134,12 @@ impl Board {
     pub fn has_insufficient_material(&self) -> bool {
         const LIGHT_SQUARES: u64 = 0x55AA_55AA_55AA_55AA;
         let bb = |p: Piece| self.piece_bb[p.index()];
-        let mating_material = bb(Piece::WP) | bb(Piece::BP) | bb(Piece::WR) | bb(Piece::BR) | bb(Piece::WQ) | bb(Piece::BQ);
+        let mating_material = bb(Piece::WP)
+            | bb(Piece::BP)
+            | bb(Piece::WR)
+            | bb(Piece::BR)
+            | bb(Piece::WQ)
+            | bb(Piece::BQ);
         if mating_material != 0 {
             return false;
         }
@@ -1065,9 +1070,7 @@ impl Board {
                     58 => {
                         (self.castle & BQ_CASTLE) != 0
                             && self.piece_on[56] == Piece::BR
-                            && (self.all_pieces
-                                & ((1u64 << 57) | (1u64 << 58) | (1u64 << 59)))
-                                == 0
+                            && (self.all_pieces & ((1u64 << 57) | (1u64 << 58) | (1u64 << 59))) == 0
                             && !self.is_square_attacked(59, Color::White)
                             && !self.is_square_attacked(58, Color::White)
                     }
@@ -1124,8 +1127,7 @@ impl Board {
             PieceKind::Bishop => (magics::get_bishop_attacks(from, occ) & (1u64 << to)) != 0,
             PieceKind::Rook => (magics::get_rook_attacks(from, occ) & (1u64 << to)) != 0,
             PieceKind::Queen => {
-                ((magics::get_bishop_attacks(from, occ)
-                    | magics::get_rook_attacks(from, occ))
+                ((magics::get_bishop_attacks(from, occ) | magics::get_rook_attacks(from, occ))
                     & (1u64 << to))
                     != 0
             }
@@ -1626,9 +1628,19 @@ mod tests {
                 let mut played = MoveList::new();
                 board.generate_legal_moves(&mut played);
                 let mut fresh_moves = MoveList::new();
-                Board::from_fen(&board.to_fen()).unwrap().generate_legal_moves(&mut fresh_moves);
-                let mut ours: Vec<_> = played.as_slice().iter().map(|m| (m.from, m.to, m.promotion)).collect();
-                let mut fresh: Vec<_> = fresh_moves.as_slice().iter().map(|m| (m.from, m.to, m.promotion)).collect();
+                Board::from_fen(&board.to_fen())
+                    .unwrap()
+                    .generate_legal_moves(&mut fresh_moves);
+                let mut ours: Vec<_> = played
+                    .as_slice()
+                    .iter()
+                    .map(|m| (m.from, m.to, m.promotion))
+                    .collect();
+                let mut fresh: Vec<_> = fresh_moves
+                    .as_slice()
+                    .iter()
+                    .map(|m| (m.from, m.to, m.promotion))
+                    .collect();
                 ours.sort_unstable_by_key(|&(f, t, p)| (f, t, p.map(|k| k as u8)));
                 fresh.sort_unstable_by_key(|&(f, t, p)| (f, t, p.map(|k| k as u8)));
                 assert_eq!(ours, fresh, "{}", board.to_fen());
@@ -1658,15 +1670,29 @@ mod tests {
             "8/8/2k5/8/8/8/2K5/7R w - - 0 1",
         ];
         for fen in dead {
-            assert!(Board::from_fen(fen).unwrap().has_insufficient_material(), "{fen}");
+            assert!(
+                Board::from_fen(fen).unwrap().has_insufficient_material(),
+                "{fen}"
+            );
         }
         for fen in alive {
-            assert!(!Board::from_fen(fen).unwrap().has_insufficient_material(), "{fen}");
+            assert!(
+                !Board::from_fen(fen).unwrap().has_insufficient_material(),
+                "{fen}"
+            );
         }
     }
 
     fn move_key(m: &Move) -> (u8, u8, bool, bool, bool, bool, Option<PieceKind>) {
-        (m.from, m.to, m.capture, m.en_passant, m.double_push, m.castle, m.promotion)
+        (
+            m.from,
+            m.to,
+            m.capture,
+            m.en_passant,
+            m.double_push,
+            m.castle,
+            m.promotion,
+        )
     }
 
     fn assert_split_equals_all(fen: &str) {
@@ -1693,7 +1719,8 @@ mod tests {
         split_sorted.sort();
 
         assert_eq!(
-            all_sorted, split_sorted,
+            all_sorted,
+            split_sorted,
             "Split mismatch for FEN: {}.\n all={} captures={} quiets={}",
             fen,
             all.len(),
@@ -1721,9 +1748,7 @@ mod tests {
 
     #[test]
     fn test_split_generators_position4() {
-        assert_split_equals_all(
-            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
-        );
+        assert_split_equals_all("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1");
     }
 
     #[test]

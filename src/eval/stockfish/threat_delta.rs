@@ -119,7 +119,9 @@ impl<'b> Replay<'b> {
     }
 
     fn pieces(&self, list: &[Piece]) -> Bitboard {
-        list.iter().map(|p| self.piece_bb[p.index()]).fold(0, |acc, bb| acc | bb)
+        list.iter()
+            .map(|p| self.piece_bb[p.index()])
+            .fold(0, |acc, bb| acc | bb)
     }
 
     /// Pieces of either color attacking `sq`.
@@ -164,7 +166,13 @@ impl<'b> Replay<'b> {
             if is_slider(attacker)
                 && let Some(behind) = self.piece_behind(from, sq)
             {
-                out.push(delta(attacker, from, self.piece_at(behind), behind, !present));
+                out.push(delta(
+                    attacker,
+                    from,
+                    self.piece_at(behind),
+                    behind,
+                    !present,
+                ));
             }
         }
     }
@@ -210,11 +218,17 @@ pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
             replay.remove(captured_sq, out);
         }
     }
-    let placed = m.promotion.map_or(moving, |kind| Piece::from_kind(kind, turn));
+    let placed = m
+        .promotion
+        .map_or(moving, |kind| Piece::from_kind(kind, turn));
     replay.put(to, placed, out);
 
     if m.castle {
-        let (rook_from, rook_to) = if to > from { (to + 1, to - 1) } else { (to - 2, to + 1) };
+        let (rook_from, rook_to) = if to > from {
+            (to + 1, to - 1)
+        } else {
+            (to - 2, to + 1)
+        };
         let rook = replay.piece_at(rook_from);
         replay.remove(rook_from, out);
         replay.put(rook_to, rook, out);
@@ -231,7 +245,11 @@ fn cancel_opposites(deltas: &mut ThreatDeltas) {
         let d = list[i];
         let opposite = (i + 1..len).find(|&j| {
             let o = list[j];
-            o.add != d.add && o.from == d.from && o.to == d.to && o.attacker == d.attacker && o.attacked == d.attacked
+            o.add != d.add
+                && o.from == d.from
+                && o.to == d.to
+                && o.attacker == d.attacker
+                && o.attacked == d.attacked
         });
         match opposite {
             Some(j) => {
@@ -324,12 +342,20 @@ mod tests {
                     board.make_move(m);
 
                     assert!(!deltas.overflowed);
-                    assert_eq!(apply(&before, &deltas), relations(&board), "{m:?} -> {}", board.to_fen());
+                    assert_eq!(
+                        apply(&before, &deltas),
+                        relations(&board),
+                        "{m:?} -> {}",
+                        board.to_fen()
+                    );
                     checked += 1;
                 }
             }
         }
         assert!(checked > 10_000);
-        assert!(castles > 0 && en_passants > 0 && promotions > 0, "{castles} {en_passants} {promotions}");
+        assert!(
+            castles > 0 && en_passants > 0 && promotions > 0,
+            "{castles} {en_passants} {promotions}"
+        );
     }
 }

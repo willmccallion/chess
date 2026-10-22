@@ -1,9 +1,9 @@
 //! Choosing how the next game against the coach is played.
 
+use super::super::view::{ACCENT, DIM};
 use super::common::{TEXT, centred, dim, panel};
 use super::data::CoachData;
 use super::game::{CoachGame, GameSettings};
-use super::super::view::{ACCENT, DIM};
 use super::{Nav, Screen};
 use crate::coach::bot::Level;
 use crate::coach::repertoire::{CHAPTERS, Chapter};
@@ -21,7 +21,13 @@ use std::time::Instant;
 const BLUNDER_CHECK_BELOW: i32 = 1000;
 const FORM_WIDTH: u16 = 64;
 
-const CLOCKS: [Option<(u64, u64)>; 5] = [None, Some((10, 5)), Some((15, 10)), Some((30, 0)), Some((5, 3))];
+const CLOCKS: [Option<(u64, u64)>; 5] = [
+    None,
+    Some((10, 5)),
+    Some((15, 10)),
+    Some((30, 0)),
+    Some((5, 3)),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SideChoice {
@@ -40,7 +46,14 @@ enum Row {
     Start,
 }
 
-const ROWS: [Row; 6] = [Row::Level, Row::Side, Row::Clock, Row::BlunderCheck, Row::Opening, Row::Start];
+const ROWS: [Row; 6] = [
+    Row::Level,
+    Row::Side,
+    Row::Clock,
+    Row::BlunderCheck,
+    Row::Opening,
+    Row::Start,
+];
 
 pub struct Setup {
     row: usize,
@@ -89,7 +102,9 @@ impl Setup {
             Row::BlunderCheck => self.blunder_check = !self.blunder_check,
             Row::Opening => {
                 let choices = self.opening_choices();
-                let position = self.opening.and_then(|o| choices.iter().position(|&c| c == o));
+                let position = self
+                    .opening
+                    .and_then(|o| choices.iter().position(|&c| c == o));
                 let next = match position {
                     None if forward => choices.first().copied(),
                     None => choices.last().copied(),
@@ -120,7 +135,10 @@ impl Setup {
     fn value_text(&self, row: Row, data: &CoachData) -> String {
         match row {
             Row::Level => match self.level {
-                None => format!("Your match (level {})", data.profile.suggested_level().number()),
+                None => format!(
+                    "Your match (level {})",
+                    data.profile.suggested_level().number()
+                ),
                 Some(level) => format!("Level {} of {}", level.number(), Level::STRONGEST.number()),
             },
             Row::Side => match self.side {
@@ -133,10 +151,16 @@ impl Setup {
                 Some((minutes, increment)) => format!("{minutes} min + {increment} s"),
             },
             Row::BlunderCheck => {
-                if self.blunder_check { "On: warns before a big mistake".to_string() } else { "Off".to_string() }
+                if self.blunder_check {
+                    "On: warns before a big mistake".to_string()
+                } else {
+                    "Off".to_string()
+                }
             }
             Row::Opening => match self.opening.and_then(|i| CHAPTERS.get(i)) {
-                None if self.side == SideChoice::Random => "Any (pick a colour to practise one)".to_string(),
+                None if self.side == SideChoice::Random => {
+                    "Any (pick a colour to practise one)".to_string()
+                }
                 None => "Any".to_string(),
                 Some(chapter) => format!("Practise: {}", chapter.name),
             },
@@ -159,13 +183,20 @@ impl Setup {
                 increment_ms: increment * 1000,
             }),
             blunder_check: self.blunder_check,
-            opening: self.opening.and_then(|i| CHAPTERS.get(i)).map(|c: &Chapter| c.name),
+            opening: self
+                .opening
+                .and_then(|i| CHAPTERS.get(i))
+                .map(|c: &Chapter| c.name),
         }
     }
 }
 
 const fn cycle(index: usize, len: usize, forward: bool) -> usize {
-    if forward { (index + 1) % len } else { (index + len - 1) % len }
+    if forward {
+        (index + 1) % len
+    } else {
+        (index + len - 1) % len
+    }
 }
 
 const fn row_name(row: Row) -> &'static str {
@@ -185,7 +216,12 @@ fn form_area(area: Rect) -> Rect {
 
 fn row_rect(area: Rect, index: usize) -> Rect {
     let form = form_area(area);
-    Rect::new(form.x + 2, form.y + 2 + 2 * index as u16, form.width.saturating_sub(4), 1)
+    Rect::new(
+        form.x + 2,
+        form.y + 2 + 2 * index as u16,
+        form.width.saturating_sub(4),
+        1,
+    )
 }
 
 impl Screen for Setup {
@@ -202,16 +238,26 @@ impl Screen for Setup {
             let chosen = i == self.row;
             let line = if row == Row::Start {
                 let style = if chosen {
-                    Style::new().fg(ratatui::style::Color::Black).bg(ACCENT).add_modifier(Modifier::BOLD)
+                    Style::new()
+                        .fg(ratatui::style::Color::Black)
+                        .bg(ACCENT)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 };
                 Line::from(Span::styled(format!("  {}  ", row_name(row)), style))
             } else {
-                let arrows = if chosen { ("◂ ", " ▸") } else { ("  ", "  ") };
+                let arrows = if chosen {
+                    ("◂ ", " ▸")
+                } else {
+                    ("  ", "  ")
+                };
                 Line::from(vec![
                     Span::styled(if chosen { "▸ " } else { "  " }, Style::new().fg(ACCENT)),
-                    Span::styled(format!("{:<15}", row_name(row)), Style::new().fg(if chosen { TEXT } else { DIM })),
+                    Span::styled(
+                        format!("{:<15}", row_name(row)),
+                        Style::new().fg(if chosen { TEXT } else { DIM }),
+                    ),
                     Span::styled(arrows.0, Style::new().fg(ACCENT)),
                     Span::styled(self.value_text(row, data), Style::new().fg(TEXT)),
                     Span::styled(arrows.1, Style::new().fg(ACCENT)),
@@ -219,7 +265,12 @@ impl Screen for Setup {
             };
             frame.render_widget(Paragraph::new(line), rect);
         }
-        let status = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, area.height.min(1));
+        let status = Rect::new(
+            area.x,
+            area.bottom().saturating_sub(1),
+            area.width,
+            area.height.min(1),
+        );
         frame.render_widget(
             Paragraph::new(dim("  ↑↓ choose · ←→ change · Enter start · Esc back")),
             status,
@@ -257,7 +308,9 @@ impl Screen for Setup {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return Nav::Stay;
         }
-        let Some(i) = (0..ROWS.len()).find(|&i| row_rect(area, i).contains((mouse.column, mouse.row).into())) else {
+        let Some(i) =
+            (0..ROWS.len()).find(|&i| row_rect(area, i).contains((mouse.column, mouse.row).into()))
+        else {
             return Nav::Stay;
         };
         self.row = i;

@@ -1,7 +1,7 @@
 use crate::analysis::Searcher;
 use crate::board::Board;
-use crate::eval::{self, EvalOptions};
 use crate::coach::bot::{Level, choose_move, pick_weighted};
+use crate::eval::{self, EvalOptions};
 use crate::opening_book::{get_book_move, legal_book_moves};
 use crate::search::{NodeLimit, SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
@@ -55,7 +55,8 @@ fn parse_check_value(value: &str) -> bool {
 }
 
 fn has_token(cmd: &str, token: &str) -> bool {
-    cmd.split_whitespace().any(|t| t.eq_ignore_ascii_case(token))
+    cmd.split_whitespace()
+        .any(|t| t.eq_ignore_ascii_case(token))
 }
 
 fn send(line: &str) {
@@ -73,7 +74,11 @@ struct ActiveSearch {
 }
 
 /// Stops any running search and returns its thread state to `threads`.
-fn stop_search(active: &mut Option<ActiveSearch>, threads: &mut Option<SearchThreads>, count: usize) {
+fn stop_search(
+    active: &mut Option<ActiveSearch>,
+    threads: &mut Option<SearchThreads>,
+    count: usize,
+) {
     if let Some(search) = active.take() {
         search.control.stop();
         *threads = search.handle.join().ok();
@@ -111,7 +116,10 @@ fn print_options(options: &Options) {
     ));
     send("option name Ponder type check default false");
     send("option name OwnBook type check default true");
-    send(&format!("option name CoachLevel type spin default 0 min 0 max {}", Level::STRONGEST.number()));
+    send(&format!(
+        "option name CoachLevel type spin default 0 min 0 max {}",
+        Level::STRONGEST.number()
+    ));
     send(&format!(
         "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD_MS} min 0 max {MAX_MOVE_OVERHEAD_MS}"
     ));
@@ -155,8 +163,8 @@ fn start_search(
 ) -> ActiveSearch {
     let is_ponder = has_token(go_args, "ponder");
     let is_infinite = has_token(go_args, "infinite");
-    let max_depth = extract_i64(go_args, "depth")
-        .map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
+    let max_depth =
+        extract_i64(go_args, "depth").map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
 
     let tc = TimeControl {
         wtime: extract_i64(go_args, "wtime").unwrap_or(0),
@@ -252,12 +260,21 @@ fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedT
 
 /// The coach bot's move at `level`: from the book early on, otherwise from every move's
 /// score with the level's errors mixed in. Runs to completion; `stop` is not checked.
-fn coach_move(board: &Board, level: Level, remaining_ms: Option<i64>, searcher: &mut Searcher) -> Option<Move> {
+fn coach_move(
+    board: &Board,
+    level: Level,
+    remaining_ms: Option<i64>,
+    searcher: &mut Searcher,
+) -> Option<Move> {
     let spec = level.spec();
     let mut rng = rand::thread_rng();
-    let ply = (board.fullmove_number.max(1) as usize - 1) * 2 + usize::from(board.turn == Color::Black);
+    let ply =
+        (board.fullmove_number.max(1) as usize - 1) * 2 + usize::from(board.turn == Color::Black);
     if ply < spec.book_plies {
-        let book: Vec<(Move, u16)> = legal_book_moves(board).iter().map(|w| (w.m, w.weight)).collect();
+        let book: Vec<(Move, u16)> = legal_book_moves(board)
+            .iter()
+            .map(|w| (w.m, w.weight))
+            .collect();
         if let Some(m) = pick_weighted(&book, &mut rng) {
             return Some(m);
         }
@@ -275,7 +292,9 @@ fn print_eval(board: &mut Board) {
         "black"
     };
     let sign = if score >= 0 { "+" } else { "" };
-    send(&format!("info string eval: {sign}{score} cp ({side} to move)"));
+    send(&format!(
+        "info string eval: {sign}{score} cp ({side} to move)"
+    ));
     send(&format!("info string fen: {}", board.to_fen()));
 }
 
@@ -341,10 +360,18 @@ pub fn run_uci(eval_kind: crate::eval::EvalKind) {
                 stop_search(&mut active, &mut threads, options.threads);
                 require_networks(&options);
                 if let Some(level) = options.coach_level {
-                    let searcher = coach_searcher.get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
-                    let clock_key = if board.turn == Color::White { "wtime" } else { "btime" };
+                    let searcher =
+                        coach_searcher.get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
+                    let clock_key = if board.turn == Color::White {
+                        "wtime"
+                    } else {
+                        "btime"
+                    };
                     let chosen = coach_move(&board, level, extract_i64(rest, clock_key), searcher);
-                    send(&format!("bestmove {}", chosen.map_or_else(|| "0000".to_string(), format_uci)));
+                    send(&format!(
+                        "bestmove {}",
+                        chosen.map_or_else(|| "0000".to_string(), format_uci)
+                    ));
                     continue;
                 }
                 if options.own_book

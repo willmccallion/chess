@@ -1,13 +1,13 @@
 //! Solving puzzles: mistakes from your games first, then tactics on the themes you need.
 
+use super::super::engine::SearchLimit;
+use super::super::view::{DIM, board_layout};
 use super::common::{
-    BAD, BoardKey, BoardPanel, GOOD, INFO, MARK_GOOD, MARK_HINT, TEXT, colored, dim, draw_board, draw_help, draw_status,
-    heading, move_marks, panel, screen_layout,
+    BAD, BoardKey, BoardPanel, GOOD, INFO, MARK_GOOD, MARK_HINT, TEXT, colored, dim, draw_board,
+    draw_help, draw_status, heading, move_marks, panel, screen_layout,
 };
 use super::data::CoachData;
 use super::game::eval_after_search;
-use super::super::engine::SearchLimit;
-use super::super::view::{DIM, board_layout};
 use super::{Job, JobKind, JobResult, Nav, Screen};
 use crate::coach::judgement::Eval;
 use crate::coach::profile::PuzzleReason;
@@ -103,7 +103,8 @@ impl Puzzles {
         if let Some(current) = &self.current {
             let board = current.attempt.board.clone();
             self.panel.flipped = board.turn == Color::Black;
-            self.panel.set_position(board, current.attempt.puzzle.last_move);
+            self.panel
+                .set_position(board, current.attempt.puzzle.last_move);
         }
     }
 
@@ -134,13 +135,15 @@ impl Puzzles {
         };
         match verdict {
             Verdict::Continue { reply } => {
-                self.panel.set_position(current.attempt.board.clone(), Some(reply));
+                self.panel
+                    .set_position(current.attempt.board.clone(), Some(reply));
                 current.feedback = Feedback::Correct;
             }
             Verdict::Solved => {
                 let also_good = current.judging.is_some();
                 current.judging = None;
-                self.panel.set_position(current.attempt.board.clone(), Some(m));
+                self.panel
+                    .set_position(current.attempt.board.clone(), Some(m));
                 current.feedback = Feedback::Solved { also_good };
             }
             Verdict::NeedsEngine => {
@@ -153,7 +156,10 @@ impl Puzzles {
                 let expected = san_of(&current.attempt.board, expected)
                     .map(|san| numbered(&current.attempt.board, &san, true))
                     .unwrap_or_default();
-                self.panel.set_position(current.attempt.board.clone(), current.attempt.puzzle.last_move);
+                self.panel.set_position(
+                    current.attempt.board.clone(),
+                    current.attempt.puzzle.last_move,
+                );
                 current.feedback = Feedback::Wrong { expected };
             }
         }
@@ -168,7 +174,10 @@ impl Puzzles {
             return;
         }
         current.logged = true;
-        let success = matches!(current.attempt.state, AttemptState::Solved { first_try: true }) && !current.hint;
+        let success = matches!(
+            current.attempt.state,
+            AttemptState::Solved { first_try: true }
+        ) && !current.hint;
         let item = TrainingItem::Puzzle(current.attempt.puzzle.id.clone());
         if let Err(e) = data.record_attempt(item, success, current.attempt.puzzle.rating, None) {
             self.message = Some(format!("Could not save the result: {e}"));
@@ -183,7 +192,8 @@ impl Puzzles {
             current.attempt.state = AttemptState::Failed;
         }
         if let Some(m) = current.attempt.reveal_next() {
-            self.panel.set_position(current.attempt.board.clone(), Some(m));
+            self.panel
+                .set_position(current.attempt.board.clone(), Some(m));
             current.feedback = Feedback::Revealed;
         }
         self.log_if_finished(data);
@@ -194,13 +204,23 @@ impl Puzzles {
             return empty_lines(data);
         };
         let puzzle = &current.attempt.puzzle;
-        let mut lines = vec![Line::from(vec![
-            Span::styled(current.reason.describe(), Style::new().fg(INFO)),
-        ])];
-        let rating = puzzle.rating.map_or_else(String::new, |r| format!(" · puzzle {}", r.0));
-        lines.push(dim(format!("Your puzzle rating {}{rating}", data.profile.puzzle_rating.0)));
+        let mut lines = vec![Line::from(vec![Span::styled(
+            current.reason.describe(),
+            Style::new().fg(INFO),
+        )])];
+        let rating = puzzle
+            .rating
+            .map_or_else(String::new, |r| format!(" · puzzle {}", r.0));
+        lines.push(dim(format!(
+            "Your puzzle rating {}{rating}",
+            data.profile.puzzle_rating.0
+        )));
         lines.push(Line::raw(""));
-        let side = if puzzle.board.turn == Color::White { "White" } else { "Black" };
+        let side = if puzzle.board.turn == Color::White {
+            "White"
+        } else {
+            "Black"
+        };
         let task = if puzzle.is_from_your_games() {
             format!("{side} to move. Find a better move than the one you played.")
         } else {
@@ -217,20 +237,38 @@ impl Puzzles {
             Feedback::Correct => lines.push(colored("Correct! Keep going.", GOOD)),
             Feedback::Checking => lines.push(dim("Checking your move with the engine…")),
             Feedback::Solved { also_good } => {
-                let text = if *also_good { "Solved! That works just as well." } else { "Solved!" };
-                lines.push(Line::styled(text, Style::new().fg(GOOD).add_modifier(Modifier::BOLD)));
+                let text = if *also_good {
+                    "Solved! That works just as well."
+                } else {
+                    "Solved!"
+                };
+                lines.push(Line::styled(
+                    text,
+                    Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
+                ));
             }
             Feedback::Wrong { expected } => {
-                lines.push(Line::styled("Not quite.", Style::new().fg(BAD).add_modifier(Modifier::BOLD)));
-                lines.push(Line::styled(format!("The answer was {expected}."), Style::new().fg(TEXT)));
+                lines.push(Line::styled(
+                    "Not quite.",
+                    Style::new().fg(BAD).add_modifier(Modifier::BOLD),
+                ));
+                lines.push(Line::styled(
+                    format!("The answer was {expected}."),
+                    Style::new().fg(TEXT),
+                ));
             }
-            Feedback::Revealed => lines.push(dim("Showing the solution: press s for the next move.")),
+            Feedback::Revealed => {
+                lines.push(dim("Showing the solution: press s for the next move."))
+            }
         }
         if finished {
             let change = data.profile.puzzle_rating.0 - self.rating_before.0;
             if puzzle.rating.is_some() && change != 0 {
                 lines.push(colored(
-                    format!("Puzzle rating {} → {} ({change:+})", self.rating_before.0, data.profile.puzzle_rating.0),
+                    format!(
+                        "Puzzle rating {} → {} ({change:+})",
+                        self.rating_before.0, data.profile.puzzle_rating.0
+                    ),
                     if change > 0 { GOOD } else { BAD },
                 ));
             }
@@ -239,7 +277,10 @@ impl Puzzles {
                 lines.push(dim(format!("Themes: {themes}")));
             }
             lines.push(Line::raw(""));
-            lines.push(Line::styled("n: next puzzle   r: try again   s: show solution", Style::new().fg(DIM)));
+            lines.push(Line::styled(
+                "n: next puzzle   r: try again   s: show solution",
+                Style::new().fg(DIM),
+            ));
         }
         if let Some(message) = &self.message {
             lines.push(colored(message.clone(), BAD));
@@ -281,7 +322,10 @@ fn empty_lines(data: &CoachData) -> Vec<Line<'static>> {
             Style::new().fg(TEXT),
         ),
         Line::raw(""),
-        Line::styled("For thousands more, import the free Lichess puzzle database:".to_string(), Style::new().fg(TEXT)),
+        Line::styled(
+            "For thousands more, import the free Lichess puzzle database:".to_string(),
+            Style::new().fg(TEXT),
+        ),
         dim("  1. Download lichess_db_puzzle.csv.zst from database.lichess.org"),
         dim("  2. zstd -dc lichess_db_puzzle.csv.zst | chess import-puzzles -"),
         Line::raw(""),
@@ -293,10 +337,23 @@ impl Screen for Puzzles {
     fn draw(&self, frame: &mut Frame, data: &CoachData, _now: Instant) {
         let layout = screen_layout(frame.area());
         if self.current.is_some() {
-            draw_board(frame, &layout, &self.panel.scene(data.piece_style, self.marks()));
+            draw_board(
+                frame,
+                &layout,
+                &self.panel.scene(data.piece_style, self.marks()),
+            );
         }
-        let side = if self.current.is_some() { layout.side } else { super::common::centred(frame.area(), 76, 14) };
-        frame.render_widget(Paragraph::new(self.side_lines(data)).wrap(Wrap { trim: false }).block(panel("Puzzles")), side);
+        let side = if self.current.is_some() {
+            layout.side
+        } else {
+            super::common::centred(frame.area(), 76, 14)
+        };
+        frame.render_widget(
+            Paragraph::new(self.side_lines(data))
+                .wrap(Wrap { trim: false })
+                .block(panel("Puzzles")),
+            side,
+        );
         draw_status(
             frame,
             layout.status,

@@ -9,8 +9,8 @@ use super::arch::{
 use super::features::{active_psq_features, active_threat_features};
 use super::net_file::{FeatureTransformer, LayerStack, Network, ThreatWeights};
 use super::simd::{dot_u8_i8, pairwise_clipped_product, sparse_affine_16};
-use crate::eval::PositionView;
 use crate::board::Board;
+use crate::eval::PositionView;
 use crate::types::Color;
 
 /// One perspective's accumulated first-layer sums.
@@ -47,7 +47,11 @@ impl Accumulation {
     }
 }
 
-pub fn refresh_psq(transformer: &FeatureTransformer, position: PositionView, perspective: Color) -> Accumulation {
+pub fn refresh_psq(
+    transformer: &FeatureTransformer,
+    position: PositionView,
+    perspective: Color,
+) -> Accumulation {
     let half = transformer.half_dims;
     let mut features = Vec::with_capacity(32);
     active_psq_features(position, perspective, &mut features);
@@ -106,7 +110,12 @@ const SMALL_NET_CLIP: i16 = 127 * 2;
 
 /// Pairwise-multiplied, clipped first-layer output for the side to move first; returns
 /// the material (PSQT) term for `bucket`.
-pub fn transform(sums: &PerspectiveSums, side_to_move: Color, bucket: usize, output: &mut [u8]) -> i32 {
+pub fn transform(
+    sums: &PerspectiveSums,
+    side_to_move: Color,
+    bucket: usize,
+    output: &mut [u8],
+) -> i32 {
     let perspectives = [side_to_move, side_to_move.other()];
     let us = perspectives[0] as usize;
     let them = perspectives[1] as usize;
@@ -120,8 +129,15 @@ pub fn transform(sums: &PerspectiveSums, side_to_move: Color, bucket: usize, out
     let pair = half / 2;
     for (p, perspective) in perspectives.into_iter().enumerate() {
         let psq = sums.psq[perspective as usize].values;
-        let threat = sums.threats.as_ref().map(|t| t[perspective as usize].values);
-        let clip = if threat.is_some() { BIG_NET_CLIP } else { SMALL_NET_CLIP };
+        let threat = sums
+            .threats
+            .as_ref()
+            .map(|t| t[perspective as usize].values);
+        let clip = if threat.is_some() {
+            BIG_NET_CLIP
+        } else {
+            SMALL_NET_CLIP
+        };
         pairwise_clipped_product(
             &psq[..pair],
             &psq[pair..half],
@@ -154,17 +170,19 @@ impl LayerStack {
         debug_assert_eq!(FC1_INPUTS, 2 * FC0_HIDDEN);
 
         let mut fc1 = [0u8; FC1_OUTPUTS];
-        for (out, (bias, row)) in fc1
-            .iter_mut()
-            .zip(self.fc1_biases.iter().zip(self.fc1_weights.chunks_exact(FC1_INPUTS_PADDED)))
-        {
+        for (out, (bias, row)) in fc1.iter_mut().zip(
+            self.fc1_biases
+                .iter()
+                .zip(self.fc1_weights.chunks_exact(FC1_INPUTS_PADDED)),
+        ) {
             *out = clipped_relu(bias + dot_u8_i8(&hidden, row));
         }
 
         let fc2 = self.fc2_bias + dot_u8_i8(&fc1, &self.fc2_weights);
 
         // fc0's last neuron skips to the output: 127 << 6 in it means 600 * OUTPUT_SCALE.
-        let forwarded = fc0[FC0_OUTPUTS - 1] * (600 * OUTPUT_SCALE) / (127 * (1 << WEIGHT_SCALE_BITS));
+        let forwarded =
+            fc0[FC0_OUTPUTS - 1] * (600 * OUTPUT_SCALE) / (127 * (1 << WEIGHT_SCALE_BITS));
         fc2 + forwarded
     }
 }
@@ -181,7 +199,12 @@ pub fn bucket_for(position: PositionView) -> usize {
     (position.occupied.count_ones() as usize - 1) / 4
 }
 
-pub fn evaluate_bucket(net: &Network, sums: &PerspectiveSums, side_to_move: Color, bucket: usize) -> NetOutput {
+pub fn evaluate_bucket(
+    net: &Network,
+    sums: &PerspectiveSums,
+    side_to_move: Color,
+    bucket: usize,
+) -> NetOutput {
     let mut transformed = vec![0u8; net.transformer.half_dims];
     let psqt = transform(sums, side_to_move, bucket, &mut transformed);
     let positional = net.stacks[bucket].propagate(&transformed);
@@ -192,7 +215,11 @@ pub fn evaluate_bucket(net: &Network, sums: &PerspectiveSums, side_to_move: Colo
 }
 
 /// Every bucket's output for `board`, computed from scratch; `threats` only for the big net.
-pub fn evaluate_all_buckets(net: &Network, threats: Option<&ThreatWeights>, board: &Board) -> Vec<NetOutput> {
+pub fn evaluate_all_buckets(
+    net: &Network,
+    threats: Option<&ThreatWeights>,
+    board: &Board,
+) -> Vec<NetOutput> {
     let position = board.position_view();
     let half = net.transformer.half_dims;
     let psq = [

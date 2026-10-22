@@ -1,5 +1,5 @@
-pub use crate::analysis::{SearchLimit, SearchOutcome};
 use crate::analysis::Searcher;
+pub use crate::analysis::{SearchLimit, SearchOutcome};
 use crate::board::Board;
 use crate::search::{IterationInfo, Score, SearchControl};
 use crate::time::TimeBudget;
@@ -30,10 +30,19 @@ enum Request {
 }
 
 pub enum Reply {
-    Info { id: SearchId, info: IterationInfo },
-    Done { id: SearchId, outcome: SearchOutcome },
+    Info {
+        id: SearchId,
+        info: IterationInfo,
+    },
+    Done {
+        id: SearchId,
+        outcome: SearchOutcome,
+    },
     /// Every legal move with its score for the side that plays it.
-    MoveScores { id: SearchId, scores: Vec<(Move, Score)> },
+    MoveScores {
+        id: SearchId,
+        scores: Vec<(Move, Score)>,
+    },
 }
 
 /// A search thread pool running in the background, one search at a time.

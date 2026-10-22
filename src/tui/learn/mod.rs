@@ -35,7 +35,10 @@ pub fn run(engine: EngineConfig, store: Store) -> io::Result<()> {
     let mut data = CoachData::load(store)?;
     let mut engine = Engine::spawn(engine.threads, engine.hash_mb)?;
     let mut terminal = TerminalGuard::enter()?;
-    let mut session = Session { stack: vec![Box::new(home::Home::default())], running: None };
+    let mut session = Session {
+        stack: vec![Box::new(home::Home::default())],
+        running: None,
+    };
     session.run(&mut terminal.terminal, &mut data, &mut engine)
 }
 
@@ -71,14 +74,26 @@ pub enum Nav {
 pub trait Screen {
     fn draw(&self, frame: &mut Frame, data: &CoachData, now: Instant);
     fn key(&mut self, key: KeyEvent, data: &mut CoachData, now: Instant) -> Nav;
-    fn mouse(&mut self, _mouse: MouseEvent, _area: Rect, _data: &mut CoachData, _now: Instant) -> Nav {
+    fn mouse(
+        &mut self,
+        _mouse: MouseEvent,
+        _area: Rect,
+        _data: &mut CoachData,
+        _now: Instant,
+    ) -> Nav {
         Nav::Stay
     }
     /// What the engine should be doing for this screen now.
     fn job(&self, _data: &CoachData) -> Option<Job> {
         None
     }
-    fn engine(&mut self, _tag: u64, _result: JobResult, _data: &mut CoachData, _now: Instant) -> Nav {
+    fn engine(
+        &mut self,
+        _tag: u64,
+        _result: JobResult,
+        _data: &mut CoachData,
+        _now: Instant,
+    ) -> Nav {
         Nav::Stay
     }
     fn tick(&mut self, _data: &mut CoachData, _now: Instant) -> Nav {
@@ -92,7 +107,12 @@ struct Session {
 }
 
 impl Session {
-    fn run(&mut self, terminal: &mut DefaultTerminal, data: &mut CoachData, engine: &mut Engine) -> io::Result<()> {
+    fn run(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        data: &mut CoachData,
+        engine: &mut Engine,
+    ) -> io::Result<()> {
         let mut area = Rect::default();
         while let Some(screen) = self.stack.last() {
             let now = Instant::now();
@@ -129,7 +149,10 @@ impl Session {
         };
         let now = Instant::now();
         match event {
-            Event::Key(key) if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Event::Key(key)
+                if key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 Nav::Quit
             }
             Event::Key(key) if key.is_press() => screen.key(*key, data, now),
@@ -190,7 +213,9 @@ impl Session {
         self.running = wanted.map(|job| {
             let id = match job.kind {
                 JobKind::Search(limit) => engine.start(&job.board, limit),
-                JobKind::ScoreMoves { nodes_per_move } => engine.score_moves(&job.board, nodes_per_move),
+                JobKind::ScoreMoves { nodes_per_move } => {
+                    engine.score_moves(&job.board, nodes_per_move)
+                }
             };
             (job.tag, job.kind, id)
         });
@@ -211,7 +236,8 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn temp_data(name: &str) -> CoachData {
-        let dir = std::env::temp_dir().join(format!("chess-learn-test-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("chess-learn-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         CoachData::load(Store::open(dir).unwrap()).unwrap()
     }
@@ -239,7 +265,9 @@ mod tests {
     fn render_everywhere(screen: &dyn Screen, data: &CoachData) {
         for (width, height) in [(1, 1), (20, 6), (40, 12), (80, 24), (140, 42), (250, 80)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-            terminal.draw(|frame| screen.draw(frame, data, Instant::now())).unwrap();
+            terminal
+                .draw(|frame| screen.draw(frame, data, Instant::now()))
+                .unwrap();
         }
     }
 
@@ -287,7 +315,11 @@ mod tests {
         while let Some(job) = screen.job(&data) {
             let (score, best) = analysis[job.tag as usize];
             let pv = parse_san_line(&job.board, &[best]).unwrap();
-            let outcome = SearchOutcome { best_move: pv.first().copied(), score: Some(score), pv };
+            let outcome = SearchOutcome {
+                best_move: pv.first().copied(),
+                score: Some(score),
+                pv,
+            };
             screen.engine(job.tag, JobResult::Done(outcome), &mut data, Instant::now());
             screen.tick(&mut data, Instant::now());
         }

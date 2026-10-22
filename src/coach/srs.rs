@@ -19,7 +19,15 @@ const MINUTE: u64 = 60;
 const DAY: u64 = 24 * 60 * MINUTE;
 /// How long after each result an item is due again, by box. A miss drops to box 0 and the
 /// item returns within minutes; each success moves it one box up.
-const BOX_INTERVALS: [u64; 7] = [10 * MINUTE, DAY, 3 * DAY, 7 * DAY, 16 * DAY, 35 * DAY, 90 * DAY];
+const BOX_INTERVALS: [u64; 7] = [
+    10 * MINUTE,
+    DAY,
+    3 * DAY,
+    7 * DAY,
+    16 * DAY,
+    35 * DAY,
+    90 * DAY,
+];
 /// Items in this box or above count as learned.
 const LEARNED_BOX: usize = 3;
 
@@ -52,7 +60,11 @@ pub fn schedule(attempts: &[Attempt]) -> Option<Schedule> {
     let mut due = None;
     for attempt in attempts {
         level = if attempt.success {
-            if due.is_none() { 1 } else { (level + 1).min(BOX_INTERVALS.len() - 1) }
+            if due.is_none() {
+                1
+            } else {
+                (level + 1).min(BOX_INTERVALS.len() - 1)
+            }
         } else {
             0
         };
@@ -66,7 +78,10 @@ mod tests {
     use super::*;
 
     fn attempt(day: u64, success: bool) -> Attempt {
-        Attempt { at: UnixTime(day * DAY), success }
+        Attempt {
+            at: UnixTime(day * DAY),
+            success,
+        }
     }
 
     #[test]
@@ -96,7 +111,13 @@ mod tests {
 
     #[test]
     fn three_successes_in_a_row_count_as_learned() {
-        let learned = schedule(&[attempt(0, false), attempt(0, true), attempt(1, true), attempt(4, true)]).unwrap();
+        let learned = schedule(&[
+            attempt(0, false),
+            attempt(0, true),
+            attempt(1, true),
+            attempt(4, true),
+        ])
+        .unwrap();
 
         assert!(learned.is_learned());
     }

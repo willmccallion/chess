@@ -1,10 +1,10 @@
+use super::input::{MoveInput, PendingPromotion};
 use crate::board::Board;
 use crate::game_runner::{GameClock, GameEndReason, GameResult, position_outcome, win_for};
+use crate::notation::{line_in_san, parse_typed_move};
 use crate::search::{IterationInfo, Score};
 use crate::time::{TimeBudget, TimeControl};
 use crate::types::{Color, Move, MoveList, PieceKind};
-use crate::notation::{line_in_san, parse_typed_move};
-use super::input::{MoveInput, PendingPromotion};
 use std::time::Instant;
 
 const ENGINE_MOVE_OVERHEAD_MS: i64 = 50;
@@ -49,7 +49,9 @@ pub fn parse_clock(text: &str) -> Result<GameClock, String> {
         .parse()
         .map_err(|_| format!("bad increment '{increment}'"))?;
     if !(minutes > 0.0 && increment >= 0.0 && minutes.is_finite() && increment.is_finite()) {
-        return Err(format!("clock must have positive minutes and no negative increment: '{text}'"));
+        return Err(format!(
+            "clock must have positive minutes and no negative increment: '{text}'"
+        ));
     }
     Ok(GameClock {
         base_ms: (minutes * 60_000.0).round() as u64,
@@ -314,7 +316,9 @@ impl App {
 
     /// The engine's latest report, if it may be shown now.
     pub fn engine_line(&self) -> Option<&EngineLine> {
-        self.shows_engine_output().then_some(self.engine_line.as_ref()).flatten()
+        self.shows_engine_output()
+            .then_some(self.engine_line.as_ref())
+            .flatten()
     }
 
     /// False during a game in [`Mode::Game`], where engine help is withheld until the end.
@@ -368,7 +372,8 @@ impl App {
         self.board.generate_legal_moves(&mut self.legal);
         self.input.clear();
         self.proposed = None;
-        self.outcome = position_outcome(&self.board).map(|(result, reason)| GameEnd { result, reason });
+        self.outcome =
+            position_outcome(&self.board).map(|(result, reason)| GameEnd { result, reason });
     }
 
     /// What the engine should be working on right now, if anything.
@@ -390,7 +395,9 @@ impl App {
     /// The time limit for the engine's move in the current position.
     pub fn think_budget(&self, now: Instant) -> TimeBudget {
         match (&self.clocks, self.config.time) {
-            (Some(clocks), _) => clocks.time_control(self.board.turn, now).budget(self.board.turn),
+            (Some(clocks), _) => clocks
+                .time_control(self.board.turn, now)
+                .budget(self.board.turn),
             (None, TimeSetting::PerMove { ms }) => TimeBudget::fixed(ms),
             (None, TimeSetting::Clock(clock)) => TimeBudget::fixed(clock.base_ms / 40),
         }
@@ -524,7 +531,10 @@ impl App {
         if self.config.start.to_fen() != crate::types::START_FEN {
             record.push_str(&format!("Start: {}\n", self.config.start.to_fen()));
         }
-        record.push_str(&format!("Moves: {}\n", line_in_san(&self.config.start, &moves)));
+        record.push_str(&format!(
+            "Moves: {}\n",
+            line_in_san(&self.config.start, &moves)
+        ));
         record.push_str(&format!("Final: {}", self.board.to_fen()));
         if let Some(end) = self.outcome {
             record.push_str(&format!("\nResult: {:?} by {}", end.result, end.reason));
@@ -548,7 +558,10 @@ impl App {
             self.input.release_off_board();
             return;
         }
-        if let Some(m) = self.input.release(&self.board, self.legal.as_slice(), square) {
+        if let Some(m) = self
+            .input
+            .release(&self.board, self.legal.as_slice(), square)
+        {
             self.human_move(m, now);
         }
     }
@@ -619,13 +632,24 @@ mod tests {
     }
 
     fn casual(fen: &str) -> App {
-        app(fen, Mode::Casual, Color::White, TimeSetting::PerMove { ms: 100 })
+        app(
+            fen,
+            Mode::Casual,
+            Color::White,
+            TimeSetting::PerMove { ms: 100 },
+        )
     }
 
     #[test]
     fn clock_text_is_minutes_plus_increment_seconds() {
         let clock = parse_clock("5+3").unwrap();
-        assert_eq!(clock, GameClock { base_ms: 300_000, increment_ms: 3_000 });
+        assert_eq!(
+            clock,
+            GameClock {
+                base_ms: 300_000,
+                increment_ms: 3_000
+            }
+        );
         assert_eq!(parse_clock("0.5+0").unwrap().base_ms, 30_000);
         assert!(parse_clock("5").is_err());
         assert!(parse_clock("0+1").is_err());
@@ -715,7 +739,10 @@ mod tests {
 
         assert_eq!(targets, vec![square("d6"), square("e6")]);
         assert_eq!(app.history()[0].1, "exd6");
-        assert_eq!(app.board().piece_on[square("d5") as usize], crate::types::Piece::Empty);
+        assert_eq!(
+            app.board().piece_on[square("d5") as usize],
+            crate::types::Piece::Empty
+        );
     }
 
     #[test]
@@ -750,7 +777,12 @@ mod tests {
 
     #[test]
     fn game_mode_hides_engine_output_and_refuses_takebacks_until_the_end() {
-        let mut app = app(START_FEN, Mode::Game, Color::White, TimeSetting::PerMove { ms: 100 });
+        let mut app = app(
+            START_FEN,
+            Mode::Game,
+            Color::White,
+            TimeSetting::PerMove { ms: 100 },
+        );
         let now = Instant::now();
         app.typed = Some("e4".into());
         app.submit_typed(now);
@@ -778,16 +810,25 @@ mod tests {
     #[test]
     fn analysis_runs_on_your_turn_in_casual_mode_only() {
         let casual = casual(START_FEN);
-        let game = app(START_FEN, Mode::Game, Color::White, TimeSetting::PerMove { ms: 100 });
+        let game = app(
+            START_FEN,
+            Mode::Game,
+            Color::White,
+            TimeSetting::PerMove { ms: 100 },
+        );
 
-        assert_eq!(casual.engine_task().map(|t| t.kind), Some(TaskKind::Analyse));
+        assert_eq!(
+            casual.engine_task().map(|t| t.kind),
+            Some(TaskKind::Analyse)
+        );
         assert_eq!(game.engine_task(), None);
     }
 
     #[test]
     fn engine_scores_are_shown_from_whites_side() {
         let mut app = casual(START_FEN);
-        let root = Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
+        let root =
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
         let info = IterationInfo {
             depth: 1,
             seldepth: 1,
@@ -806,30 +847,53 @@ mod tests {
 
     #[test]
     fn running_out_of_time_loses() {
-        let clock = GameClock { base_ms: 1_000, increment_ms: 0 };
-        let mut app = app(START_FEN, Mode::Casual, Color::White, TimeSetting::Clock(clock));
+        let clock = GameClock {
+            base_ms: 1_000,
+            increment_ms: 0,
+        };
+        let mut app = app(
+            START_FEN,
+            Mode::Casual,
+            Color::White,
+            TimeSetting::Clock(clock),
+        );
         let later = Instant::now() + Duration::from_millis(1_500);
 
         app.tick(later);
 
         assert_eq!(
             app.outcome(),
-            Some(GameEnd { result: GameResult::BlackWin, reason: GameEndReason::FlagFall })
+            Some(GameEnd {
+                result: GameResult::BlackWin,
+                reason: GameEndReason::FlagFall
+            })
         );
         assert_ne!(app.engine_task().map(|t| t.kind), Some(TaskKind::Think));
     }
 
     #[test]
     fn a_move_adds_the_increment_to_the_movers_clock() {
-        let clock = GameClock { base_ms: 10_000, increment_ms: 2_000 };
+        let clock = GameClock {
+            base_ms: 10_000,
+            increment_ms: 2_000,
+        };
         let start = Instant::now();
-        let mut app = app_at(START_FEN, Mode::Casual, Color::White, TimeSetting::Clock(clock), start);
+        let mut app = app_at(
+            START_FEN,
+            Mode::Casual,
+            Color::White,
+            TimeSetting::Clock(clock),
+            start,
+        );
         let moved_at = start + Duration::from_millis(3_000);
 
         app.typed = Some("e4".into());
         app.submit_typed(moved_at);
 
         let clocks = app.clocks().unwrap();
-        assert_eq!(clocks.remaining_ms(Color::White, Color::Black, moved_at), 9_000);
+        assert_eq!(
+            clocks.remaining_ms(Color::White, Color::Black, moved_at),
+            9_000
+        );
     }
 }
