@@ -749,8 +749,9 @@ mod tests {
     use crate::types::START_FEN;
 
     /// Fool's mate, reviewed with the engine's lines filled in by hand.
-    fn reviewed_fools_mate() -> (ReviewScreen, CoachData) {
-        let dir = std::env::temp_dir().join(format!("chess-review-test-{}", std::process::id()));
+    fn reviewed_fools_mate(name: &str) -> (ReviewScreen, CoachData) {
+        let dir =
+            std::env::temp_dir().join(format!("chess-review-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut data = CoachData::load(Store::open(dir).unwrap()).unwrap();
         let start = Board::from_fen(START_FEN).unwrap();
@@ -804,7 +805,8 @@ mod tests {
 
     #[test]
     fn a_blunder_shows_what_happens_and_the_better_line() {
-        let (mut screen, data) = reviewed_fools_mate();
+        let (mut screen, data) =
+            reviewed_fools_mate("a_blunder_shows_what_happens_and_the_better_line");
         screen.cursor = 3;
 
         let shown = text(&screen.detail_lines(&data));
@@ -822,7 +824,8 @@ mod tests {
 
     #[test]
     fn playing_through_a_line_steps_the_board_along_it() {
-        let (mut screen, _data) = reviewed_fools_mate();
+        let (mut screen, _data) =
+            reviewed_fools_mate("playing_through_a_line_steps_the_board_along_it");
         screen.cursor = 3;
 
         screen.start_explore(Branch::Better);
