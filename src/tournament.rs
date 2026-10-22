@@ -501,7 +501,7 @@ pub fn run_tournament(mut config: TournamentConfig) {
                     break;
                 }
 
-                let e1_is_white = game_idx % 2 == 0;
+                let e1_is_white = game_idx.is_multiple_of(2);
                 let (white_clock, black_clock) = if e1_is_white {
                     (config.e1_clock, config.e2_clock)
                 } else {

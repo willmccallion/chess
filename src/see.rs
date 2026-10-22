@@ -265,7 +265,7 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
         if swap < i32::from(result) {
             break;
         }
-        occupied ^= attacker_bb & attacker_bb.wrapping_neg();
+        occupied ^= attacker_bb.isolate_lowest_one();
 
         if matches!(kind, PieceKind::Pawn | PieceKind::Bishop | PieceKind::Queen) {
             attackers |= magics::get_bishop_attacks(to, occupied) & bishops_queens;

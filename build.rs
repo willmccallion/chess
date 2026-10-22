@@ -1,7 +1,7 @@
 use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 type Bitboard = u64;
 
@@ -125,7 +125,7 @@ fn find_magic_for_sq(sq: usize, is_rook: bool, rng: &mut Rng) -> (u64, Vec<u64>)
 }
 
 /// Generates all attack tables and writes them to a single .rs file.
-fn generate_attacks_source(out_dir: &PathBuf) {
+fn generate_attacks_source(out_dir: &Path) {
     let dest_path = out_dir.join("generated_attacks.rs");
     let mut f = BufWriter::new(File::create(&dest_path).unwrap());
 
@@ -213,7 +213,7 @@ fn generate_attacks_source(out_dir: &PathBuf) {
 
     writeln!(
         f,
-        "\npub const ROOK_ATTACKS: [Bitboard; {}] = [",
+        "\npub static ROOK_ATTACKS: [Bitboard; {}] = [",
         rook_attack_table.len()
     )
     .unwrap();
@@ -227,7 +227,7 @@ fn generate_attacks_source(out_dir: &PathBuf) {
 
     writeln!(
         f,
-        "\npub const BISHOP_ATTACKS: [Bitboard; {}] = [",
+        "\npub static BISHOP_ATTACKS: [Bitboard; {}] = [",
         bishop_attack_table.len()
     )
     .unwrap();
@@ -245,7 +245,7 @@ fn generate_attacks_source(out_dir: &PathBuf) {
     );
 }
 
-fn generate_zobrist_keys(out_dir: &PathBuf) {
+fn generate_zobrist_keys(out_dir: &Path) {
     let dest_path = out_dir.join("generated_zobrist.rs");
     let mut f = BufWriter::new(File::create(&dest_path).unwrap());
 

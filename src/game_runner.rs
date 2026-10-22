@@ -158,7 +158,7 @@ pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConf
 
         // Send position
         let start_fen_arg = if is_startpos { None } else { Some(fen_str) };
-        if let Err(_) = engine.set_position(start_fen_arg, &moves) {
+        if engine.set_position(start_fen_arg, &moves).is_err() {
             let result = if board.turn == Color::White {
                 GameResult::BlackWin
             } else {

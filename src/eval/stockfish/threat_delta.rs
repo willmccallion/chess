@@ -328,7 +328,7 @@ mod tests {
                 for _ply in 0..120 {
                     let mut moves = MoveList::new();
                     board.generate_legal_moves(&mut moves);
-                    if moves.len() == 0 {
+                    if moves.is_empty() {
                         break;
                     }
                     let m = moves.get(rng.gen_range(0..moves.len()));

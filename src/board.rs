@@ -1096,7 +1096,7 @@ impl Board {
                 } else {
                     to as i32 + 8
                 };
-                if cap_sq < 0 || cap_sq >= 64 {
+                if !(0..64).contains(&cap_sq) {
                     return false;
                 }
                 let enemy_pawn = if self.turn == Color::White {
@@ -1432,17 +1432,17 @@ impl Board {
 
         if m.capture {
             let captured = u.captured_piece;
-            let cap_sq;
-            if m.en_passant {
+
+            let cap_sq = if m.en_passant {
                 self.piece_on[to] = Piece::Empty;
-                cap_sq = if self.turn == Color::White {
+                if self.turn == Color::White {
                     to - 8
                 } else {
                     to + 8
-                };
+                }
             } else {
-                cap_sq = to;
-            }
+                to
+            };
 
             self.piece_on[cap_sq] = captured;
             if !captured.is_empty() {

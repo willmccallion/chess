@@ -401,6 +401,12 @@ impl QMovePicker {
     }
 }
 
+impl Default for QMovePicker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -173,7 +173,7 @@ impl LayerStack {
         for (out, (bias, row)) in fc1.iter_mut().zip(
             self.fc1_biases
                 .iter()
-                .zip(self.fc1_weights.chunks_exact(FC1_INPUTS_PADDED)),
+                .zip(self.fc1_weights.as_chunks::<FC1_INPUTS_PADDED>().0),
         ) {
             *out = clipped_relu(bias + dot_u8_i8(&hidden, row));
         }

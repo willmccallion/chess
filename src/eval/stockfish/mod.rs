@@ -271,15 +271,15 @@ mod tests {
             assert_same(threats[p], &big_threats[p], "big threats", &fen);
         }
         let small = stack.small(&nets.small.transformer, position);
-        for p in 0..2 {
-            assert_same(small.psq[p], &small_psq[p], "small psq", &fen);
+        for (p, expected) in small_psq.iter().enumerate() {
+            assert_same(small.psq[p], expected, "small psq", &fen);
         }
     }
 
     fn random_move(board: &mut Board, rng: &mut StdRng) -> Option<crate::types::Move> {
         let mut moves = MoveList::new();
         board.generate_legal_moves(&mut moves);
-        (moves.len() > 0).then(|| moves.get(rng.gen_range(0..moves.len())))
+        (!moves.is_empty()).then(|| moves.get(rng.gen_range(0..moves.len())))
     }
 
     fn walk(board: &mut Board, depth: usize, rng: &mut StdRng) {

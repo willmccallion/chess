@@ -102,6 +102,12 @@ impl Histories {
     }
 }
 
+impl Default for Histories {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const CORRECTION_BITS: u32 = 14;
 const CORRECTION_ENTRIES: usize = 1 << CORRECTION_BITS;
 const CORRECTION_GRAIN: i32 = 256;
@@ -140,6 +146,12 @@ impl CorrectionHistory {
         let blended = (*entry * (CORRECTION_WEIGHT_SCALE - weight) + target * weight)
             / CORRECTION_WEIGHT_SCALE;
         *entry = blended.clamp(-limit, limit);
+    }
+}
+
+impl Default for CorrectionHistory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

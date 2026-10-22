@@ -263,7 +263,7 @@ impl TimeManager {
             return true;
         }
         if self.is_main_thread
-            && self.nodes % TIME_CHECK_INTERVAL == 0
+            && self.nodes.is_multiple_of(TIME_CHECK_INTERVAL)
             && self.control.elapsed_ms() >= self.control.hard_deadline_ms()
         {
             self.control.stop();

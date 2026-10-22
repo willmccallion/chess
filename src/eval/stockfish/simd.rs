@@ -147,7 +147,7 @@ pub fn update_rows<const N: usize, W: WeightRows<N> + ?Sized>(
 ) {
     let count = rows.row_count();
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    if N % TILE_LANES == 0 && adds.iter().chain(subs).all(|&row| row < count) {
+    if N.is_multiple_of(TILE_LANES) && adds.iter().chain(subs).all(|&row| row < count) {
         // SAFETY: AVX2 is enabled at compile time, every row is < row_count, and N is a
         // multiple of the tile width; reading and writing the same array is allowed.
         let base = acc.as_mut_ptr();
@@ -171,7 +171,7 @@ pub fn update_rows_from<const N: usize, W: WeightRows<N> + ?Sized>(
     subs: &[usize],
 ) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    if N % TILE_LANES == 0 && adds.iter().chain(subs).all(|&row| row < rows.row_count()) {
+    if N.is_multiple_of(TILE_LANES) && adds.iter().chain(subs).all(|&row| row < rows.row_count()) {
         // SAFETY: AVX2 is enabled at compile time, every row is < row_count, N is a multiple
         // of the tile width, and src and dst are distinct N-lane arrays.
         unsafe { update_rows_avx2(src.as_ptr(), dst.as_mut_ptr(), rows, adds, subs) };
@@ -234,7 +234,7 @@ pub fn pairwise_clipped_product(
 ) {
     let len = out.len().min(first.len()).min(second.len());
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    if len % 32 == 0 && threats.is_none_or(|(a, b)| a.len() >= len && b.len() >= len) {
+    if len.is_multiple_of(32) && threats.is_none_or(|(a, b)| a.len() >= len && b.len() >= len) {
         // SAFETY: AVX2 is enabled at compile time and every slice holds at least `len`
         // elements, a multiple of 32.
         unsafe { pairwise_clipped_product_avx2(first, second, threats, clip, &mut out[..len]) };
@@ -310,7 +310,7 @@ pub fn scramble_for_sparse(weights: &[i8], inputs: usize, outputs: usize) -> Vec
 /// from `scramble_for_sparse`; inputs must be at most 127.
 pub fn sparse_affine_16(input: &[u8], scrambled: &[i8], biases: &[i32; 16]) -> [i32; 16] {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-    if input.len() % 32 == 0
+    if input.len().is_multiple_of(32)
         && input.len() <= SPARSE_MAX_INPUTS
         && scrambled.len() >= input.len() * 16
     {
@@ -319,8 +319,8 @@ pub fn sparse_affine_16(input: &[u8], scrambled: &[i8], biases: &[i32; 16]) -> [
         return unsafe { sparse_affine_16_avx2(input, scrambled, biases) };
     }
     let mut out = *biases;
-    for (chunk, group) in input.chunks_exact(4).enumerate() {
-        if group == [0; 4] {
+    for (chunk, group) in input.as_chunks::<4>().0.iter().enumerate() {
+        if *group == [0; 4] {
             continue;
         }
         for (o, sum) in out.iter_mut().enumerate() {
