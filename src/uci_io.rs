@@ -7,16 +7,8 @@ pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
         return None;
     }
 
-    let f_file = (bytes[0] as char).to_ascii_lowercase() as u8 - b'a';
-    let f_rank = (bytes[1] as char) as u8 - b'1';
-    let t_file = (bytes[2] as char).to_ascii_lowercase() as u8 - b'a';
-    let t_rank = (bytes[3] as char) as u8 - b'1';
-    if f_file > 7 || f_rank > 7 || t_file > 7 || t_rank > 7 {
-        return None;
-    }
-
-    let from = f_rank * 8 + f_file;
-    let to = t_rank * 8 + t_file;
+    let from = square_index(bytes[0], bytes[1])?;
+    let to = square_index(bytes[2], bytes[3])?;
 
     let promo = if bytes.len() >= 5 {
         match (bytes[4] as char).to_ascii_lowercase() {
@@ -37,6 +29,13 @@ pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
         .iter()
         .find(|m| m.from == from && m.to == to && m.promotion == promo)
         .copied()
+}
+
+/// The 0..64 index of a square written as a file letter and rank digit, like `e` `4`.
+fn square_index(file: u8, rank: u8) -> Option<u8> {
+    let file = file.to_ascii_lowercase().checked_sub(b'a')?;
+    let rank = rank.checked_sub(b'1')?;
+    (file <= 7 && rank <= 7).then(|| rank * 8 + file)
 }
 
 pub fn format_uci(m: Move) -> String {
