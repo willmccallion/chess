@@ -156,6 +156,30 @@ fn parse_position(rest: &str) -> Result<Board, String> {
     Ok(board)
 }
 
+/// The time a `go` command gives the side to move, if any: its `movetime`,
+/// or a share of its clock.
+fn time_budget(go_args: &str, turn: Color, move_overhead_ms: i64) -> Option<TimeBudget> {
+    if let Some(movetime) = extract_i64(go_args, "movetime") {
+        let usable = (movetime - move_overhead_ms).max(1);
+        return Some(TimeBudget::fixed(usable as u64));
+    }
+    let tc = TimeControl {
+        wtime: extract_i64(go_args, "wtime").unwrap_or(0),
+        btime: extract_i64(go_args, "btime").unwrap_or(0),
+        winc: extract_i64(go_args, "winc").unwrap_or(0),
+        binc: extract_i64(go_args, "binc").unwrap_or(0),
+        movestogo: extract_i64(go_args, "movestogo").unwrap_or(0) as i32,
+        move_overhead_ms,
+    };
+    // A clock at or below zero still bounds the search: it moves at once.
+    let clock_key = if turn == Color::White {
+        "wtime"
+    } else {
+        "btime"
+    };
+    extract_i64(go_args, clock_key).map(|_| tc.budget(turn))
+}
+
 fn start_search(
     board: &Board,
     tt: &SharedTransTable,
@@ -168,24 +192,7 @@ fn start_search(
     let max_depth =
         extract_i64(go_args, "depth").map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
 
-    let tc = TimeControl {
-        wtime: extract_i64(go_args, "wtime").unwrap_or(0),
-        btime: extract_i64(go_args, "btime").unwrap_or(0),
-        winc: extract_i64(go_args, "winc").unwrap_or(0),
-        binc: extract_i64(go_args, "binc").unwrap_or(0),
-        movestogo: extract_i64(go_args, "movestogo").unwrap_or(0) as i32,
-        move_overhead_ms: options.move_overhead_ms,
-    };
-    let has_clock = tc.wtime > 0 || tc.btime > 0;
-
-    let budget = if let Some(movetime) = extract_i64(go_args, "movetime") {
-        let usable = (movetime - options.move_overhead_ms).max(1);
-        Some(TimeBudget::fixed(usable as u64))
-    } else if has_clock {
-        Some(tc.budget(board.turn))
-    } else {
-        None
-    };
+    let budget = time_budget(go_args, board.turn, options.move_overhead_ms);
 
     let (control, ponder_budget) = if is_ponder {
         (SearchControl::new(None), budget)
@@ -409,4 +416,35 @@ pub fn run_uci(eval: EvalOptions) {
         }
     }
     stop_search(&mut active, &mut threads, options.threads);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_clock_with_increment_still_times_the_search() {
+        let budget = time_budget("wtime 0 btime 0 winc 100 binc 100", Color::White, 10);
+
+        assert!(budget.is_some());
+    }
+
+    #[test]
+    fn a_negative_clock_still_times_the_search() {
+        let budget = time_budget("wtime -50 btime -50", Color::White, 10);
+
+        assert!(budget.is_some());
+    }
+
+    #[test]
+    fn a_go_without_clocks_is_untimed() {
+        assert_eq!(time_budget("depth 10", Color::White, 10), None);
+    }
+
+    #[test]
+    fn movetime_gives_its_time_less_the_overhead() {
+        let budget = time_budget("movetime 500", Color::Black, 10);
+
+        assert_eq!(budget, Some(TimeBudget::fixed(490)));
+    }
 }
