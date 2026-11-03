@@ -1,0 +1,17 @@
+[package]
+name = "chess-trainer"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[features]
+default = ["cuda"]
+# Train on the GPU; without it bullet falls back to a mock device that cannot train.
+cuda = ["bullet/cuda"]
+
+[dependencies]
+# Keep this revision in step with `bulletSrc` in ../flake.nix, which builds bullet-utils.
+bullet = { git = "https://github.com/jw1912/bullet", rev = "da426a49b2a4b79a55a87031cd51c89bdf1ff030", package = "bullet_lib" }
+chess = { path = "..", default-features = false }
+clap = { version = "4", features = ["derive"] }

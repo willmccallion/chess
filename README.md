@@ -229,6 +229,37 @@ Accumulators are updated lazily and incrementally: each move records its piece c
 python3 tools/nnue_check.py --stockfish "$STOCKFISH" --epd "$CHESS_BOOK_UHO" --count 3000
 ```
 
+### Our own network
+
+`--eval own` evaluates with a network trained from the engine's own self-play games, with nothing taken from Stockfish: a `(768 → 128)×2 → 1` perspective network (piece-square inputs, SCReLU) in the quantised format [bullet](https://github.com/jw1912/bullet) saves. The architecture and quantisation constants live in `src/eval/own/network.rs`, and the trainer reads them from there. The network file is read at runtime: `--own-net <file>` on the command line, the UCI option `OwnEvalFile`, or `$CHESS_NNUE_OWN` set at build time. Networks are kept out of git.
+
+Training happens in generations. Generation 0's games are played by the bootstrap evaluation; each later generation's games are played by the previous network. The trainer is a separate Cargo project in `trainer/` with its own dev shell, which has CUDA and `bullet-utils` (`nix develop .#trainer`, or `direnv allow` in `trainer/`). Both pin the same bullet revision.
+
+```bash
+# 1. Self-play positions as `<FEN> | <score> | <result>` lines (about 9M an hour on 28 threads)
+target/release/chess --eval bootstrap datagen --out data/gen0.txt --positions 30000000
+
+# 2. In the trainer shell: convert to bulletformat and shuffle
+bullet-utils convert --from text --input data/gen0.txt --output data/gen0.data
+bullet-utils shuffle --input data/gen0.data --output data/gen0-shuffled.data --mem-used-mb 16000
+
+# 3. Train; checkpoints go to trainer/checkpoints/<net-id>-<superbatch>/quantised.bin
+cd trainer && cargo run --release -- ../data/gen0-shuffled.data --net-id gen0
+
+# 4. Test the network against the previous generation's evaluator
+target/release/chess challenge target/release/chess target/release/chess \
+  --e1-option OwnBook=false --e1-option Evaluator=own \
+  --e1-option OwnEvalFile=trainer/checkpoints/gen0-40/quantised.bin \
+  --e2-option OwnBook=false --e2-option Evaluator=bootstrap \
+  --time 10000 --inc 100 --rounds 2000 --concurrency 8 --openings "$CHESS_BOOK_UHO"
+
+# 5. The next generation's games, played by the new network
+target/release/chess --eval own --own-net trainer/checkpoints/gen0-40/quantised.bin \
+  datagen --out data/gen1.txt --positions 50000000
+```
+
+`bullet-utils interleave` merges shuffled files, so a generation can also train on earlier generations' data.
+
 ---
 
 ## Acknowledgements

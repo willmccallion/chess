@@ -8,3 +8,5 @@ cutechess*
 results*
 .direnv/
 /data
+/trainer/target
+/trainer/checkpoints

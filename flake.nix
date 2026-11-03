@@ -78,10 +78,72 @@
           ];
 
           rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+
+          # Keep this revision in step with the bullet dependency in trainer/Cargo.toml.
+          bulletSrc = pkgs.fetchFromGitHub {
+            owner = "jw1912";
+            repo = "bullet";
+            rev = "da426a49b2a4b79a55a87031cd51c89bdf1ff030";
+            hash = "sha256-aCSHhe1TPNKnYz6m5E2XjN5MiSoNxq3XkN5fJOiVzE4=";
+          };
+
+          bulletUtils = pkgs.rustPlatform.buildRustPackage {
+            pname = "bullet-utils";
+            version = "0-unstable-2026-10-26";
+            src = bulletSrc;
+            cargoLock.lockFile = "${bulletSrc}/Cargo.lock";
+            cargoBuildFlags = [
+              "--package"
+              "bullet-utils"
+            ];
+            doCheck = false;
+          };
+
+          cudaPackages =
+            (import nixpkgs {
+              inherit system;
+              config.allowUnfreePredicate =
+                pkg:
+                builtins.elem (pkgs.lib.getName pkg) [
+                  "cuda_cccl"
+                  "cuda_cudart"
+                  "cuda_nvcc"
+                  "cuda_nvrtc"
+                  "libcublas"
+                ];
+            }).cudaPackages;
+
+          # The CUDA_PATH layout bullet's build script expects; libcuda is the link-time stub.
+          bulletCudaRoot = pkgs.runCommand "bullet-cuda-root" { } ''
+            mkdir -p $out/lib64
+            ln -s ${cudaPackages.cuda_cudart}/include $out/include
+            ln -s ${cudaPackages.cuda_cudart}/lib/stubs/libcuda.so $out/lib64/libcuda.so
+            ln -s ${cudaPackages.cuda_cudart}/lib/libcudart.so $out/lib64/libcudart.so
+            ln -s ${pkgs.lib.getLib cudaPackages.cuda_nvrtc}/lib/libnvrtc.so $out/lib64/libnvrtc.so
+            ln -s ${pkgs.lib.getLib cudaPackages.libcublas}/lib/libcublas.so $out/lib64/libcublas.so
+          '';
         in
         {
           packages = {
             inherit openings baronBook nets;
+            bullet-utils = bulletUtils;
+          };
+
+          trainerShell = pkgs.mkShell {
+            packages = [
+              rustToolchain
+              bulletUtils
+            ];
+
+            CUDA_PATH = "${bulletCudaRoot}";
+            # The NixOS driver's libcuda first, then the toolkit libraries bullet loads.
+            LD_LIBRARY_PATH = "/run/opengl-driver/lib:${
+              pkgs.lib.makeLibraryPath [
+                cudaPackages.cuda_cudart
+                (pkgs.lib.getLib cudaPackages.cuda_nvrtc)
+                (pkgs.lib.getLib cudaPackages.libcublas)
+              ]
+            }";
           };
 
           devShell = pkgs.mkShell {
@@ -111,6 +173,7 @@
       packages = forAllSystems (s: s.packages);
       devShells = forAllSystems (s: {
         default = s.devShell;
+        trainer = s.trainerShell;
       });
     };
 }
