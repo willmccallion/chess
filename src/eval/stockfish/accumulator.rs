@@ -353,8 +353,15 @@ impl AccumulatorStack {
         }
     }
 
+    /// Steps back a move. Past the first ply the stack recorded, as on a
+    /// board whose state was made mid-line, the position is one it never
+    /// held, so it is forgotten and refreshed when next evaluated.
     pub fn pop(&mut self) {
-        self.top = self.top.saturating_sub(1);
+        if self.top == 0 {
+            self.reset();
+        } else {
+            self.top -= 1;
+        }
     }
 
     /// Big-net sums of the current position.

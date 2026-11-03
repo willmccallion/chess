@@ -134,8 +134,15 @@ impl AccumulatorStack {
         record_piece_changes(before, m, &mut ply.changes);
     }
 
+    /// Steps back a move. Past the first ply the stack recorded, as on a
+    /// board whose state was made mid-line, the position is one it never
+    /// held, so it is forgotten and refreshed when next evaluated.
     pub fn pop_move(&mut self) {
-        self.top = self.top.saturating_sub(1);
+        if self.top == 0 {
+            self.reset();
+        } else {
+            self.top -= 1;
+        }
     }
 
     /// Accumulators of the current position, which is `position`.

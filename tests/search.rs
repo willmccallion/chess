@@ -1,5 +1,6 @@
 //! Search results on positions whose answer is known.
 
+use chess::analysis::{SearchLimit, Searcher};
 use chess::board::Board;
 use chess::eval::EvalOptions;
 use chess::search::{
@@ -8,7 +9,7 @@ use chess::search::{
 };
 use chess::search_params::SearchParams;
 use chess::tt::SharedTransTable;
-use chess::uci_io::format_uci;
+use chess::uci_io::{format_uci, parse_uci_move};
 
 fn load_stockfish_nets() {
     EvalOptions::built_in()
@@ -69,4 +70,62 @@ fn a_quiet_move_on_the_hundredth_half_move_draws() {
     let result = fixed_depth_search(&board(fen), 6, 1);
 
     assert_eq!(result.score, Some(Score::Centipawns(0)));
+}
+
+#[test]
+fn searching_a_stateless_board_matches_searching_a_stateful_one() {
+    load_stockfish_nets();
+    let in_check = "rnbqkbnr/ppp2ppp/8/1B1pp3/4P3/8/PPPP1PPP/RNBQK1NR b KQkq - 1 3";
+    let stateful = board(in_check);
+    let stateless = stateful.without_eval_state();
+
+    let with_state = fixed_depth_search(&stateful, 8, 1);
+    let without_state = fixed_depth_search(&stateless, 8, 1);
+
+    assert_eq!(
+        (
+            without_state.nodes,
+            without_state.score,
+            without_state.best_move.map(format_uci)
+        ),
+        (
+            with_state.nodes,
+            with_state.score,
+            with_state.best_move.map(format_uci)
+        ),
+        "stateless (left) vs stateful (right) search at depth 8"
+    );
+}
+
+#[test]
+fn reviewing_stateless_game_positions_matches_reviewing_stateful_ones() {
+    load_stockfish_nets();
+    let start = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
+    let game = ["e1g1", "f8c5", "d2d3", "d7d6", "c2c3", "c8g4"];
+    let review = |first: Board| {
+        let mut positions = vec![first];
+        for uci in game {
+            let mut next = positions.last().expect("non-empty").clone();
+            let m = parse_uci_move(&mut next, uci).expect("legal game move");
+            next.make_move(m);
+            positions.push(next);
+        }
+        let mut searcher = Searcher::new(1, 16);
+        positions
+            .iter()
+            .map(|b| {
+                let control = SearchControl::new(None);
+                let outcome = searcher.search(b, SearchLimit::Nodes(20_000), &control, &|_| {});
+                (outcome.score, outcome.best_move.map(format_uci))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let stateful = review(board(start));
+    let stateless = review(board(start).without_eval_state());
+
+    assert_eq!(
+        stateless, stateful,
+        "stateless (left) vs stateful (right) review of each position"
+    );
 }
