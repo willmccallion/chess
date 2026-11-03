@@ -7,7 +7,7 @@ use crate::search::{NodeLimit, SearchControl, SearchLimits, SearchThreads, searc
 use crate::search_params::SearchParams;
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
-use crate::types::{Color, Move, START_FEN};
+use crate::types::{Color, Move, MoveList, START_FEN};
 use crate::uci_io::{format_uci, parse_uci_move};
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -172,6 +172,40 @@ fn parse_position(rest: &str) -> Result<Board, String> {
     Ok(board)
 }
 
+/// The words of a `go` command other than `searchmoves`, which end its list.
+const GO_KEYWORDS: [&str; 11] = [
+    "ponder",
+    "wtime",
+    "btime",
+    "winc",
+    "binc",
+    "movestogo",
+    "depth",
+    "nodes",
+    "mate",
+    "movetime",
+    "infinite",
+];
+
+/// The legal moves listed after `searchmoves`, or `None` when `go` lists
+/// none, or none of them is legal in `board`.
+fn search_moves(go_args: &str, board: &Board) -> Option<MoveList> {
+    let listed = go_args
+        .split_whitespace()
+        .skip_while(|w| !w.eq_ignore_ascii_case("searchmoves"))
+        .skip(1)
+        .take_while(|w| !GO_KEYWORDS.iter().any(|k| w.eq_ignore_ascii_case(k)));
+    let mut board = board.clone();
+    let mut moves = MoveList::new();
+    for word in listed {
+        match parse_uci_move(&mut board, word) {
+            Some(m) => moves.push(m),
+            None => send(&format!("info string ignoring searchmove {word}")),
+        }
+    }
+    (!moves.is_empty()).then_some(moves)
+}
+
 /// The time a `go` command gives the side to move, if any: its `movetime`,
 /// or a share of its clock.
 fn time_budget(go_args: &str, turn: Color, move_overhead_ms: i64) -> Option<TimeBudget> {
@@ -226,6 +260,7 @@ fn start_search(
             let n = n.max(1) as u64;
             NodeLimit { soft: n, hard: n }
         }),
+        root_moves: search_moves(go_args, board),
     };
     let board = board.clone();
     let tt = tt.clone();
@@ -465,6 +500,32 @@ mod tests {
     #[test]
     fn a_go_without_clocks_is_untimed() {
         assert_eq!(time_budget("depth 10", Color::White, 10), None);
+    }
+
+    fn listed_search_moves(go_args: &str) -> Option<Vec<String>> {
+        let board = Board::from_fen(START_FEN).unwrap();
+        search_moves(go_args, &board)
+            .map(|ms| ms.as_slice().iter().map(|&m| format_uci(m)).collect())
+    }
+
+    #[test]
+    fn searchmoves_lists_its_moves_up_to_the_next_go_keyword() {
+        let listed = listed_search_moves("searchmoves e2e4 d2d4 depth 6");
+
+        assert_eq!(listed, Some(vec!["e2e4".to_string(), "d2d4".to_string()]));
+    }
+
+    #[test]
+    fn searchmoves_skips_moves_that_are_not_legal() {
+        assert_eq!(
+            listed_search_moves("searchmoves e2e5 g1f3"),
+            Some(vec!["g1f3".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_go_without_searchmoves_allows_every_root_move() {
+        assert_eq!(listed_search_moves("depth 6"), None);
     }
 
     #[test]

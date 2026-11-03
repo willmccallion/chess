@@ -78,6 +78,7 @@ impl Searcher {
             params: SearchParams::default(),
             wait_for_stop,
             nodes,
+            root_moves: None,
         };
         let last_pv = std::sync::Mutex::new(Vec::new());
         let reporter = |info: &IterationInfo| {

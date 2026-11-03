@@ -234,6 +234,7 @@ fn think(
         params: SearchParams::default(),
         wait_for_stop: false,
         nodes: Some(nodes),
+        root_moves: None,
     };
     let control = SearchControl::new(None);
     let result = search_reporting(board, tt, limits, threads, &control, &|_| {});

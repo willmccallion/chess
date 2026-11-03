@@ -306,3 +306,22 @@ fn go_infinite_holds_a_coach_move_until_stop() {
     );
     assert!(on_stop.is_ok(), "no bestmove after stop");
 }
+
+#[test]
+fn go_searchmoves_restricts_the_best_move() {
+    let mut engine = Engine::start();
+    engine.handshake();
+    engine.send("setoption name OwnBook value false");
+    engine.send("position startpos");
+
+    engine.send("go depth 6 searchmoves a2a3 h2h3");
+    let reply = engine
+        .read_until(is_bestmove, NET_LOAD_TIMEOUT)
+        .expect("bestmove");
+
+    let played = bestmove_of(&reply);
+    assert!(
+        ["a2a3", "h2h3"].contains(&played.as_str()),
+        "played {played}"
+    );
+}

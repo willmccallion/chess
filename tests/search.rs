@@ -9,7 +9,7 @@ use chess::search::{
 };
 use chess::search_params::SearchParams;
 use chess::tt::SharedTransTable;
-use chess::types::START_FEN;
+use chess::types::{MoveList, START_FEN};
 use chess::uci_io::{format_uci, parse_uci_move};
 use std::sync::Mutex;
 
@@ -39,6 +39,7 @@ fn fixed_depth_search_reporting(
         params: SearchParams::default(),
         wait_for_stop: false,
         nodes: None,
+        root_moves: None,
     };
     let control = SearchControl::new(None);
     search_reporting(
@@ -146,4 +147,30 @@ fn reported_nodes_include_helper_threads() {
         "last info nodes {reported} vs {} searched",
         result.nodes
     );
+}
+
+#[test]
+fn a_search_restricted_to_one_root_move_plays_it() {
+    load_stockfish_nets();
+    let mut start = board(START_FEN);
+    let mut only = MoveList::new();
+    only.push(parse_uci_move(&mut start, "a2a3").expect("legal"));
+    let limits = SearchLimits {
+        max_depth: 6,
+        params: SearchParams::default(),
+        wait_for_stop: false,
+        nodes: None,
+        root_moves: Some(only),
+    };
+
+    let result = search_reporting(
+        &start,
+        &SharedTransTable::new(16),
+        limits,
+        &mut SearchThreads::new(1),
+        &SearchControl::new(None),
+        &|_| {},
+    );
+
+    assert_eq!(result.best_move.map(format_uci), Some("a2a3".to_string()));
 }

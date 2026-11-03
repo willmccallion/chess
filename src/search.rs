@@ -155,6 +155,9 @@ pub struct SearchLimits {
     /// `go infinite` / `go ponder`: never return before `stop` (or `ponderhit` sets a budget).
     pub wait_for_stop: bool,
     pub nodes: Option<NodeLimit>,
+    /// `go searchmoves`: the only root moves to consider, each legal; every
+    /// legal move when `None`.
+    pub root_moves: Option<MoveList>,
 }
 
 pub struct SearchResult {
@@ -421,6 +424,8 @@ struct Search<'a> {
     root_best: Option<(Move, i32)>,
     /// Nodes searched under each root move during this `go`.
     root_move_nodes: Vec<(Move, u64)>,
+    /// The root moves `go searchmoves` allows, or `None` for all of them.
+    allowed_root_moves: Option<MoveList>,
     params: SearchParams,
     lmr: LmrTables,
 }
@@ -556,6 +561,11 @@ impl Search<'_> {
             },
             None => true,
         }
+    }
+
+    fn is_allowed_root_move(&self, m: Move) -> bool {
+        self.allowed_root_moves
+            .is_none_or(|allowed| allowed.as_slice().iter().any(|&a| same_move(a, m)))
     }
 
     fn record_root_move_nodes(&mut self, m: Move, nodes: u64) {
@@ -1198,7 +1208,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         let Some(m) = picker.next(&s.board, &ordering) else {
             break;
         };
-        if Some(m) == excluded_move {
+        if Some(m) == excluded_move || (is_root && !s.is_allowed_root_move(m)) {
             continue;
         }
         let is_quiet = !m.capture && m.promotion.is_none();
@@ -1517,6 +1527,11 @@ fn iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) -> Iter
     }
 }
 
+/// Whether `a` and `b` are the same move, whatever flags each carries.
+fn same_move(a: Move, b: Move) -> bool {
+    a.from == b.from && a.to == b.to && a.promotion == b.promotion
+}
+
 fn legal_moves(board: &Board) -> MoveList {
     let mut moves = MoveList::new();
     board.clone().generate_legal_moves(&mut moves);
@@ -1545,6 +1560,7 @@ fn iterative_deepening(
         seldepth: 0,
         root_best: None,
         root_move_nodes: Vec::new(),
+        allowed_root_moves: limits.root_moves,
         params,
         lmr: LmrTables::new(&params),
     };
@@ -1651,7 +1667,7 @@ pub fn search_reporting(
 ) -> SearchResult {
     tt.tick_age();
 
-    let root_moves = legal_moves(board);
+    let root_moves = limits.root_moves.unwrap_or_else(|| legal_moves(board));
     if root_moves.is_empty() {
         if limits.wait_for_stop {
             wait_until_released(control);
