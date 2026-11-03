@@ -1,5 +1,6 @@
 use crate::board::Board;
-use crate::types::{BK_CASTLE, BQ_CASTLE, Color, NO_SQ, Piece, WK_CASTLE, WQ_CASTLE};
+use crate::magics;
+use crate::types::{BK_CASTLE, BQ_CASTLE, Color, NO_SQ, Piece, PieceKind, WK_CASTLE, WQ_CASTLE};
 
 pub fn parse_fen(fen: &str) -> Result<Board, String> {
     let mut b = Board::empty();
@@ -12,29 +13,7 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
     let halfmove = parts.next().unwrap_or("0");
     let fullmove = parts.next().unwrap_or("1");
 
-    let mut rank = 7;
-    let mut file = 0;
-    for ch in placement.chars() {
-        match ch {
-            '/' => {
-                rank -= 1;
-                file = 0;
-            }
-            '1'..='8' => {
-                file += (ch as u8 - b'0') as i32;
-            }
-            c if c.is_ascii_alphabetic() => {
-                if !(0..8).contains(&file) || !(0..8).contains(&rank) {
-                    return Err("bad board in FEN".into());
-                }
-                let sq = (rank * 8 + file) as usize;
-                let piece = Piece::from(c);
-                b.place_piece(piece, sq);
-                file += 1;
-            }
-            _ => return Err("bad char in placement".into()),
-        }
-    }
+    place_pieces(&mut b, placement)?;
 
     b.turn = match side {
         "w" => Color::White,
@@ -55,32 +34,84 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
         }
     }
 
-    if ep == "-" {
-        b.en_passant_sq = NO_SQ;
+    let ep_sq = if ep == "-" {
+        None
     } else {
-        let bytes = ep.as_bytes();
-        if bytes.len() != 2 {
-            return Err("bad ep".into());
-        }
-        let f = (bytes[0] as char).to_ascii_lowercase() as u8 - b'a';
-        let r = (bytes[1] as char) as u8 - b'1';
-
-        if f > 7 || r > 7 {
-            return Err("bad ep coord".into());
-        }
-
-        b.en_passant_sq = (r as i32) * 8 + (f as i32);
-    }
+        Some(parse_square(ep).ok_or_else(|| format!("bad en-passant square {ep:?}"))?)
+    };
 
     b.halfmove_clock = halfmove.parse().unwrap_or(0);
     b.fullmove_number = fullmove.parse().unwrap_or(1);
 
     b.rebuild_derived();
     validate_kings(&b)?;
+    b.en_passant_sq = ep_sq
+        .filter(|&sq| is_capturable_en_passant(&b, sq))
+        .unwrap_or(NO_SQ);
     b.recompute_zobrist();
     b.history.push(b.zobrist);
 
     Ok(b)
+}
+
+/// Places the pieces of a FEN placement field: eight ranks from the
+/// eighth down, each of eight squares.
+fn place_pieces(b: &mut Board, placement: &str) -> Result<(), String> {
+    let ranks: Vec<&str> = placement.split('/').collect();
+    if ranks.len() != 8 {
+        return Err(format!("placement has {} ranks, not 8", ranks.len()));
+    }
+    for (rank, text) in (0..8).rev().zip(ranks) {
+        let mut file = 0;
+        for c in text.chars() {
+            if let Some(empty) = c.to_digit(10).filter(|n| (1..=8).contains(n)) {
+                file += empty as usize;
+                continue;
+            }
+            let piece = Piece::from_fen_char(c).ok_or_else(|| format!("bad piece letter {c:?}"))?;
+            if file >= 8 {
+                return Err(format!("rank {} has more than 8 squares", rank + 1));
+            }
+            b.place_piece(piece, rank * 8 + file);
+            file += 1;
+        }
+        if file != 8 {
+            return Err(format!("rank {} has {file} squares, not 8", rank + 1));
+        }
+    }
+    Ok(())
+}
+
+/// The square a coordinate such as `e3` names.
+fn parse_square(text: &str) -> Option<i32> {
+    let mut chars = text.chars();
+    let (file, rank) = (chars.next()?, chars.next()?);
+    if chars.next().is_some() {
+        return None;
+    }
+    let file = "abcdefgh".find(file.to_ascii_lowercase())?;
+    let rank = "12345678".find(rank)?;
+    Some((rank * 8 + file) as i32)
+}
+
+/// Whether the side to move can capture en passant on `sq`: the enemy pawn
+/// that just stepped two squares stands in front of it, it and the square
+/// the pawn left are empty, and a pawn of the side to move attacks it.
+/// Like Stockfish, any other en-passant square in a FEN is dropped.
+fn is_capturable_en_passant(b: &Board, sq: i32) -> bool {
+    let (ep_rank, pushed_pawn, origin, attackers) = match b.turn {
+        Color::White => (5, sq - 8, sq + 8, magics::BLACK_PAWN_ATTACKS[sq as usize]),
+        Color::Black => (2, sq + 8, sq - 8, magics::WHITE_PAWN_ATTACKS[sq as usize]),
+    };
+    if sq / 8 != ep_rank {
+        return false;
+    }
+    let mover_pawn = Piece::from_kind(PieceKind::Pawn, b.turn.other());
+    let capturer_pawns = b.piece_bb[Piece::from_kind(PieceKind::Pawn, b.turn).index()];
+    b.piece_on[pushed_pawn as usize] == mover_pawn
+        && b.piece_on[sq as usize].is_empty()
+        && b.piece_on[origin as usize].is_empty()
+        && attackers & capturer_pawns != 0
 }
 
 /// Each side needs exactly one king, and the side that just moved cannot be in check.
@@ -189,5 +220,41 @@ mod tests {
     fn round_trips_a_legal_position() {
         let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
         assert_eq!(to_fen(&parse_fen(fen).unwrap()), fen);
+    }
+
+    #[test]
+    fn drops_an_en_passant_square_no_pawn_can_capture_on() {
+        let board = parse_fen("4k3/8/8/3P4/8/8/8/4K3 w - e6 0 1").unwrap();
+
+        assert_eq!(board.en_passant_sq, NO_SQ);
+    }
+
+    #[test]
+    fn keeps_an_en_passant_square_a_pawn_can_capture_on() {
+        let fen = "4k3/8/8/3Pp3/8/8/8/4K3 w - e6 0 1";
+
+        assert_eq!(to_fen(&parse_fen(fen).unwrap()), fen);
+    }
+
+    #[test]
+    fn rejects_an_en_passant_square_off_the_board_without_panicking() {
+        let parsed = std::panic::catch_unwind(|| parse_fen("4k3/8/8/8/8/8/8/4K3 w - e0 0 1"));
+
+        assert!(matches!(parsed, Ok(Err(_))));
+    }
+
+    #[test]
+    fn rejects_an_unknown_piece_letter() {
+        assert!(parse_fen("4k3/8/8/8/8/8/8/4KX2 w - - 0 1").is_err());
+    }
+
+    #[test]
+    fn rejects_a_placement_without_eight_ranks() {
+        assert!(parse_fen("4k3/8/8/8/8/8/4K3 w - - 0 1").is_err());
+    }
+
+    #[test]
+    fn rejects_a_rank_without_eight_squares() {
+        assert!(parse_fen("4k3/8/8/8/7/8/8/4K3 w - - 0 1").is_err());
     }
 }

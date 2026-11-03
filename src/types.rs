@@ -128,9 +128,10 @@ impl Piece {
     }
 }
 
-impl From<char> for Piece {
-    fn from(c: char) -> Self {
-        match c {
+impl Piece {
+    /// The piece a FEN placement letter names, if it names one.
+    pub const fn from_fen_char(c: char) -> Option<Self> {
+        Some(match c {
             'P' => Piece::WP,
             'N' => Piece::WN,
             'B' => Piece::WB,
@@ -143,8 +144,8 @@ impl From<char> for Piece {
             'r' => Piece::BR,
             'q' => Piece::BQ,
             'k' => Piece::BK,
-            _ => Piece::Empty,
-        }
+            _ => return None,
+        })
     }
 }
 
