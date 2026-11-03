@@ -55,6 +55,9 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 pub struct SearchControl {
     stop: AtomicBool,
     start: Instant,
+    /// When the clock started, in ms after `start`: later than 0 for a
+    /// search that ran untimed until `ponderhit`.
+    clock_start_ms: AtomicU64,
     soft_deadline_ms: AtomicU64,
     hard_deadline_ms: AtomicU64,
     /// Nodes the search's threads have added so far, each in chunks of
@@ -68,6 +71,7 @@ impl SearchControl {
         Arc::new(Self {
             stop: AtomicBool::new(false),
             start: Instant::now(),
+            clock_start_ms: AtomicU64::new(0),
             soft_deadline_ms: AtomicU64::new(soft),
             hard_deadline_ms: AtomicU64::new(hard),
             shared_nodes: AtomicU64::new(0),
@@ -85,14 +89,29 @@ impl SearchControl {
     /// Starts the clock for a search that was running untimed (`ponderhit`).
     pub fn set_budget_from_now(&self, budget: TimeBudget) {
         let now = self.elapsed_ms();
+        self.clock_start_ms.store(now, Ordering::Relaxed);
         self.soft_deadline_ms
             .store(now + budget.soft_ms, Ordering::Relaxed);
+        // Release: a search that sees the deadline sees the start and soft
+        // deadline stored before it.
         self.hard_deadline_ms
-            .store(now + budget.hard_ms, Ordering::Relaxed);
+            .store(now + budget.hard_ms, Ordering::Release);
     }
 
     fn is_timed(&self) -> bool {
-        self.hard_deadline_ms.load(Ordering::Relaxed) != NO_DEADLINE
+        self.hard_deadline_ms.load(Ordering::Acquire) != NO_DEADLINE
+    }
+
+    /// Milliseconds since the clock started.
+    fn clock_ms(&self) -> u64 {
+        self.elapsed_ms()
+            .saturating_sub(self.clock_start_ms.load(Ordering::Relaxed))
+    }
+
+    /// The soft time budget, measured from when the clock started.
+    fn soft_budget_ms(&self) -> u64 {
+        self.soft_deadline_ms()
+            .saturating_sub(self.clock_start_ms.load(Ordering::Relaxed))
     }
 
     /// `go movetime`: use the whole budget instead of stopping between iterations.
@@ -328,13 +347,12 @@ impl TimeManager {
         } else {
             1.0
         };
-        let target = self.control.soft_deadline_ms() as f64
+        let target = self.control.soft_budget_ms() as f64
             * stability_scale
             * node_share_scale(iteration.best_move_node_share)
             * score_drop_scale(iteration.score_drop);
-        let elapsed = self.control.elapsed_ms();
-        elapsed as f64 >= target * NEW_ITERATION_FRACTION
-            || elapsed >= self.control.hard_deadline_ms()
+        self.control.clock_ms() as f64 >= target * NEW_ITERATION_FRACTION
+            || self.control.elapsed_ms() >= self.control.hard_deadline_ms()
     }
 }
 
@@ -1716,5 +1734,73 @@ pub fn search_reporting(
         ponder_move,
         nodes,
         score: main.score.map(Score::from_search),
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    /// An untimed search's control whose clock read `ms` when it began.
+    fn untimed_control_started_ms_ago(ms: u64) -> SearchControl {
+        let control = Arc::into_inner(SearchControl::new(None)).expect("sole owner");
+        SearchControl {
+            start: Instant::now() - Duration::from_millis(ms),
+            ..control
+        }
+    }
+
+    fn iteration(best_move_node_share: f64, score_drop: i32) -> IterationSummary {
+        IterationSummary {
+            best_move: Some(Move::quiet(12, 28)),
+            best_move_node_share,
+            score_drop,
+        }
+    }
+
+    const BUDGET: TimeBudget = TimeBudget {
+        soft_ms: 1000,
+        hard_ms: 4000,
+    };
+    const PONDER_MS: u64 = 8000;
+
+    #[test]
+    fn a_fresh_search_keeps_iterating_right_after_it_starts() {
+        let control = untimed_control_started_ms_ago(0);
+        control.set_budget_from_now(BUDGET);
+        let mut tm = TimeManager::new(Arc::new(control), true, None);
+
+        let stop = tm.should_stop_iterating(10, &iteration(0.9, 0));
+
+        assert!(!stop);
+    }
+
+    #[test]
+    fn a_search_keeps_iterating_right_after_ponderhit() {
+        let control = untimed_control_started_ms_ago(PONDER_MS);
+        control.set_budget_from_now(BUDGET);
+        let mut tm = TimeManager::new(Arc::new(control), true, None);
+
+        let stop = tm.should_stop_iterating(10, &iteration(0.9, 0));
+
+        assert!(
+            !stop,
+            "stopped right after ponderhit with a 1000 ms soft budget"
+        );
+    }
+
+    #[test]
+    fn a_search_stops_iterating_three_soft_budgets_after_ponderhit() {
+        let mut control = untimed_control_started_ms_ago(PONDER_MS);
+        control.set_budget_from_now(BUDGET);
+        control.start -= Duration::from_millis(3 * BUDGET.soft_ms);
+        let mut tm = TimeManager::new(Arc::new(control), true, None);
+
+        let stop = tm.should_stop_iterating(10, &iteration(0.0, SCORE_DROP_CAP));
+
+        assert!(
+            stop,
+            "still iterating 3000 ms after ponderhit with a 1000 ms soft budget"
+        );
     }
 }
