@@ -385,6 +385,19 @@ fn side_to_move_in_check(board: &Board) -> bool {
     board.is_square_attacked(king_sq, board.turn.other())
 }
 
+/// True when the fifty-move rule ends the game at `board`: a hundred
+/// half-moves without a capture or pawn move, unless the side to move is
+/// checkmated, which the mate decides.
+fn is_fifty_move_draw(board: &Board) -> bool {
+    board.halfmove_clock >= 100 && !(side_to_move_in_check(board) && has_no_legal_move(board))
+}
+
+fn has_no_legal_move(board: &Board) -> bool {
+    let mut moves = MoveList::new();
+    board.generate_legal_moves(&mut moves);
+    moves.is_empty()
+}
+
 /// Makes `m` if it is legal in `pos`.
 fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
     let info = pos.legality_info()?;
@@ -965,7 +978,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
     let is_root = s.ply == 0;
     if !is_root {
-        if s.board.is_repetition(s.ply) || s.board.halfmove_clock >= 100 {
+        if s.board.is_repetition(s.ply) || is_fifty_move_draw(&s.board) {
             return DRAW_SCORE;
         }
         if s.ply >= MAX_PLY - 1 {
