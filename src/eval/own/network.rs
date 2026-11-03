@@ -14,8 +14,9 @@ pub const QA: i16 = 255;
 pub const QB: i16 = 64;
 const QA_I32: i32 = QA as i32;
 const QB_I32: i32 = QB as i32;
-/// Centipawns per unit of the network's output, the trainer's `eval_scale`.
-pub const EVAL_SCALE: i32 = 400;
+/// Centipawns per unit of the network's output, the trainer's `eval_scale`. Chosen so the
+/// network's centipawns match Stockfish 18's, which the search's margins were tuned for.
+pub const EVAL_SCALE: i32 = 115;
 
 /// Bullet clips every weight to ±1.98, so quantised weights stay within ±2 × their factor.
 const MAX_FEATURE_WEIGHT: i32 = 2 * QA_I32;
