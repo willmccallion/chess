@@ -1,12 +1,12 @@
 use crate::board::Board;
 use crate::polyglot_zobrist;
-use crate::types::Move;
+use crate::types::{Move, MoveList, Piece, PieceKind};
 use crate::uci_io::format_uci;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 // A simple random number generator
 struct Rng(u64);
@@ -38,52 +38,29 @@ pub struct BookEntry {
 }
 
 impl BookEntry {
-    // Polyglot move encoding is different from the engine's.
-    fn to_move(self) -> Option<Move> {
-        use crate::types::{Move, PieceKind};
-
-        let from_sq = ((self.raw_move >> 6) & 0x3F) as u8;
-        let mut to_sq = (self.raw_move & 0x3F) as u8;
-        let promo_piece = (self.raw_move >> 12) & 0x7;
-
-        // Remap Polyglot castling encodings:
-        // e1->h1 (4->7)  => e1->g1 (4->6)
-        // e1->a1 (4->0)  => e1->c1 (4->2)
-        // e8->h8 (60->63)=> e8->g8 (60->62)
-        // e8->a8 (60->56)=> e8->c8 (60->58)
-        let mut is_castle = false;
-        match (from_sq, to_sq) {
-            (4, 7) => {
-                to_sq = 6;
-                is_castle = true;
-            } // white O-O
-            (4, 0) => {
-                to_sq = 2;
-                is_castle = true;
-            } // white O-O-O
-            (60, 63) => {
-                to_sq = 62;
-                is_castle = true;
-            } // black O-O
-            (60, 56) => {
-                to_sq = 58;
-                is_castle = true;
-            } // black O-O-O
-            _ => {}
-        }
-
-        let promo_kind = match promo_piece {
+    /// The legal move in `b` this entry names, if `b` has one: Polyglot
+    /// writes castling as the king moving onto its own rook.
+    fn legal_move(self, b: &Board, legal: &[Move]) -> Option<Move> {
+        let from = ((self.raw_move >> 6) & 0x3F) as u8;
+        let to = (self.raw_move & 0x3F) as u8;
+        let promotion = match (self.raw_move >> 12) & 0x7 {
             1 => Some(PieceKind::Knight),
             2 => Some(PieceKind::Bishop),
             3 => Some(PieceKind::Rook),
             4 => Some(PieceKind::Queen),
             _ => None,
         };
-
-        let mut m = Move::quiet(from_sq, to_sq);
-        m.promotion = promo_kind;
-        m.castle = is_castle;
-        Some(m)
+        let castles = b.piece_on[from as usize] == Piece::from_kind(PieceKind::King, b.turn)
+            && b.piece_on[to as usize] == Piece::from_kind(PieceKind::Rook, b.turn);
+        let to = match (castles, to > from) {
+            (false, _) => to,
+            (true, true) => from + 2,
+            (true, false) => from - 2,
+        };
+        legal
+            .iter()
+            .find(|m| m.from == from && m.to == to && m.promotion == promotion)
+            .copied()
     }
 }
 
@@ -192,16 +169,23 @@ pub struct WeightedMove {
     pub weight: u16,
 }
 
-/// The book's moves for `b`, without printing anything; empty when there is no book.
-pub fn book_moves(b: &Board) -> Vec<WeightedMove> {
-    let Ok((book, _)) = load_book() else {
-        return Vec::new();
-    };
+/// The book's legal moves for `b` with their weights, without printing
+/// anything; empty when there is no book.
+pub fn legal_book_moves(b: &Board) -> Vec<WeightedMove> {
+    load_book()
+        .as_ref()
+        .map_or_else(|_| Vec::new(), |(book, _)| legal_moves_in(book, b))
+}
+
+fn legal_moves_in(book: &OpeningBook, b: &Board) -> Vec<WeightedMove> {
+    let mut legal = MoveList::new();
+    b.generate_legal_moves(&mut legal);
     let key = polyglot_zobrist::calculate_key(b);
     book.find_entries(key)
         .iter()
         .filter_map(|e| {
-            e.to_move().map(|m| WeightedMove {
+            let m = e.legal_move(b, legal.as_slice())?;
+            Some(WeightedMove {
                 m,
                 weight: e.weight,
             })
@@ -209,49 +193,83 @@ pub fn book_moves(b: &Board) -> Vec<WeightedMove> {
         .collect()
 }
 
-/// The book's moves for `b` as legal moves (with their capture and castling flags set).
-pub fn legal_book_moves(b: &Board) -> Vec<WeightedMove> {
-    let mut legal = crate::types::MoveList::new();
-    b.generate_legal_moves(&mut legal);
-    book_moves(b)
-        .into_iter()
-        .filter_map(|w| {
-            legal
-                .as_slice()
-                .iter()
-                .find(|m| m.from == w.m.from && m.to == w.m.to && m.promotion == w.m.promotion)
-                .map(|&m| WeightedMove {
-                    m,
-                    weight: w.weight,
-                })
-        })
-        .collect()
+/// A book move for UCI play, chosen by weight among the legal ones.
+pub fn get_book_move(b: &Board) -> Option<String> {
+    let moves = legal_moves_in(get_book()?, b);
+    let total_weight: u32 = moves.iter().map(|w| u32::from(w.weight)).sum();
+    let chosen = if total_weight == 0 {
+        moves.first()?
+    } else {
+        let roll = get_rng()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .rand() as u32;
+        pick_by_weight(&moves, roll % total_weight)?
+    };
+    println!("info string Playing book move.");
+    Some(format_uci(chosen.m))
 }
 
-pub fn get_book_move(b: &Board) -> Option<String> {
-    if let Some(book) = get_book() {
-        let key = polyglot_zobrist::calculate_key(b);
-        let entries = book.find_entries(key);
-
-        if entries.is_empty() {
-            return None;
+/// The move whose share of the summed weights covers `roll`.
+fn pick_by_weight(moves: &[WeightedMove], mut roll: u32) -> Option<&WeightedMove> {
+    for w in moves {
+        let weight = u32::from(w.weight);
+        if roll < weight {
+            return Some(w);
         }
-
-        let total_weight: u32 = entries.iter().map(|e| e.weight as u32).sum();
-        if total_weight == 0 {
-            return entries.first()?.to_move().map(format_uci);
-        }
-
-        let mut rng = get_rng().lock().unwrap();
-        let mut random_weight = rng.rand() as u32 % total_weight;
-
-        for entry in entries {
-            if random_weight < entry.weight as u32 {
-                println!("info string Playing book move.");
-                return entry.to_move().map(format_uci);
-            }
-            random_weight -= entry.weight as u32;
-        }
+        roll -= weight;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decoded(fen: &str, from: u16, to: u16) -> Option<String> {
+        let board = Board::from_fen(fen).unwrap();
+        let mut legal = MoveList::new();
+        board.generate_legal_moves(&mut legal);
+        let entry = BookEntry {
+            key: 0,
+            raw_move: (from << 6) | to,
+            weight: 1,
+            _learn: 0,
+        };
+        entry.legal_move(&board, legal.as_slice()).map(format_uci)
+    }
+
+    #[test]
+    fn a_rook_move_from_e1_to_h1_stays_a_rook_move() {
+        assert_eq!(
+            decoded("7k/8/8/8/8/8/K7/4R3 w - - 0 1", 4, 7),
+            Some("e1h1".into())
+        );
+    }
+
+    #[test]
+    fn a_king_onto_its_own_rook_is_castling() {
+        let castled = decoded("4k3/8/8/8/8/8/8/4K2R w K - 0 1", 4, 7);
+
+        assert_eq!(castled, Some("e1g1".into()));
+    }
+
+    #[test]
+    fn an_illegal_book_move_decodes_to_none() {
+        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+        assert_eq!(decoded(fen, 8, 32), None);
+    }
+
+    #[test]
+    fn the_roll_picks_the_move_whose_weight_covers_it() {
+        let moves = [1, 3].map(|weight| WeightedMove {
+            m: Move::quiet(12, 28),
+            weight,
+        });
+
+        let picked = [0, 1, 3].map(|roll| pick_by_weight(&moves, roll).map(|w| w.weight));
+
+        assert_eq!(picked, [Some(1), Some(3), Some(3)]);
+    }
 }

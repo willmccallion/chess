@@ -11,7 +11,7 @@ use crate::coach::rating::Elo;
 use crate::coach::review::AnalysedPosition;
 use crate::coach::srs::{Schedule, UnixTime};
 use crate::coach::store::{AttemptRecord, GameId, GameRecord, Store, TrainingItem};
-use crate::opening_book::book_moves;
+use crate::opening_book::legal_book_moves;
 use crate::types::Move;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -35,7 +35,7 @@ pub struct CoachData {
 
 /// Whether `m` is in the opening book here.
 pub fn is_book(board: &Board, m: Move) -> bool {
-    book_moves(board)
+    legal_book_moves(board)
         .iter()
         .any(|w| w.m.from == m.from && w.m.to == m.to && w.m.promotion == m.promotion)
 }
