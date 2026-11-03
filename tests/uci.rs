@@ -171,12 +171,12 @@ fn legal_uci_moves(fen: &str) -> Vec<String> {
     moves.as_slice().iter().map(|&m| format_uci(m)).collect()
 }
 
-/// A copy of the engine with a Polyglot book of `entries` (key, raw move) beside it.
+/// The engine run from a directory whose `moves/book.bin` is a Polyglot
+/// book of `entries` (key, raw move). Running a copy of the binary instead
+/// races other tests' spawns into ETXTBSY.
 fn engine_with_book(name: &str, entries: &mut [(u64, u16)]) -> Engine {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::create_dir_all(dir.join("moves")).expect("book dir");
-    let exe = dir.join("chess");
-    std::fs::copy(env!("CARGO_BIN_EXE_chess"), &exe).expect("copy engine");
     entries.sort_unstable();
     let mut bytes = Vec::new();
     for &(key, raw_move) in entries.iter() {
@@ -186,7 +186,7 @@ fn engine_with_book(name: &str, entries: &mut [(u64, u16)]) -> Engine {
         bytes.extend_from_slice(&0u32.to_be_bytes());
     }
     std::fs::write(dir.join("moves/book.bin"), bytes).expect("write book");
-    Engine::start_binary(&exe, &dir)
+    Engine::start_binary(Path::new(env!("CARGO_BIN_EXE_chess")), &dir)
 }
 
 const fn polyglot_move(from: u16, to: u16) -> u16 {
