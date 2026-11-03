@@ -125,6 +125,9 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     gain[0] = val(captured_piece);
 
     occupied ^= 1u64 << from_sq;
+    if mov.en_passant {
+        occupied ^= 1u64 << en_passant_victim(b, to_sq);
+    }
 
     loop {
         current_turn = current_turn.other();
@@ -153,6 +156,14 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     }
 
     gain[0]
+}
+
+/// The square of the pawn an en-passant capture onto `to` takes.
+const fn en_passant_victim(b: &Board, to: usize) -> usize {
+    match b.turn {
+        Color::White => to - 8,
+        Color::Black => to + 8,
+    }
 }
 
 fn kind_value(kind: PieceKind) -> i32 {
@@ -221,12 +232,7 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
 
     let mut occupied = b.all_pieces ^ (1u64 << from) ^ (1u64 << to);
     if m.en_passant {
-        let captured_sq = if b.turn == Color::White {
-            to - 8
-        } else {
-            to + 8
-        };
-        occupied ^= 1u64 << captured_sq;
+        occupied ^= 1u64 << en_passant_victim(b, to);
     }
     let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
     let bishops_queens = pieces_of(b, PieceKind::Bishop) | pieces_of(b, PieceKind::Queen);
@@ -323,5 +329,15 @@ mod tests {
     #[test]
     fn quiet_move_to_safe_square_is_even() {
         see_value_bracket("4k3/8/8/8/8/8/8/R3K3 w - - 0 1", "a1a5", 0);
+    }
+
+    #[test]
+    fn see_of_en_passant_sees_the_xray_through_the_captured_pawn() {
+        let mut board = Board::from_fen("3r3k/8/8/3pP3/8/8/8/3R3K w - d6 0 1").unwrap();
+        let exd6 = crate::uci_io::parse_uci_move(&mut board, "e5d6").unwrap();
+
+        let value = see(&board, exd6);
+
+        assert_eq!(value, 100, "exd6 wins a pawn: Rxd6 Rxd6 loses Black's rook");
     }
 }
