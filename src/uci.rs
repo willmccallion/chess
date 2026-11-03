@@ -128,7 +128,8 @@ fn print_options(options: &Options) {
     }
 }
 
-fn parse_position(rest: &str) -> Board {
+/// The position a `position` command sets, or why it names none.
+fn parse_position(rest: &str) -> Result<Board, String> {
     let parts: Vec<&str> = rest.split_whitespace().collect();
     let moves_idx = parts.iter().position(|&s| s.eq_ignore_ascii_case("moves"));
 
@@ -136,9 +137,10 @@ fn parse_position(rest: &str) -> Board {
         Some(&"fen") => {
             let fen_end = moves_idx.unwrap_or(parts.len());
             Board::from_fen(&parts[1..fen_end].join(" "))
-                .unwrap_or_else(|_| Board::from_fen(START_FEN).expect("valid startpos"))
+                .map_err(|e| format!("invalid FEN: {e}"))?
         }
-        _ => Board::from_fen(START_FEN).expect("valid startpos"),
+        Some(&"startpos") => Board::from_fen(START_FEN)?,
+        _ => return Err("expected `startpos` or `fen`".to_string()),
     };
 
     if let Some(idx) = moves_idx {
@@ -151,7 +153,7 @@ fn parse_position(rest: &str) -> Board {
         }
         board.forget_eval_history();
     }
-    board
+    Ok(board)
 }
 
 fn start_search(
@@ -354,7 +356,10 @@ pub fn run_uci(eval: EvalOptions) {
             }
             "position" => {
                 stop_search(&mut active, &mut threads, options.threads);
-                board = parse_position(rest);
+                match parse_position(rest) {
+                    Ok(position) => board = position,
+                    Err(e) => send(&format!("info string ignoring position: {e}")),
+                }
             }
             "go" => {
                 stop_search(&mut active, &mut threads, options.threads);
