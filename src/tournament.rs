@@ -12,6 +12,8 @@ pub struct TournamentConfig {
     pub engine2_path: String,
     pub e1_options: Vec<(String, String)>,
     pub e2_options: Vec<(String, String)>,
+    pub e1_name: String,
+    pub e2_name: String,
     pub e1_clock: GameClock,
     pub e2_clock: GameClock,
     pub rounds: usize,
@@ -20,6 +22,11 @@ pub struct TournamentConfig {
     /// Start positions; game pair `p` plays `openings[p % len]` with colors swapped.
     pub openings: Vec<String>,
     pub sprt: Option<SprtConfig>,
+}
+
+/// The name a tournament shows for an engine: `name` if given, else the binary's file name.
+pub fn engine_name(name: Option<String>, path: &str) -> String {
+    name.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string())
 }
 
 impl TournamentConfig {
@@ -404,16 +411,8 @@ pub fn run_tournament(mut config: TournamentConfig) {
         std::process::exit(1);
     }
 
-    let e1_name = config
-        .engine1_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&config.engine1_path);
-    let e2_name = config
-        .engine2_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&config.engine2_path);
+    let e1_name = config.e1_name.as_str();
+    let e2_name = config.e2_name.as_str();
 
     println!("Tournament: {} vs {}", e1_name, e2_name);
     if config.e1_clock == config.e2_clock {
@@ -481,16 +480,8 @@ pub fn run_tournament(mut config: TournamentConfig) {
                 }
             };
 
-            let e1_name = config
-                .engine1_path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&config.engine1_path);
-            let e2_name = config
-                .engine2_path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&config.engine2_path);
+            let e1_name = config.e1_name.as_str();
+            let e2_name = config.e2_name.as_str();
 
             loop {
                 if stop.load(Ordering::Relaxed) {
@@ -669,16 +660,8 @@ pub fn run_tournament(mut config: TournamentConfig) {
     if config.sprt.is_some() && s.sprt_decision.is_none() {
         s.sprt_decision = Some(SprtDecision::Continue);
     }
-    let e1_name = config
-        .engine1_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&config.engine1_path);
-    let e2_name = config
-        .engine2_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&config.engine2_path);
+    let e1_name = config.e1_name.as_str();
+    let e2_name = config.e2_name.as_str();
 
     print_summary(&s, e1_name, e2_name, elapsed);
 }

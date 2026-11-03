@@ -167,7 +167,7 @@ cargo run --release -- bench 16 --hash 64
 
 ### Matches and SPRT testing
 
-`challenge` plays two UCI engines against each other. With `--openings`, each sampled opening is played twice with colors swapped, results are reported as pentanomial pair statistics, and `--sprt` stops as soon as the test is decided.
+`challenge` plays two UCI engines against each other. With `--openings`, each sampled opening is played twice with colors swapped, results are reported as pentanomial pair statistics, and `--sprt` stops as soon as the test is decided. `--e1-name` and `--e2-name` label the engines in the output, which otherwise shows their file names.
 
 ```bash
 # New build vs a saved older build, stop when +0..+5 Elo is decided
@@ -248,6 +248,7 @@ cd trainer && cargo run --release -- ../data/gen0-shuffled.data --net-id gen0
 
 # 4. Test the network against the previous generation's evaluator
 target/release/chess challenge target/release/chess target/release/chess \
+  --e1-name gen0 --e2-name bootstrap \
   --e1-option OwnBook=false --e1-option Evaluator=own \
   --e1-option OwnEvalFile=trainer/checkpoints/gen0-40/quantised.bin \
   --e2-option OwnBook=false --e2-option Evaluator=bootstrap \

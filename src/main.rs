@@ -139,6 +139,12 @@ enum Cmd {
         /// UCI options for engine 2 (e.g. "Hash=256")
         #[arg(long = "e2-option")]
         e2_options: Vec<String>,
+        /// Name shown for engine 1; defaults to its binary's file name
+        #[arg(long = "e1-name")]
+        e1_name: Option<String>,
+        /// Name shown for engine 2; defaults to its binary's file name
+        #[arg(long = "e2-name")]
+        e2_name: Option<String>,
         /// Base time in milliseconds per side
         #[arg(long, default_value_t = 5000)]
         time: u64,
@@ -527,6 +533,8 @@ fn main() {
             engine2,
             e1_options,
             e2_options,
+            e1_name,
+            e2_name,
             time,
             inc,
             e2_time,
@@ -573,6 +581,8 @@ fn main() {
                 })
             });
             tournament::run_tournament(TournamentConfig {
+                e1_name: tournament::engine_name(e1_name, &engine1),
+                e2_name: tournament::engine_name(e2_name, &engine2),
                 engine1_path: engine1,
                 engine2_path: engine2,
                 e1_options: e1_opts,
