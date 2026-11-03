@@ -232,3 +232,77 @@ fn an_illegal_book_move_is_never_played() {
         "played {played}; output {reply:?}"
     );
 }
+
+const MIDDLEGAME: &str = "r1bq1rk1/ppp1nppp/4n3/3p3Q/3P4/1BP1B3/PP1N2PP/R4RK1 w - - 1 16";
+const QUIET: Duration = Duration::from_secs(3);
+
+/// An engine set up to answer from the book: the start position, book on.
+fn engine_in_book() -> Engine {
+    let mut engine = Engine::start();
+    engine.handshake();
+    engine.send("position startpos");
+    engine
+}
+
+/// An engine playing as a coach level in a middlegame.
+fn coach_engine() -> Engine {
+    let mut engine = Engine::start();
+    engine.handshake();
+    engine.send("setoption name CoachLevel value 3");
+    engine.send(&format!("position fen {MIDDLEGAME}"));
+    engine
+}
+
+#[test]
+fn go_ponder_holds_a_book_move_until_stop() {
+    let mut engine = engine_in_book();
+
+    engine.send("go ponder wtime 60000 btime 60000");
+    let early = engine.read_until(is_bestmove, QUIET);
+    engine.send("stop");
+    let on_stop = engine.read_until(is_bestmove, REPLY_TIMEOUT);
+
+    assert!(early.is_err(), "bestmove sent while pondering: {early:?}");
+    assert!(on_stop.is_ok(), "no bestmove after stop");
+}
+
+#[test]
+fn ponderhit_releases_a_held_book_move() {
+    let mut engine = engine_in_book();
+    engine.send("go ponder wtime 60000 btime 60000");
+    let _ = engine.read_until(is_bestmove, QUIET);
+
+    engine.send("ponderhit");
+    let reply = engine.read_until(is_bestmove, REPLY_TIMEOUT);
+
+    assert!(reply.is_ok(), "no bestmove after ponderhit");
+}
+
+#[test]
+fn go_ponder_holds_a_coach_move_until_stop() {
+    let mut engine = coach_engine();
+
+    engine.send("go ponder wtime 60000 btime 60000");
+    let early = engine.read_until(is_bestmove, QUIET);
+    engine.send("stop");
+    let on_stop = engine.read_until(is_bestmove, REPLY_TIMEOUT);
+
+    assert!(early.is_err(), "bestmove sent while pondering: {early:?}");
+    assert!(on_stop.is_ok(), "no bestmove after stop");
+}
+
+#[test]
+fn go_infinite_holds_a_coach_move_until_stop() {
+    let mut engine = coach_engine();
+
+    engine.send("go infinite");
+    let early = engine.read_until(is_bestmove, QUIET);
+    engine.send("stop");
+    let on_stop = engine.read_until(is_bestmove, REPLY_TIMEOUT);
+
+    assert!(
+        early.is_err(),
+        "bestmove sent during go infinite: {early:?}"
+    );
+    assert!(on_stop.is_ok(), "no bestmove after stop");
+}

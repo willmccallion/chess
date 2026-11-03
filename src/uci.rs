@@ -73,15 +73,31 @@ struct ActiveSearch {
     ponder_budget: Option<TimeBudget>,
 }
 
-/// Stops any running search and returns its thread state to `threads`.
-fn stop_search(
-    active: &mut Option<ActiveSearch>,
-    threads: &mut Option<SearchThreads>,
-    count: usize,
-) {
-    if let Some(search) = active.take() {
-        search.control.stop();
-        *threads = search.handle.join().ok();
+/// A `go` the GUI has not yet been answered for.
+enum ActiveGo {
+    Searching(ActiveSearch),
+    /// A book or coach move, chosen at once but held back because the GUI
+    /// asked to ponder or to analyse until `stop`.
+    Holding(Move),
+}
+
+fn send_bestmove(m: Option<Move>) {
+    send(&format!(
+        "bestmove {}",
+        m.map_or_else(|| "0000".to_string(), format_uci)
+    ));
+}
+
+/// Answers any `go` in progress: stops its search, which returns its thread
+/// state to `threads`, or sends the move it held.
+fn stop_search(active: &mut Option<ActiveGo>, threads: &mut Option<SearchThreads>, count: usize) {
+    match active.take() {
+        Some(ActiveGo::Searching(search)) => {
+            search.control.stop();
+            *threads = search.handle.join().ok();
+        }
+        Some(ActiveGo::Holding(m)) => send_bestmove(Some(m)),
+        None => {}
     }
     if threads.as_ref().is_none_or(|t| t.count() != count) {
         *threads = Some(SearchThreads::new(count));
@@ -293,6 +309,16 @@ fn coach_move(
     choose_move(&scores, spec, &mut rng)
 }
 
+/// Sends `chosen` as the answer to `go_args`, or holds it in `active` until
+/// `stop` or `ponderhit` when the GUI asked to ponder or analyse.
+fn answer_now_or_hold(chosen: Option<Move>, go_args: &str, active: &mut Option<ActiveGo>) {
+    let waits_for_stop = has_token(go_args, "ponder") || has_token(go_args, "infinite");
+    match chosen {
+        Some(m) if waits_for_stop => *active = Some(ActiveGo::Holding(m)),
+        _ => send_bestmove(chosen),
+    }
+}
+
 fn print_eval(board: &mut Board) {
     let score = eval::evaluate(board);
     let side = if board.turn == crate::types::Color::White {
@@ -319,7 +345,7 @@ pub fn run_uci(eval: EvalOptions) {
         search_params: SearchParams::default(),
     };
     let mut tt = SharedTransTable::new(options.hash_mb);
-    let mut active: Option<ActiveSearch> = None;
+    let mut active: Option<ActiveGo> = None;
     let mut threads = Some(SearchThreads::new(options.threads));
     let mut coach_searcher: Option<Searcher> = None;
 
@@ -380,32 +406,32 @@ pub fn run_uci(eval: EvalOptions) {
                         "btime"
                     };
                     let chosen = coach_move(&board, level, extract_i64(rest, clock_key), searcher);
-                    send(&format!(
-                        "bestmove {}",
-                        chosen.map_or_else(|| "0000".to_string(), format_uci)
-                    ));
+                    answer_now_or_hold(chosen, rest, &mut active);
                     continue;
                 }
                 if options.own_book
                     && !has_token(rest, "infinite")
-                    && let Some(book_uci) = get_book_move(&board)
+                    && let Some(book_move) = get_book_move(&board)
                 {
-                    send(&format!("bestmove {book_uci}"));
+                    answer_now_or_hold(Some(book_move), rest, &mut active);
                     continue;
                 }
                 let search_threads = threads
                     .take()
                     .unwrap_or_else(|| SearchThreads::new(options.threads));
-                active = Some(start_search(&board, &tt, &options, search_threads, rest));
+                let search = start_search(&board, &tt, &options, search_threads, rest);
+                active = Some(ActiveGo::Searching(search));
             }
-            "ponderhit" => {
-                if let Some(search) = &active {
-                    match search.ponder_budget {
-                        Some(budget) => search.control.set_budget_from_now(budget),
-                        None => search.control.stop(),
-                    }
+            "ponderhit" => match &active {
+                Some(ActiveGo::Searching(search)) => match search.ponder_budget {
+                    Some(budget) => search.control.set_budget_from_now(budget),
+                    None => search.control.stop(),
+                },
+                Some(ActiveGo::Holding(_)) => {
+                    stop_search(&mut active, &mut threads, options.threads);
                 }
-            }
+                None => {}
+            },
             "stop" => stop_search(&mut active, &mut threads, options.threads),
             "eval" => {
                 require_networks(&options);

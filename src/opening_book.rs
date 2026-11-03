@@ -1,7 +1,6 @@
 use crate::board::Board;
 use crate::polyglot_zobrist;
 use crate::types::{Move, MoveList, Piece, PieceKind};
-use crate::uci_io::format_uci;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -194,7 +193,7 @@ fn legal_moves_in(book: &OpeningBook, b: &Board) -> Vec<WeightedMove> {
 }
 
 /// A book move for UCI play, chosen by weight among the legal ones.
-pub fn get_book_move(b: &Board) -> Option<String> {
+pub fn get_book_move(b: &Board) -> Option<Move> {
     let moves = legal_moves_in(get_book()?, b);
     let total_weight: u32 = moves.iter().map(|w| u32::from(w.weight)).sum();
     let chosen = if total_weight == 0 {
@@ -207,7 +206,7 @@ pub fn get_book_move(b: &Board) -> Option<String> {
         pick_by_weight(&moves, roll % total_weight)?
     };
     println!("info string Playing book move.");
-    Some(format_uci(chosen.m))
+    Some(chosen.m)
 }
 
 /// The move whose share of the summed weights covers `roll`.
@@ -225,6 +224,7 @@ fn pick_by_weight(moves: &[WeightedMove], mut roll: u32) -> Option<&WeightedMove
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::uci_io::format_uci;
 
     fn decoded(fen: &str, from: u16, to: u16) -> Option<String> {
         let board = Board::from_fen(fen).unwrap();
