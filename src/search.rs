@@ -57,6 +57,9 @@ pub struct SearchControl {
     start: Instant,
     soft_deadline_ms: AtomicU64,
     hard_deadline_ms: AtomicU64,
+    /// Nodes the search's threads have added so far, each in chunks of
+    /// `TIME_CHECK_INTERVAL`.
+    shared_nodes: AtomicU64,
 }
 
 impl SearchControl {
@@ -67,6 +70,7 @@ impl SearchControl {
             start: Instant::now(),
             soft_deadline_ms: AtomicU64::new(soft),
             hard_deadline_ms: AtomicU64::new(hard),
+            shared_nodes: AtomicU64::new(0),
         })
     }
 
@@ -106,6 +110,14 @@ impl SearchControl {
 
     fn hard_deadline_ms(&self) -> u64 {
         self.hard_deadline_ms.load(Ordering::Relaxed)
+    }
+
+    fn add_nodes(&self, nodes: u64) {
+        self.shared_nodes.fetch_add(nodes, Ordering::Relaxed);
+    }
+
+    fn shared_nodes(&self) -> u64 {
+        self.shared_nodes.load(Ordering::Relaxed)
     }
 }
 
@@ -248,6 +260,22 @@ impl TimeManager {
             best_move_stability: 0,
             previous_best_move: None,
         }
+    }
+
+    /// Counts a node, adding a chunk to every thread's shared count at the
+    /// interval the clock is checked.
+    #[inline(always)]
+    fn count_node(&mut self) {
+        self.nodes += 1;
+        if self.nodes.is_multiple_of(TIME_CHECK_INTERVAL) {
+            self.control.add_nodes(TIME_CHECK_INTERVAL);
+        }
+    }
+
+    /// Nodes every thread has searched, as far as this one knows: the
+    /// shared count with this thread's own nodes since its last chunk.
+    fn nodes_of_all_threads(&self) -> u64 {
+        self.control.shared_nodes() + self.nodes % TIME_CHECK_INTERVAL
     }
 
     #[inline(always)]
@@ -697,7 +725,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     use crate::movepicker::QMovePicker;
 
     s.seldepth = s.seldepth.max(s.ply);
-    s.tm.nodes += 1;
+    s.tm.count_node();
 
     if s.tm.check_hard_limit() {
         return 0;
@@ -1038,7 +1066,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         return quiesce(s, alpha, beta);
     }
 
-    s.tm.nodes += 1;
+    s.tm.count_node();
     s.killers[(s.ply + 1).min(MAX_PLY - 1)] = [None; 2];
     s.stack[(s.ply + 2).min(MAX_PLY)].cutoff_count = 0;
 
@@ -1415,6 +1443,7 @@ pub struct IterationInfo {
     /// From the point of view of the side to move at the root.
     pub score: Score,
     pub hashfull_permill: u32,
+    /// Nodes searched so far by every thread.
     pub nodes: u64,
     pub nps: u64,
     pub time_ms: u64,
@@ -1451,7 +1480,8 @@ pub fn print_uci_info(info: &IterationInfo) {
 
 fn iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) -> IterationInfo {
     let elapsed_ms = s.tm.control.elapsed_ms();
-    let nps = (s.tm.nodes * 1000).checked_div(elapsed_ms).unwrap_or(0);
+    let nodes = s.tm.nodes_of_all_threads();
+    let nps = (nodes * 1000).checked_div(elapsed_ms).unwrap_or(0);
     let mut after_best = s.board.clone();
     after_best.make_move(best_move);
     let pv = std::iter::once(best_move)
@@ -1462,7 +1492,7 @@ fn iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) -> Iter
         seldepth: s.seldepth,
         score: Score::from_search(score),
         hashfull_permill: s.tt.hashfull_permill(),
-        nodes: s.tm.nodes,
+        nodes,
         nps,
         time_ms: elapsed_ms,
         pv,

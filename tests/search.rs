@@ -9,7 +9,9 @@ use chess::search::{
 };
 use chess::search_params::SearchParams;
 use chess::tt::SharedTransTable;
+use chess::types::START_FEN;
 use chess::uci_io::{format_uci, parse_uci_move};
+use std::sync::Mutex;
 
 fn load_stockfish_nets() {
     EvalOptions::built_in()
@@ -127,5 +129,21 @@ fn reviewing_stateless_game_positions_matches_reviewing_stateful_ones() {
     assert_eq!(
         stateless, stateful,
         "stateless (left) vs stateful (right) review of each position"
+    );
+}
+
+#[test]
+fn reported_nodes_include_helper_threads() {
+    load_stockfish_nets();
+    let last_reported = Mutex::new(0u64);
+    let record = |info: &IterationInfo| *last_reported.lock().unwrap() = info.nodes;
+
+    let result = fixed_depth_search_reporting(&board(START_FEN), 12, 4, &record);
+
+    let reported = *last_reported.lock().unwrap();
+    assert!(
+        reported * 4 >= result.nodes * 3,
+        "last info nodes {reported} vs {} searched",
+        result.nodes
     );
 }
