@@ -221,7 +221,7 @@ Accumulators are updated lazily and incrementally: each move records its piece c
 
 ### Choosing the evaluator
 
-`--eval stockfish` (the default) uses the networks above; `--eval bootstrap` uses a small hand-written evaluation that plays the first games of our own network's training data. Both are also available through the UCI option `Evaluator`. Building with `--no-default-features` leaves the Stockfish code out entirely.
+`--eval stockfish` (the default) uses the networks above; `--eval bootstrap` uses a small hand-written evaluation that plays the first games of our own network's training data; `--eval own` uses our own network (below). All three are also available through the UCI option `Evaluator`. Building with `--no-default-features` leaves the Stockfish code out entirely.
 
 `chess eval-trace <fen>` prints the same per-bucket table and final evaluation as Stockfish's `eval` command, and `tools/nnue_check.py` diffs the two over random playout positions:
 

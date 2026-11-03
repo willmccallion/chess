@@ -298,7 +298,7 @@ fn print_eval(board: &mut Board) {
     send(&format!("info string fen: {}", board.to_fen()));
 }
 
-pub fn run_uci(eval_kind: crate::eval::EvalKind) {
+pub fn run_uci(eval: EvalOptions) {
     let mut board = Board::from_fen(START_FEN).expect("valid startpos");
     let mut options = Options {
         coach_level: None,
@@ -306,7 +306,7 @@ pub fn run_uci(eval_kind: crate::eval::EvalKind) {
         threads: DEFAULT_THREADS,
         own_book: true,
         move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
-        eval: EvalOptions::with_kind(eval_kind),
+        eval,
         search_params: SearchParams::default(),
     };
     let mut tt = SharedTransTable::new(options.hash_mb);

@@ -2,12 +2,14 @@
 //! incremental state in an [`EvalState`] and updates it on every make and unmake.
 
 pub mod bootstrap;
+pub mod own;
 #[cfg(feature = "stockfish-nnue")]
 pub mod stockfish;
 
 use crate::board::Board;
 use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody};
 use bootstrap::{Bootstrap, NoState};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// Most piece-square changes one move makes: castling moves two pieces.
@@ -109,6 +111,8 @@ pub enum EvalKind {
     Stockfish,
     /// The hand-written evaluation that plays the first training games.
     Bootstrap,
+    /// Our own network, trained on self-play games.
+    Own,
 }
 
 impl EvalKind {
@@ -116,6 +120,7 @@ impl EvalKind {
         #[cfg(feature = "stockfish-nnue")]
         Self::Stockfish,
         Self::Bootstrap,
+        Self::Own,
     ];
 
     #[cfg(feature = "stockfish-nnue")]
@@ -128,6 +133,7 @@ impl EvalKind {
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish => "stockfish",
             Self::Bootstrap => "bootstrap",
+            Self::Own => "own",
         }
     }
 }
@@ -156,6 +162,7 @@ pub struct EvalOptions {
     pub kind: EvalKind,
     #[cfg(feature = "stockfish-nnue")]
     stockfish_nets: stockfish::NetPaths,
+    own_net: PathBuf,
 }
 
 impl EvalOptions {
@@ -165,6 +172,7 @@ impl EvalOptions {
             kind: EvalKind::DEFAULT,
             #[cfg(feature = "stockfish-nnue")]
             stockfish_nets: stockfish::NetPaths::built_in_or_empty(),
+            own_net: own::default_net_path(),
         }
     }
 
@@ -175,6 +183,15 @@ impl EvalOptions {
         }
     }
 
+    /// Uses `path` for the own network instead of the one baked in at build time.
+    #[must_use]
+    pub fn with_own_net(self, path: PathBuf) -> Self {
+        Self {
+            own_net: path,
+            ..self
+        }
+    }
+
     /// UCI `option` lines for these settings.
     pub fn uci_options(&self) -> Vec<String> {
         let kinds: String = EvalKind::ALL
@@ -182,10 +199,16 @@ impl EvalOptions {
             .map(|kind| format!(" var {}", kind.name()))
             .collect();
         #[cfg_attr(not(feature = "stockfish-nnue"), expect(unused_mut))]
-        let mut lines = vec![format!(
-            "option name Evaluator type combo default {}{kinds}",
-            self.kind.name()
-        )];
+        let mut lines = vec![
+            format!(
+                "option name Evaluator type combo default {}{kinds}",
+                self.kind.name()
+            ),
+            format!(
+                "option name OwnEvalFile type string default {}",
+                self.own_net.display()
+            ),
+        ];
         #[cfg(feature = "stockfish-nnue")]
         {
             let nets = &self.stockfish_nets;
@@ -207,6 +230,10 @@ impl EvalOptions {
             if let Ok(kind) = value.parse() {
                 self.kind = kind;
             }
+            return true;
+        }
+        if name.eq_ignore_ascii_case("OwnEvalFile") {
+            self.own_net = value.into();
             return true;
         }
         #[cfg(feature = "stockfish-nnue")]
@@ -242,6 +269,10 @@ impl EvalOptions {
                 Active::Stockfish(stockfish::loaded().ok_or("the Stockfish networks did not load")?)
             }
             EvalKind::Bootstrap => Active::Bootstrap,
+            EvalKind::Own => {
+                own::ensure_loaded(&self.own_net)?;
+                Active::Own(own::loaded().ok_or("the own network did not load")?)
+            }
         };
         let _ = ACTIVE.set(active);
         Ok(())
@@ -254,6 +285,7 @@ enum Active {
     #[cfg(feature = "stockfish-nnue")]
     Stockfish(&'static stockfish::Networks),
     Bootstrap,
+    Own(&'static own::Network),
 }
 
 impl Active {
@@ -262,6 +294,7 @@ impl Active {
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(_) => EvalKind::Stockfish,
             Self::Bootstrap => EvalKind::Bootstrap,
+            Self::Own(_) => EvalKind::Own,
         }
     }
 }
@@ -275,6 +308,7 @@ pub enum EvalState {
     Stateless,
     #[cfg(feature = "stockfish-nnue")]
     Stockfish(stockfish::accumulator::AccumulatorStack),
+    Own(own::AccumulatorStack),
 }
 
 impl EvalState {
@@ -283,6 +317,7 @@ impl EvalState {
         match ACTIVE.get() {
             #[cfg(feature = "stockfish-nnue")]
             Some(Active::Stockfish(nets)) => Self::Stockfish(nets.new_state()),
+            Some(Active::Own(net)) => Self::Own(net.new_state()),
             Some(Active::Bootstrap) | None => Self::Stateless,
         }
     }
@@ -295,6 +330,7 @@ impl IncrementalState for EvalState {
             Self::Stateless => NoState.push_move(before, m),
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(stack) => stack.push_move(before, m),
+            Self::Own(stack) => stack.push_move(before, m),
         }
     }
 
@@ -304,6 +340,7 @@ impl IncrementalState for EvalState {
             Self::Stateless => {}
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(stack) => stack.pop_move(),
+            Self::Own(stack) => stack.pop_move(),
         }
     }
 
@@ -312,6 +349,7 @@ impl IncrementalState for EvalState {
             Self::Stateless => {}
             #[cfg(feature = "stockfish-nnue")]
             Self::Stockfish(stack) => stack.reset(),
+            Self::Own(stack) => stack.reset(),
         }
     }
 }
@@ -332,6 +370,16 @@ pub fn evaluate(board: &mut Board) -> i32 {
             let mut stack = nets.new_state();
             let score = nets.evaluate(&mut stack, position);
             *state = EvalState::Stockfish(stack);
+            score
+        }
+        Active::Own(net) => {
+            let (state, position) = board.eval_state_and_view();
+            if let EvalState::Own(stack) = state {
+                return net.evaluate(stack, position);
+            }
+            let mut stack = net.new_state();
+            let score = net.evaluate(&mut stack, position);
+            *state = EvalState::Own(stack);
             score
         }
     }

@@ -21,9 +21,12 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "Chess engine with perft/uci/play modes"
 )]
 struct Cli {
-    /// Evaluation to use: stockfish (when built in) or bootstrap
+    /// Evaluation to use: stockfish (when built in), bootstrap or own
     #[arg(long, global = true, default_value = eval::EvalKind::DEFAULT.name())]
     eval: eval::EvalKind,
+    /// Network file for --eval own (defaults to $CHESS_NNUE_OWN at build time)
+    #[arg(long, global = true)]
+    own_net: Option<std::path::PathBuf>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -322,12 +325,23 @@ impl SideChoice {
     }
 }
 
-/// Loads the networks baked in at build time, or exits: nothing can be evaluated without them.
-fn require_networks(kind: eval::EvalKind) {
-    if let Err(e) = eval::EvalOptions::with_kind(kind).load() {
+impl Cli {
+    /// The evaluator chosen on the command line, with its network files.
+    fn eval_options(&self) -> eval::EvalOptions {
+        let options = eval::EvalOptions::with_kind(self.eval);
+        match &self.own_net {
+            Some(path) => options.with_own_net(path.clone()),
+            None => options,
+        }
+    }
+}
+
+/// Loads the chosen evaluator, or exits: nothing can be evaluated without it.
+fn require_networks(cli: &Cli) {
+    if let Err(e) = cli.eval_options().load() {
         exit_with_error(&format!(
             "failed to load the {} evaluator: {e}",
-            kind.name()
+            cli.eval.name()
         ));
     }
 }
@@ -340,7 +354,7 @@ fn main() {
             fen,
             divide: div,
         } => {
-            require_networks(cli.eval);
+            require_networks(&cli);
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
             let mut b = Board::from_fen(&fen_str).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
@@ -363,7 +377,7 @@ fn main() {
             seed,
             hash,
         } => {
-            require_networks(cli.eval);
+            require_networks(&cli);
             let seed = seed.unwrap_or_else(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -407,7 +421,7 @@ fn main() {
             threads,
             hash,
         } => {
-            require_networks(cli.eval);
+            require_networks(&cli);
             let engine = tui::EngineConfig {
                 threads: threads.max(1),
                 hash_mb: hash.max(1),
@@ -445,7 +459,7 @@ fn main() {
             import_puzzles(&path, &store, per_band.max(1));
         }
         Cmd::Eval { fen } => {
-            require_networks(cli.eval);
+            require_networks(&cli);
             let mut b = Board::from_fen(&fen).unwrap_or_else(|e| {
                 eprintln!("FEN parse error: {e}");
                 std::process::exit(1);
@@ -494,7 +508,7 @@ fn main() {
             }
         }
         Cmd::Bench { depth, hash } => {
-            require_networks(cli.eval);
+            require_networks(&cli);
             match bench::run(depth, hash) {
                 Ok(result) => {
                     println!("===========================");
@@ -708,7 +722,7 @@ fn main() {
                 Err(e) => exit_with_error(&e),
             }
         }
-        Cmd::Uci => uci::run_uci(cli.eval),
+        Cmd::Uci => uci::run_uci(cli.eval_options()),
     }
 }
 
