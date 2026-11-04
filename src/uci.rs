@@ -115,11 +115,56 @@ struct Options {
     search_params: SearchParams,
 }
 
-/// Loads the evaluator named by the options, or exits: the engine cannot play without it.
-fn require_networks(options: &Options) {
-    if let Err(e) = options.eval.load() {
-        send(&format!("info string ERROR: {e}"));
-        std::process::exit(1);
+/// Makes the evaluator the options name the one in use and returns whether
+/// it replaced another. A failure is reported and keeps the one in use, or
+/// exits when there is none: the engine cannot play without an evaluator.
+fn load_evaluator(options: &Options) -> bool {
+    match options.eval.load() {
+        Ok(replaced) => replaced,
+        Err(e) if eval::is_loaded() => {
+            send(&format!(
+                "info string ERROR: {e}; keeping the evaluator in use"
+            ));
+            false
+        }
+        Err(e) => {
+            send(&format!("info string ERROR: {e}"));
+            std::process::exit(1);
+        }
+    }
+}
+
+/// What the engine has learnt during a game: the hash tables and histories.
+struct SearchState<'s> {
+    tt: &'s SharedTransTable,
+    threads: &'s mut Option<SearchThreads>,
+    coach_searcher: &'s mut Option<Searcher>,
+}
+
+impl SearchState<'_> {
+    fn clear(self) {
+        self.tt.clear();
+        if let Some(threads) = self.threads.as_mut() {
+            threads.clear();
+        }
+        if let Some(searcher) = self.coach_searcher.as_mut() {
+            searcher.clear();
+        }
+    }
+}
+
+/// Forgets what the replaced evaluator computed: evaluations cached in the
+/// search state and the board's incremental state.
+fn forget_evaluations(board: &mut Board, state: SearchState<'_>) {
+    state.clear();
+    *board = board.without_eval_state();
+}
+
+/// Loads the options' evaluator, forgetting the old one's work if it was
+/// replaced.
+fn ensure_evaluator(options: &Options, board: &mut Board, state: SearchState<'_>) {
+    if load_evaluator(options) {
+        forget_evaluations(board, state);
     }
 }
 
@@ -403,18 +448,22 @@ pub fn run_uci(eval: EvalOptions) {
                 send("uciok");
             }
             "isready" => {
-                require_networks(&options);
+                let state = SearchState {
+                    tt: &tt,
+                    threads: &mut threads,
+                    coach_searcher: &mut coach_searcher,
+                };
+                ensure_evaluator(&options, &mut board, state);
                 send("readyok");
             }
             "ucinewgame" => {
                 stop_search(&mut active, &mut threads, options.threads);
-                if let Some(searcher) = coach_searcher.as_mut() {
-                    searcher.clear();
+                SearchState {
+                    tt: &tt,
+                    threads: &mut threads,
+                    coach_searcher: &mut coach_searcher,
                 }
-                tt.clear();
-                if let Some(t) = threads.as_mut() {
-                    t.clear();
-                }
+                .clear();
             }
             "setoption" => {
                 stop_search(&mut active, &mut threads, options.threads);
@@ -431,7 +480,12 @@ pub fn run_uci(eval: EvalOptions) {
             }
             "go" => {
                 stop_search(&mut active, &mut threads, options.threads);
-                require_networks(&options);
+                let state = SearchState {
+                    tt: &tt,
+                    threads: &mut threads,
+                    coach_searcher: &mut coach_searcher,
+                };
+                ensure_evaluator(&options, &mut board, state);
                 if let Some(level) = options.coach_level {
                     let searcher =
                         coach_searcher.get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
@@ -469,7 +523,12 @@ pub fn run_uci(eval: EvalOptions) {
             },
             "stop" => stop_search(&mut active, &mut threads, options.threads),
             "eval" => {
-                require_networks(&options);
+                let state = SearchState {
+                    tt: &tt,
+                    threads: &mut threads,
+                    coach_searcher: &mut coach_searcher,
+                };
+                ensure_evaluator(&options, &mut board, state);
                 print_eval(&mut board);
             }
             "quit" => break,

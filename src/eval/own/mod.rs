@@ -10,7 +10,7 @@ pub use network::{EVAL_SCALE, HIDDEN, INPUTS, NetLoadError, Network, QA, QB};
 use super::{Evaluator, IncrementalState, PositionView};
 use crate::types::{Color, Move};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError};
 
 /// Network path baked in at build time from `CHESS_NNUE_OWN`, if it was set.
 pub fn default_net_path() -> PathBuf {
@@ -22,25 +22,16 @@ struct Loaded {
     path: PathBuf,
 }
 
-static LOADED: OnceLock<Loaded> = OnceLock::new();
+/// Every network this process has read. One is kept once read, so switching
+/// back to it reads nothing, and an evaluation that still uses it while the
+/// evaluator is switched never sees it freed.
+static LOADED: Mutex<Vec<&'static Loaded>> = Mutex::new(Vec::new());
 
-/// The network, once loaded.
-pub fn loaded() -> Option<&'static Network> {
-    LOADED.get().map(|loaded| &loaded.net)
-}
-
-/// Loads the network on first use. It cannot be replaced afterwards, so asking for a
-/// different file once loaded is an error.
-pub fn ensure_loaded(path: &Path) -> Result<(), String> {
-    if let Some(loaded) = LOADED.get() {
-        return if loaded.path == path {
-            Ok(())
-        } else {
-            Err(format!(
-                "network already loaded from {}",
-                loaded.path.display()
-            ))
-        };
+/// The network in `path`, read from it unless this process already has.
+pub fn load(path: &Path) -> Result<&'static Network, String> {
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(&known) = loaded.iter().find(|known| known.path == path) {
+        return Ok(&known.net);
     }
     if path.as_os_str().is_empty() {
         return Err(
@@ -49,11 +40,12 @@ pub fn ensure_loaded(path: &Path) -> Result<(), String> {
         );
     }
     let net = Network::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let _ = LOADED.set(Loaded {
+    let known: &'static Loaded = Box::leak(Box::new(Loaded {
         net,
         path: path.to_path_buf(),
-    });
-    Ok(())
+    }));
+    loaded.push(known);
+    Ok(&known.net)
 }
 
 impl Evaluator for Network {

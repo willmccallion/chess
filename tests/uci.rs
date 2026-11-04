@@ -325,3 +325,60 @@ fn go_searchmoves_restricts_the_best_move() {
         "played {played}"
     );
 }
+
+/// The `info string eval:` line the engine prints for its current position.
+fn eval_line(engine: &mut Engine) -> String {
+    engine.send("isready");
+    engine
+        .read_until(|l| l == "readyok", NET_LOAD_TIMEOUT)
+        .expect("readyok");
+    engine.send("eval");
+    let lines = engine
+        .read_until(|l| l.starts_with("info string eval:"), REPLY_TIMEOUT)
+        .expect("eval output");
+    lines.last().expect("eval line").clone()
+}
+
+#[test]
+fn changing_the_evaluator_after_isready_keeps_the_engine_running() {
+    let mut engine = Engine::start();
+    engine.handshake();
+
+    engine.send("setoption name Evaluator value bootstrap");
+    engine.send("isready");
+    let reply = engine.read_until(|l| l == "readyok", NET_LOAD_TIMEOUT);
+
+    assert!(reply.is_ok(), "no readyok; output {:?}", reply.unwrap_err());
+}
+
+#[test]
+fn a_new_evaluator_takes_effect_and_switching_back_restores_the_first() {
+    let mut engine = Engine::start();
+    engine.handshake();
+    engine.send(&format!("position fen {MIDDLEGAME}"));
+    let stockfish = eval_line(&mut engine);
+
+    engine.send("setoption name Evaluator value bootstrap");
+    let bootstrap = eval_line(&mut engine);
+    engine.send("setoption name Evaluator value stockfish");
+    let stockfish_again = eval_line(&mut engine);
+
+    assert_ne!(bootstrap, stockfish, "the bootstrap eval is Stockfish's");
+    assert_eq!(stockfish_again, stockfish);
+}
+
+#[test]
+fn an_eval_file_that_cannot_load_is_reported_and_the_engine_keeps_its_networks() {
+    let mut engine = Engine::start();
+    engine.handshake();
+
+    engine.send("setoption name EvalFile value /nonexistent/other.nnue");
+    engine.send("isready");
+    let reply = engine.read_until(|l| l == "readyok", NET_LOAD_TIMEOUT);
+
+    let reply = reply.expect("readyok after a failed load");
+    assert!(
+        reply.iter().any(|l| l.starts_with("info string")),
+        "replies {reply:?}"
+    );
+}

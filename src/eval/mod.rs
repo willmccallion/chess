@@ -9,8 +9,10 @@ pub mod stockfish;
 use crate::board::Board;
 use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody};
 use bootstrap::{Bootstrap, NoState};
+use std::cell::Cell;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{PoisonError, RwLock};
 
 /// Most piece-square changes one move makes: castling moves two pieces.
 pub const MAX_PIECE_CHANGES: usize = 5;
@@ -250,33 +252,27 @@ impl EvalOptions {
         false
     }
 
-    /// Loads the evaluator. It cannot be replaced afterwards.
-    pub fn load(&self) -> Result<(), String> {
-        if let Some(loaded) = ACTIVE.get() {
-            return if loaded.kind() == self.kind {
-                Ok(())
-            } else {
-                Err(format!(
-                    "the {} evaluator is already loaded",
-                    loaded.kind().name()
-                ))
-            };
-        }
-        let active = match self.kind {
+    /// Makes these settings' evaluator the one in use, reading its networks
+    /// unless this process already has. Returns whether it replaced another;
+    /// on an error the evaluator in use stays.
+    pub fn load(&self) -> Result<bool, String> {
+        let wanted = match self.kind {
             #[cfg(feature = "stockfish-nnue")]
-            EvalKind::Stockfish => {
-                stockfish::ensure_loaded(&self.stockfish_nets)?;
-                Active::Stockfish(stockfish::loaded().ok_or("the Stockfish networks did not load")?)
-            }
+            EvalKind::Stockfish => Active::Stockfish(stockfish::load(&self.stockfish_nets)?),
             EvalKind::Bootstrap => Active::Bootstrap,
-            EvalKind::Own => {
-                own::ensure_loaded(&self.own_net)?;
-                Active::Own(own::loaded().ok_or("the own network did not load")?)
-            }
+            EvalKind::Own => Active::Own(own::load(&self.own_net)?),
         };
-        let _ = ACTIVE.set(active);
-        Ok(())
+        let replaced = active().is_none_or(|current| !current.is_same(wanted));
+        if replaced {
+            set_active(wanted);
+        }
+        Ok(replaced)
     }
+}
+
+/// Whether an evaluator has been loaded.
+pub fn is_loaded() -> bool {
+    active().is_some()
 }
 
 /// The evaluator in use.
@@ -289,17 +285,47 @@ enum Active {
 }
 
 impl Active {
-    const fn kind(self) -> EvalKind {
-        match self {
+    /// Whether `self` and `other` evaluate with the same networks.
+    fn is_same(self, other: Self) -> bool {
+        match (self, other) {
             #[cfg(feature = "stockfish-nnue")]
-            Self::Stockfish(_) => EvalKind::Stockfish,
-            Self::Bootstrap => EvalKind::Bootstrap,
-            Self::Own(_) => EvalKind::Own,
+            (Self::Stockfish(a), Self::Stockfish(b)) => std::ptr::eq(a, b),
+            (Self::Bootstrap, Self::Bootstrap) => true,
+            (Self::Own(a), Self::Own(b)) => std::ptr::eq(a, b),
+            _ => false,
         }
     }
 }
 
-static ACTIVE: OnceLock<Active> = OnceLock::new();
+static ACTIVE: RwLock<Option<Active>> = RwLock::new(None);
+/// Bumped each time the evaluator is replaced, so a thread re-reads
+/// `ACTIVE` only then.
+static ACTIVE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// The evaluator this thread last read, and the generation it read it in.
+    static SEEN: Cell<(u64, Option<Active>)> = const { Cell::new((u64::MAX, None)) };
+}
+
+/// The evaluator in use. A thread that has not yet seen a replacement keeps
+/// the one before it, which stays valid: networks are never freed.
+fn active() -> Option<Active> {
+    let generation = ACTIVE_GENERATION.load(Ordering::Acquire);
+    SEEN.with(|seen| {
+        let (seen_generation, active) = seen.get();
+        if seen_generation == generation {
+            return active;
+        }
+        let active = *ACTIVE.read().unwrap_or_else(PoisonError::into_inner);
+        seen.set((generation, active));
+        active
+    })
+}
+
+fn set_active(active: Active) {
+    *ACTIVE.write().unwrap_or_else(PoisonError::into_inner) = Some(active);
+    ACTIVE_GENERATION.fetch_add(1, Ordering::Release);
+}
 
 /// The incremental state of whichever evaluator a board was created for.
 #[derive(Clone)]
@@ -314,7 +340,7 @@ pub enum EvalState {
 impl EvalState {
     /// State for the evaluator in use.
     pub fn for_active() -> Self {
-        match ACTIVE.get() {
+        match active() {
             #[cfg(feature = "stockfish-nnue")]
             Some(Active::Stockfish(nets)) => Self::Stockfish(nets.new_state()),
             Some(Active::Own(net)) => Self::Own(net.new_state()),
@@ -356,7 +382,7 @@ impl IncrementalState for EvalState {
 
 /// Static evaluation in centipawns for the side to move; 0 if no evaluator is loaded.
 pub fn evaluate(board: &mut Board) -> i32 {
-    let Some(&active) = ACTIVE.get() else {
+    let Some(active) = active() else {
         return 0;
     };
     match active {

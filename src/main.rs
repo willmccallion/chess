@@ -481,7 +481,7 @@ fn main() {
         }
         #[cfg(feature = "stockfish-nnue")]
         Cmd::EvalTrace { fen, big, small } => {
-            use eval::stockfish::{NetPaths, ensure_loaded, trace_text};
+            use eval::stockfish::{NetPaths, load, trace_text};
             let built_in = NetPaths::built_in();
             let paths = match (big, small, built_in) {
                 (Some(big), Some(small), _) => NetPaths {
@@ -496,9 +496,8 @@ fn main() {
                     "no networks: pass --big and --small or build inside the dev shell",
                 ),
             };
-            if let Err(e) = ensure_loaded(&paths) {
-                exit_with_error(&format!("failed to load NNUE: {e}"));
-            }
+            let nets = load(&paths)
+                .unwrap_or_else(|e| exit_with_error(&format!("failed to load NNUE: {e}")));
             let fens: Vec<String> = match fen {
                 Some(fen) => vec![fen],
                 None => std::io::stdin()
@@ -510,7 +509,7 @@ fn main() {
             for fen in fens {
                 let board = Board::from_fen(&fen)
                     .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error in {fen}: {e}")));
-                print!("{}", trace_text(&board).unwrap_or_default());
+                print!("{}", trace_text(nets, &board));
             }
         }
         Cmd::Bench { depth, hash } => {

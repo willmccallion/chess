@@ -17,7 +17,7 @@ use arch::OUTPUT_SCALE;
 use net_file::{BigNetwork, NetKind, NetLoadError, Network, load_big_network, load_small_network};
 use network::{NetOutput, PerspectiveSums, bucket_for, transform};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError};
 
 /// Network path baked in at build time from the dev shell's `CHESS_NNUE_BIG`/`CHESS_NNUE_SMALL`.
 pub fn default_net_path(kind: NetKind) -> Option<&'static str> {
@@ -56,39 +56,30 @@ pub struct Networks {
     paths: NetPaths,
 }
 
-static NETWORKS: OnceLock<Networks> = OnceLock::new();
-
-/// The networks, once loaded.
-pub fn loaded() -> Option<&'static Networks> {
-    NETWORKS.get()
-}
+/// Every set of networks this process has read. A set is kept once read, so
+/// switching back to it reads nothing, and an evaluation that still uses it
+/// while the evaluator is switched never sees it freed.
+static LOADED: Mutex<Vec<&'static Networks>> = Mutex::new(Vec::new());
 
 fn load_error(path: &Path, error: NetLoadError) -> String {
     format!("{}: {error}", path.display())
 }
 
-/// Loads the networks on first use. They cannot be replaced afterwards, so asking for
-/// different files once loaded is an error.
-pub fn ensure_loaded(paths: &NetPaths) -> Result<(), String> {
-    if let Some(loaded) = NETWORKS.get() {
-        return if loaded.paths == *paths {
-            Ok(())
-        } else {
-            Err(format!(
-                "networks already loaded from {} and {}",
-                loaded.paths.big.display(),
-                loaded.paths.small.display()
-            ))
-        };
+/// The networks in `paths`, read from them unless this process already has.
+pub fn load(paths: &NetPaths) -> Result<&'static Networks, String> {
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(&nets) = loaded.iter().find(|nets| nets.paths == *paths) {
+        return Ok(nets);
     }
     let big = load_big_network(&paths.big).map_err(|e| load_error(&paths.big, e))?;
     let small = load_small_network(&paths.small).map_err(|e| load_error(&paths.small, e))?;
-    let _ = NETWORKS.set(Networks {
+    let nets: &'static Networks = Box::leak(Box::new(Networks {
         big,
         small,
         paths: paths.clone(),
-    });
-    Ok(())
+    }));
+    loaded.push(nets);
+    Ok(nets)
 }
 
 fn run_net(net: &Network, sums: &PerspectiveSums, side_to_move: Color, bucket: usize) -> NetOutput {
@@ -209,8 +200,7 @@ impl IncrementalState for AccumulatorStack {
 }
 
 /// The big net's per-bucket table and the final evaluation, as Stockfish's `eval` prints them.
-pub fn trace_text(board: &Board) -> Option<String> {
-    let nets = NETWORKS.get()?;
+pub fn trace_text(nets: &Networks, board: &Board) -> String {
     let mut text = trace::format_trace(&nets.big, board);
     let position = board.position_view();
     let internal = stockfish_eval(nets, &mut nets.new_state(), position);
@@ -223,7 +213,7 @@ pub fn trace_text(board: &Board) -> Option<String> {
         "Final evaluation       {:+.2} (white side)\n",
         0.01 * f64::from(trace::to_cp(white_relative, position))
     ));
-    Some(text)
+    text
 }
 
 #[cfg(test)]
@@ -239,7 +229,7 @@ mod tests {
         crate::eval::EvalOptions::with_kind(crate::eval::EvalKind::Stockfish)
             .load()
             .unwrap();
-        NETWORKS.get().unwrap()
+        load(&NetPaths::built_in().unwrap()).unwrap()
     }
 
     fn assert_same(view: SumsView, expected: &Accumulation, what: &str, fen: &str) {
