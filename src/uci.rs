@@ -413,15 +413,9 @@ fn answer_now_or_hold(chosen: Option<Move>, go_args: &str, active: &mut Option<A
 }
 
 fn print_eval(board: &mut Board) {
-    let score = eval::evaluate(board);
-    let side = if board.turn == crate::types::Color::White {
-        "white"
-    } else {
-        "black"
-    };
-    let sign = if score >= 0 { "+" } else { "" };
     send(&format!(
-        "info string eval: {sign}{score} cp ({side} to move)"
+        "info string eval: {}",
+        eval::describe_evaluation(board)
     ));
     send(&format!("info string fen: {}", board.to_fen()));
 }

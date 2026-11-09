@@ -15,6 +15,10 @@ use chess::uci;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::num::NonZeroUsize;
 
+/// The hash size SPSA's engines use unless `--option` says otherwise; many
+/// games run at once.
+const TUNE_HASH_OPTION: &str = "Hash=16";
+
 #[derive(Parser)]
 #[command(
     name = "chess",
@@ -368,10 +372,8 @@ fn main() {
         } => {
             require_networks(&cli);
             let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
-            let mut b = Board::from_fen(&fen_str).unwrap_or_else(|e| {
-                eprintln!("FEN parse error: {e}");
-                std::process::exit(1);
-            });
+            let mut b = Board::from_fen(&fen_str)
+                .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error: {e}")));
             if div {
                 divide(&mut b, depth);
             } else {
@@ -472,18 +474,9 @@ fn main() {
         }
         Cmd::Eval { fen } => {
             require_networks(&cli);
-            let mut b = Board::from_fen(&fen).unwrap_or_else(|e| {
-                eprintln!("FEN parse error: {e}");
-                std::process::exit(1);
-            });
-            let score = eval::evaluate(&mut b);
-            let side = if b.turn == Color::White {
-                "white"
-            } else {
-                "black"
-            };
-            let sign = if score >= 0 { "+" } else { "" };
-            println!("{sign}{score} cp ({side} to move)");
+            let mut b = Board::from_fen(&fen)
+                .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error: {e}")));
+            println!("{}", eval::describe_evaluation(&mut b));
         }
         #[cfg(feature = "stockfish-nnue")]
         Cmd::EvalTrace { fen, big, small } => {
@@ -527,10 +520,7 @@ fn main() {
                     println!("Nodes searched  : {}", result.nodes);
                     println!("Nodes/second    : {}", result.nps());
                 }
-                Err(e) => {
-                    eprintln!("bench failed: {e}");
-                    std::process::exit(1);
-                }
+                Err(e) => exit_with_error(&format!("bench failed: {e}")),
             }
         }
         Cmd::Challenge {
@@ -551,47 +541,21 @@ fn main() {
             seed,
             sprt,
         } => {
-            let e1_opts: Vec<_> = e1_options
-                .iter()
-                .map(|s| {
-                    tournament::parse_option(s).unwrap_or_else(|e| {
-                        eprintln!("{}", e);
-                        std::process::exit(1);
-                    })
-                })
-                .collect();
-            let e2_opts: Vec<_> = e2_options
-                .iter()
-                .map(|s| {
-                    tournament::parse_option(s).unwrap_or_else(|e| {
-                        eprintln!("{}", e);
-                        std::process::exit(1);
-                    })
-                })
-                .collect();
             let pair_count = rounds.div_ceil(2);
             let openings = match openings {
-                Some(path) => {
-                    openings::sample_openings(&path, pair_count, seed).unwrap_or_else(|e| {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    })
-                }
+                Some(path) => openings::sample_openings(&path, pair_count, seed)
+                    .unwrap_or_else(|e| exit_with_error(&e)),
                 None => Vec::new(),
             };
-            let sprt = sprt.map(|spec| {
-                SprtConfig::parse(&spec).unwrap_or_else(|e| {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                })
-            });
+            let sprt =
+                sprt.map(|spec| SprtConfig::parse(&spec).unwrap_or_else(|e| exit_with_error(&e)));
             tournament::run_tournament(TournamentConfig {
                 e1_name: tournament::engine_name(e1_name, &engine1),
                 e2_name: tournament::engine_name(e2_name, &engine2),
                 engine1_path: engine1,
                 engine2_path: engine2,
-                e1_options: e1_opts,
-                e2_options: e2_opts,
+                e1_options: parse_options(&e1_options),
+                e2_options: parse_options(&e2_options),
                 e1_clock: GameClock {
                     base_ms: time,
                     increment_ms: inc,
@@ -634,20 +598,14 @@ fn main() {
                 movetime.map_or_else(|| format!("depth {depth}"), |ms| format!("movetime {ms}"));
             let reference_go =
                 ref_depth.map_or_else(|| engine_go.clone(), |d| format!("depth {d}"));
-            let engine_path = engine.unwrap_or_else(|| {
-                std::env::current_exe()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|e| exit_with_error(&format!("cannot locate own binary: {e}")))
-            });
+            let engine_path = engine.unwrap_or_else(own_binary);
             let reference_path = reference
                 .or_else(|| std::env::var("STOCKFISH").ok())
                 .unwrap_or_else(|| "stockfish".to_string());
-            let mut engine_options = vec![("OwnBook".to_string(), "false".to_string())];
-            engine_options.extend(parse_options(&e1_options));
             let config = CompareConfig {
                 engine_path,
                 reference_path,
-                engine_options,
+                engine_options: options_without_book(&e1_options),
                 reference_options: parse_options(&e2_options),
                 fens,
                 engine_go,
@@ -691,15 +649,7 @@ fn main() {
                     count: concurrency,
                 }],
             };
-            let engine = engine
-                .or_else(|| {
-                    std::env::current_exe()
-                        .ok()
-                        .map(|p| p.display().to_string())
-                })
-                .unwrap_or_else(|| {
-                    exit_with_error("cannot locate the engine binary; pass --engine")
-                });
+            let engine = engine.unwrap_or_else(own_binary);
             let start = match resume {
                 Some(path) => std::fs::read_to_string(&path)
                     .map_err(|e| format!("{path}: {e}"))
@@ -709,14 +659,12 @@ fn main() {
             };
             let openings = openings::sample_openings(&openings, 100_000, seed)
                 .unwrap_or_else(|e| exit_with_error(&e));
-            let mut engine_options = vec![
-                ("OwnBook".to_string(), "false".to_string()),
-                ("Hash".to_string(), "16".to_string()),
-            ];
-            engine_options.extend(parse_options(&options));
+            let tune_options: Vec<String> = std::iter::once(TUNE_HASH_OPTION.to_string())
+                .chain(options)
+                .collect();
             let config = spsa::SpsaConfig {
                 engine,
-                engine_options,
+                engine_options: options_without_book(&tune_options),
                 openings,
                 pairs,
                 base_time_ms: time,
@@ -755,4 +703,21 @@ fn parse_options(options: &[String]) -> Vec<(String, String)> {
         .iter()
         .map(|s| tournament::parse_option(s).unwrap_or_else(|e| exit_with_error(&e)))
         .collect()
+}
+
+/// Turns the engine's own book off, then sets `extra`: comparisons and tuning
+/// games measure the search, not the book.
+fn options_without_book(extra: &[String]) -> Vec<(String, String)> {
+    let mut options = vec![("OwnBook".to_string(), "false".to_string())];
+    options.extend(parse_options(extra));
+    options
+}
+
+/// The path of this executable, which plays when no engine is named.
+fn own_binary() -> String {
+    std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|e| {
+            exit_with_error(&format!("cannot locate this binary ({e}); pass --engine"))
+        })
 }
