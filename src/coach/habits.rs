@@ -19,14 +19,6 @@ pub enum Habit {
 }
 
 impl Habit {
-    pub const ALL: [Self; 5] = [
-        Self::EarlyQueen,
-        Self::SamePieceTwice,
-        Self::KingWalk,
-        Self::SlowDevelopment,
-        Self::NoCastling,
-    ];
-
     pub const fn name(self) -> &'static str {
         match self {
             Self::EarlyQueen => "Early queen moves",

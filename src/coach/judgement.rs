@@ -87,7 +87,6 @@ pub struct WinChance(f64);
 impl WinChance {
     pub const WON: Self = Self(100.0);
     pub const LOST: Self = Self(0.0);
-    pub const EVEN: Self = Self(50.0);
 
     pub const fn percent(self) -> f64 {
         self.0

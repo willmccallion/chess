@@ -37,6 +37,7 @@ macro_rules! search_params {
             }
 
             /// The value of the parameter called `name` (case-insensitive).
+            #[cfg(test)]
             pub const fn get(&self, name: &str) -> Option<i32> {
                 $(if name.eq_ignore_ascii_case($name) {
                     return Some(self.$field);

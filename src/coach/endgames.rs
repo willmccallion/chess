@@ -42,10 +42,6 @@ impl Drill {
     pub fn board(&self) -> Result<Board, FenError> {
         Board::from_fen(self.fen)
     }
-
-    pub fn side(&self) -> Result<Color, FenError> {
-        self.board().map(|b| b.turn)
-    }
 }
 
 pub const DRILLS: &[Drill] = &[
@@ -150,6 +146,7 @@ pub const DRILLS: &[Drill] = &[
     },
 ];
 
+#[cfg(test)]
 pub fn drill_by_id(id: &str) -> Option<&'static Drill> {
     DRILLS.iter().find(|d| d.id == id)
 }
