@@ -966,12 +966,6 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &Legali
     best_score
 }
 
-enum ProbCut {
-    Cutoff(i32),
-    NoCutoff,
-    Aborted,
-}
-
 /// What razoring, reverse futility and null-move pruning weigh about a
 /// non-PV node with a static evaluation.
 #[derive(Clone, Copy)]
@@ -1036,22 +1030,43 @@ fn null_move_cutoff(s: &mut Search, n: NodePruning) -> Option<i32> {
     })
 }
 
-/// Looks for a capture that beats `probcut_beta` in quiescence and then in a reduced
-/// search; if one exists the node almost certainly fails high at full depth too.
-fn probcut(
-    s: &mut Search,
-    legality: &LegalityInfo,
+enum ProbCut {
+    Cutoff(i32),
+    NoCutoff,
+    Aborted,
+}
+
+/// What ProbCut weighs about a non-PV node not in check.
+#[derive(Clone, Copy)]
+struct ProbCutNode {
     depth: i32,
-    probcut_beta: i32,
+    beta: i32,
     static_eval: i32,
     node: NodeKind,
-) -> ProbCut {
+    tt_entry: Option<TTEntry>,
+}
+
+/// Looks for a capture that beats beta by a margin in quiescence and then in a
+/// reduced search; if one exists the node almost certainly fails high at full
+/// depth too. Skipped near mate scores and where the TT entry already falls short.
+fn probcut(s: &mut Search, legality: &LegalityInfo, n: ProbCutNode) -> ProbCut {
     use crate::movepicker::QMovePicker;
 
-    let probe_depth = depth - s.params.probcut_reduction;
+    if n.depth < s.params.probcut_min_depth || n.beta.abs() >= MATE_THRESHOLD {
+        return ProbCut::NoCutoff;
+    }
+    let probcut_beta = n.beta + s.params.probcut_margin;
+    let tt_rules_out_probcut = n.tt_entry.is_some_and(|entry| {
+        i32::from(entry.depth()) >= n.depth - 3
+            && score_from_tt(entry.score(), s.ply) < probcut_beta
+    });
+    if tt_rules_out_probcut {
+        return ProbCut::NoCutoff;
+    }
+    let probe_depth = n.depth - s.params.probcut_reduction;
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&s.board) {
-        if !see_ge(&s.board, m, probcut_beta - static_eval) {
+        if !see_ge(&s.board, m, probcut_beta - n.static_eval) {
             continue;
         }
         let Some(undo) = s.make_move(m, legality) else {
@@ -1064,7 +1079,7 @@ fn probcut(
                 -probcut_beta,
                 -probcut_beta + 1,
                 probe_depth,
-                node.opposite(),
+                n.node.opposite(),
             );
         }
         s.unmake_move(m, undo);
@@ -1424,23 +1439,20 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
     }
 
     if !is_pv
-        && !in_check
         && excluded_move.is_none()
-        && depth >= s.params.probcut_min_depth
-        && beta.abs() < MATE_THRESHOLD
         && let Some(static_eval) = corrected_eval
     {
-        let probcut_beta = beta + s.params.probcut_margin;
-        let tt_rules_out_probcut = tt_entry.is_some_and(|entry| {
-            i32::from(entry.depth()) >= depth - 3
-                && score_from_tt(entry.score(), s.ply) < probcut_beta
-        });
-        if !tt_rules_out_probcut {
-            match probcut(s, &legality, depth, probcut_beta, static_eval, node) {
-                ProbCut::Cutoff(score) => return score,
-                ProbCut::Aborted => return 0,
-                ProbCut::NoCutoff => {}
-            }
+        let candidate = ProbCutNode {
+            depth,
+            beta,
+            static_eval,
+            node,
+            tt_entry,
+        };
+        match probcut(s, &legality, candidate) {
+            ProbCut::Cutoff(score) => return score,
+            ProbCut::Aborted => return 0,
+            ProbCut::NoCutoff => {}
         }
     }
 
