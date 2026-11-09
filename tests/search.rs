@@ -53,6 +53,17 @@ fn fixed_depth_search_reporting(
 }
 
 #[test]
+fn a_main_thread_that_panics_stops_the_helpers_and_still_answers() {
+    let deepest = 127;
+
+    let result = fixed_depth_search_reporting(&board(START_FEN), deepest, 2, &|_| {
+        panic!("the reporter fails");
+    });
+
+    assert!(result.best_move.is_some());
+}
+
+#[test]
 fn plays_mate_on_the_hundredth_half_move() {
     load_stockfish_nets();
     let fen = "7k/8/6K1/8/8/8/8/R7 w - - 99 80";

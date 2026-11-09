@@ -2179,7 +2179,7 @@ fn spawn_helpers<'scope, 'env>(
 
 /// Runs the main search on its own thread and waits for it: it reports each
 /// iteration, waits for `stop` when the search must, and then stops the
-/// helpers.
+/// helpers, which it also does when it fails to start or panics.
 fn run_main_thread<'scope, 'env>(
     scope: &'scope thread::Scope<'scope, 'env>,
     job: SearchJob<'env>,
@@ -2205,12 +2205,11 @@ fn run_main_thread<'scope, 'env>(
         nodes: 0,
         score: None,
     };
-    if let Ok(handle) = spawned {
-        handle.join().unwrap_or(failed)
-    } else {
+    let outcome = spawned.ok().and_then(|handle| handle.join().ok());
+    if outcome.is_none() {
         control.stop();
-        failed
     }
+    outcome.unwrap_or(failed)
 }
 
 #[cfg(test)]
