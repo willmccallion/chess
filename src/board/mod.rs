@@ -655,47 +655,20 @@ impl Board {
     #[inline]
     pub fn make_move(&mut self, m: Move) -> Undo {
         let moving = self.piece_on[m.from.index()];
-        let captured_square = m.captured_square(self.turn);
-        let undo = Undo {
-            captured_piece: if m.is_capture() {
-                self.piece_on[captured_square]
-            } else {
-                Piece::Empty
-            },
-            old_castle: self.castle,
-            old_en_passant: self.en_passant,
-            old_halfmove_clock: self.halfmove_clock,
-            old_plies_from_null: self.plies_from_null,
-            old_zobrist: self.zobrist,
+        let captured = if m.is_capture() {
+            self.piece_on[m.captured_square(self.turn)]
+        } else {
+            Piece::Empty
         };
+        let undo = self.undo_record(captured);
         self.plies_from_null += 1;
-
-        let position = PositionView {
-            piece_on: &self.piece_on,
-            piece_bb: &self.piece_bb,
-            occupied: self.all_pieces,
-            turn: self.turn,
-            halfmove_clock: self.halfmove_clock,
-        };
-        self.eval_state.push_move(position, m);
+        let (eval_state, position) = self.eval_state_and_view();
+        eval_state.push_move(position, m);
 
         if let Some(ep) = self.en_passant.take() {
             self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
-        self.remove_piece(moving, m.from.index());
-        if !undo.captured_piece.is_empty() {
-            self.remove_piece(undo.captured_piece, captured_square);
-        }
-        let arriving = m
-            .promotion()
-            .map_or(moving, |kind| Piece::from_kind(kind, self.turn));
-        self.put_piece(arriving, m.to.index());
-        if m.is_castle() {
-            let (rook_from, rook_to) = castling_rook_squares(m.from.index(), m.to.index());
-            let rook = self.piece_on[rook_from];
-            self.remove_piece(rook, rook_from);
-            self.put_piece(rook, rook_to);
-        }
+        self.move_pieces(m, moving, captured);
         if m.is_double_push() {
             let ep =
                 Square::from_file_rank(m.from.file(), u8::midpoint(m.from.rank(), m.to.rank()));
@@ -717,6 +690,38 @@ impl Board {
         self.turn = self.turn.other();
         self.history.push(self.zobrist);
         undo
+    }
+
+    /// What unmaking a move that takes `captured` needs to restore.
+    const fn undo_record(&self, captured: Piece) -> Undo {
+        Undo {
+            captured_piece: captured,
+            old_castle: self.castle,
+            old_en_passant: self.en_passant,
+            old_halfmove_clock: self.halfmove_clock,
+            old_plies_from_null: self.plies_from_null,
+            old_zobrist: self.zobrist,
+        }
+    }
+
+    /// Moves `moving` for `m`, taking `captured` and moving the rook of a
+    /// castling, with the key, leaving `all_pieces` to the caller.
+    #[inline(always)]
+    fn move_pieces(&mut self, m: Move, moving: Piece, captured: Piece) {
+        self.remove_piece(moving, m.from.index());
+        if !captured.is_empty() {
+            self.remove_piece(captured, m.captured_square(self.turn));
+        }
+        let arriving = m
+            .promotion()
+            .map_or(moving, |kind| Piece::from_kind(kind, self.turn));
+        self.put_piece(arriving, m.to.index());
+        if m.is_castle() {
+            let (rook_from, rook_to) = castling_rook_squares(m.from.index(), m.to.index());
+            let rook = self.piece_on[rook_from];
+            self.remove_piece(rook, rook_from);
+            self.put_piece(rook, rook_to);
+        }
     }
 
     /// Takes `piece` off `square`, leaving `all_pieces` to the caller.
@@ -808,46 +813,52 @@ impl Board {
 
     #[inline]
     pub fn unmake_move(&mut self, m: Move, undo: Undo) {
-        let from = m.from.index();
-        let to = m.to.index();
-
-        let piece_on_to = self.piece_on[to];
-        let moving_piece = if m.promotion().is_some() {
-            Piece::from_kind(PieceKind::Pawn, self.turn.other())
-        } else {
-            piece_on_to
-        };
-
         self.eval_state.pop_move();
-
-        self.history.pop();
-        self.zobrist = undo.old_zobrist;
-
+        self.restore(&undo);
         self.turn = self.turn.other();
         if self.turn == Color::Black {
             self.fullmove_number -= 1;
         }
+        self.unmove_pieces(m, undo.captured_piece);
+        self.all_pieces = self.color_bb[0] | self.color_bb[1];
+    }
 
+    /// Restores what `undo` recorded and drops the position from the history.
+    #[inline(always)]
+    fn restore(&mut self, undo: &Undo) {
+        self.history.pop();
+        self.zobrist = undo.old_zobrist;
         self.castle = undo.old_castle;
         self.en_passant = undo.old_en_passant;
         self.halfmove_clock = undo.old_halfmove_clock;
         self.plies_from_null = undo.old_plies_from_null;
+    }
+
+    /// Puts back the pieces `m` moved and the `captured` one, with the side
+    /// that made `m` to move again; the key is restored separately.
+    #[inline(always)]
+    fn unmove_pieces(&mut self, m: Move, captured: Piece) {
+        let from = m.from.index();
+        let to = m.to.index();
+        let mover = self.turn as usize;
+        let piece_on_to = self.piece_on[to];
+        let moving_piece = if m.promotion().is_some() {
+            Piece::from_kind(PieceKind::Pawn, self.turn)
+        } else {
+            piece_on_to
+        };
 
         self.piece_on[from] = moving_piece;
         self.piece_bb[moving_piece.index()] |= 1u64 << from;
-        self.color_bb[self.turn as usize] |= 1u64 << from;
-
+        self.color_bb[mover] |= 1u64 << from;
         self.piece_bb[piece_on_to.index()] &= !(1u64 << to);
-        self.color_bb[self.turn as usize] &= !(1u64 << to);
+        self.color_bb[mover] &= !(1u64 << to);
 
         if m.is_capture() {
-            let captured = undo.captured_piece;
-
             if m.is_en_passant() {
                 self.piece_on[to] = Piece::Empty;
             }
             let cap_sq = m.captured_square(self.turn);
-
             self.piece_on[cap_sq] = captured;
             if !captured.is_empty() {
                 self.piece_bb[captured.index()] |= 1u64 << cap_sq;
@@ -862,25 +873,15 @@ impl Board {
             let rook = self.piece_on[rook_to];
             self.piece_on[rook_from] = rook;
             self.piece_on[rook_to] = Piece::Empty;
-
             let rook_bb = (1u64 << rook_from) | (1u64 << rook_to);
             self.piece_bb[rook.index()] ^= rook_bb;
-            self.color_bb[self.turn as usize] ^= rook_bb;
+            self.color_bb[mover] ^= rook_bb;
         }
-
-        self.all_pieces = self.color_bb[0] | self.color_bb[1];
     }
 
     #[inline]
     pub fn make_null_move(&mut self) -> Undo {
-        let undo = Undo {
-            captured_piece: Piece::Empty,
-            old_castle: self.castle,
-            old_en_passant: self.en_passant,
-            old_halfmove_clock: self.halfmove_clock,
-            old_plies_from_null: self.plies_from_null,
-            old_zobrist: self.zobrist,
-        };
+        let undo = self.undo_record(Piece::Empty);
         self.plies_from_null = 0;
 
         if let Some(ep) = self.en_passant.take() {
@@ -897,12 +898,8 @@ impl Board {
 
     #[inline]
     pub fn unmake_null_move(&mut self, undo: Undo) {
-        self.history.pop();
-        self.zobrist = undo.old_zobrist;
+        self.restore(&undo);
         self.turn = self.turn.other();
-        self.en_passant = undo.old_en_passant;
-        self.halfmove_clock = undo.old_halfmove_clock;
-        self.plies_from_null = undo.old_plies_from_null;
     }
 
     pub fn to_fen(&self) -> String {
