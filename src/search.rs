@@ -2,12 +2,12 @@ use crate::board::Board;
 use crate::eval::evaluate;
 use crate::history::{ContinuationKey, CorrectionHistory, Histories, captured_kind, stat_bonus};
 use crate::legality::LegalityInfo;
-use crate::movepicker::{MovePicker, OrderingContext};
+use crate::movepicker::{MovePicker, OrderingContext, ScoredMoves};
 use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable, TTEntry, TTWrite};
-use crate::types::{MAX_MOVES, Move, MoveList, Piece, StackVec, Undo};
+use crate::types::{Move, MoveList, Piece, StackVec, Undo};
 use crate::uci_io::format_uci;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -923,26 +923,14 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
 
 /// Quiescence when in check: every evasion is searched so mates are found.
 fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &LegalityInfo) -> i32 {
-    let mut move_list = MoveList::new();
-    s.board.generate_pseudo_legal_moves(&mut move_list);
-
-    let mut scores = [0i32; MAX_MOVES];
-    for (score, &m) in scores.iter_mut().zip(move_list.as_slice()) {
-        *score = if m.is_capture() { see(&s.board, m) } else { 0 };
-    }
+    let mut evasions = ScoredMoves::new();
+    evasions.fill(
+        |moves| s.board.generate_pseudo_legal_moves(moves),
+        |m| if m.is_capture() { see(&s.board, m) } else { 0 },
+    );
 
     let mut best_score = -MATE_SCORE + s.ply as i32;
-    for i in 0..move_list.len() {
-        let mut best_idx = i;
-        for j in (i + 1)..move_list.len() {
-            if scores[j] > scores[best_idx] {
-                best_idx = j;
-            }
-        }
-        move_list.swap(i, best_idx);
-        scores.swap(i, best_idx);
-
-        let m = move_list.get(i);
+    while let Some(m) = evasions.pick_best() {
         let Some(undo) = s.make_move(m, legality) else {
             continue;
         };

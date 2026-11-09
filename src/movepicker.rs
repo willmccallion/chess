@@ -167,6 +167,57 @@ fn best_index_from(scores: &[i32], start: usize) -> usize {
     best
 }
 
+/// Moves with ordering scores, handed out best first by selection sort; of
+/// equal scores the move generated first goes first.
+pub struct ScoredMoves {
+    moves: MoveList,
+    scores: StackVec<i32, MAX_MOVES>,
+    next: usize,
+}
+
+impl ScoredMoves {
+    pub fn new() -> Self {
+        Self {
+            moves: MoveList::new(),
+            scores: StackVec::default(),
+            next: 0,
+        }
+    }
+
+    /// Replaces the moves with those `generate` writes, each scored by `score`.
+    pub fn fill(
+        &mut self,
+        generate: impl FnOnce(&mut MoveList),
+        mut score: impl FnMut(Move) -> i32,
+    ) {
+        generate(&mut self.moves);
+        self.scores.clear();
+        for &m in self.moves.as_slice() {
+            self.scores.push(score(m));
+        }
+        self.next = 0;
+    }
+
+    /// The highest-scoring move not yet handed out.
+    pub fn pick_best(&mut self) -> Option<Move> {
+        if self.next >= self.moves.len() {
+            return None;
+        }
+        let best = best_index_from(self.scores.as_slice(), self.next);
+        self.moves.swap(self.next, best);
+        self.scores.as_mut_slice().swap(self.next, best);
+        let m = self.moves.get(self.next);
+        self.next += 1;
+        Some(m)
+    }
+}
+
+impl Default for ScoredMoves {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct MovePicker {
     stage: Stage,
     tt_move: Option<Move>,
@@ -174,9 +225,7 @@ pub struct MovePicker {
     killer2: Option<Move>,
     counter_move: Option<Move>,
 
-    moves: MoveList,
-    scores: StackVec<i32, MAX_MOVES>,
-    idx: usize,
+    scored: ScoredMoves,
 
     bad_captures: StackVec<Move, MAX_BAD_CAPTURES>,
     bad_idx: usize,
@@ -200,9 +249,7 @@ impl MovePicker {
             killer1,
             killer2,
             counter_move,
-            moves: MoveList::new(),
-            scores: StackVec::default(),
-            idx: 0,
+            scored: ScoredMoves::new(),
             bad_captures: StackVec::default(),
             bad_idx: 0,
             skip_quiets: false,
@@ -221,19 +268,6 @@ impl MovePicker {
             && board.is_pseudo_legal(m)
     }
 
-    /// Selection-sorts the next move into place and returns it with its score.
-    fn pick_next(&mut self) -> Option<(Move, i32)> {
-        if self.idx >= self.moves.len() {
-            return None;
-        }
-        let best = best_index_from(self.scores.as_slice(), self.idx);
-        self.moves.swap(self.idx, best);
-        self.scores.as_mut_slice().swap(self.idx, best);
-        let picked = (self.moves.get(self.idx), self.scores.as_slice()[self.idx]);
-        self.idx += 1;
-        Some(picked)
-    }
-
     pub fn next(&mut self, board: &Board, ctx: &OrderingContext) -> Option<Move> {
         loop {
             if self.skip_quiets && self.stage.is_quiet_stage() {
@@ -250,17 +284,15 @@ impl MovePicker {
                 }
 
                 Stage::GenCaptures => {
-                    board.generate_captures(&mut self.moves);
-                    self.scores.clear();
-                    for &m in self.moves.as_slice() {
-                        self.scores.push(ctx.capture_score(board, m));
-                    }
-                    self.idx = 0;
+                    self.scored.fill(
+                        |moves| board.generate_captures(moves),
+                        |m| ctx.capture_score(board, m),
+                    );
                     self.stage = Stage::GoodCaptures;
                 }
 
                 Stage::GoodCaptures => {
-                    while let Some((m, _)) = self.pick_next() {
+                    while let Some(m) = self.scored.pick_best() {
                         if Some(m) == self.tt_move {
                             continue;
                         }
@@ -303,18 +335,16 @@ impl MovePicker {
                 }
 
                 Stage::GenQuiets => {
-                    board.generate_quiets(&mut self.moves);
                     let threats = QuietThreats::new(board);
-                    self.scores.clear();
-                    for &m in self.moves.as_slice() {
-                        self.scores.push(ctx.quiet_score(board, &threats, m));
-                    }
-                    self.idx = 0;
+                    self.scored.fill(
+                        |moves| board.generate_quiets(moves),
+                        |m| ctx.quiet_score(board, &threats, m),
+                    );
                     self.stage = Stage::Quiets;
                 }
 
                 Stage::Quiets => {
-                    while let Some((m, _)) = self.pick_next() {
+                    while let Some(m) = self.scored.pick_best() {
                         let already_tried = Some(m) == self.tt_move
                             || Some(m) == self.killer1
                             || Some(m) == self.killer2
@@ -350,18 +380,14 @@ enum QStage {
 
 pub struct QMovePicker {
     stage: QStage,
-    moves: MoveList,
-    scores: StackVec<i32, MAX_MOVES>,
-    idx: usize,
+    scored: ScoredMoves,
 }
 
 impl QMovePicker {
     pub fn new() -> Self {
         Self {
             stage: QStage::GenCaptures,
-            moves: MoveList::new(),
-            scores: StackVec::default(),
-            idx: 0,
+            scored: ScoredMoves::new(),
         }
     }
 
@@ -369,36 +395,17 @@ impl QMovePicker {
         loop {
             match self.stage {
                 QStage::GenCaptures => {
-                    board.generate_captures(&mut self.moves);
-                    self.scores.clear();
-                    for &m in self.moves.as_slice() {
-                        self.scores.push(see(board, m));
-                    }
-                    self.idx = 0;
+                    self.scored
+                        .fill(|moves| board.generate_captures(moves), |m| see(board, m));
                     self.stage = QStage::Captures;
                 }
 
                 QStage::Captures => {
-                    if self.idx >= self.moves.len() {
+                    let picked = self.scored.pick_best();
+                    if picked.is_none() {
                         self.stage = QStage::Done;
-                        return None;
                     }
-
-                    // Selection sort
-                    let mut best_k = self.idx;
-                    let mut best_s = self.scores.as_slice()[self.idx];
-                    for j in (self.idx + 1)..self.moves.len() {
-                        if self.scores.as_slice()[j] > best_s {
-                            best_s = self.scores.as_slice()[j];
-                            best_k = j;
-                        }
-                    }
-                    self.moves.swap(self.idx, best_k);
-                    self.scores.as_mut_slice().swap(self.idx, best_k);
-
-                    let m = self.moves.get(self.idx);
-                    self.idx += 1;
-                    return Some(m);
+                    return picked;
                 }
 
                 QStage::Done => return None,
