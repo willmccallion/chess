@@ -11,7 +11,7 @@ pub enum GameResult {
     Draw,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GameEndReason {
     Checkmate,
     Stalemate,

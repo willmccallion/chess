@@ -1,5 +1,5 @@
 use crate::game_runner::{
-    GameClock, GameConfig, GameEndReason, GameResult, StartPosition, play_game,
+    GameClock, GameConfig, GameEndReason, GameOutcome, GameResult, StartPosition, play_game,
 };
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::types::START_FEN;
@@ -43,71 +43,106 @@ impl TournamentConfig {
     }
 }
 
-struct Score {
-    e1_wins: usize,
-    e2_wins: usize,
+/// How a game went for one engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EngineResult {
+    Win,
+    Loss,
+    Draw,
+}
+
+impl EngineResult {
+    /// The result for the engine that played white when `is_white`, else black.
+    const fn of(result: GameResult, is_white: bool) -> Self {
+        match (result, is_white) {
+            (GameResult::Draw, _) => Self::Draw,
+            (GameResult::WhiteWin, true) | (GameResult::BlackWin, false) => Self::Win,
+            (GameResult::WhiteWin, false) | (GameResult::BlackWin, true) => Self::Loss,
+        }
+    }
+
+    const fn points(self) -> f64 {
+        match self {
+            Self::Win => 1.0,
+            Self::Draw => 0.5,
+            Self::Loss => 0.0,
+        }
+    }
+}
+
+/// Wins, losses and draws from one engine's side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Wdl {
+    wins: usize,
+    losses: usize,
     draws: usize,
-    completed: usize,
+}
 
-    // As white / as black (from e1's perspective)
-    e1_wins_as_white: usize,
-    e1_wins_as_black: usize,
-    e2_wins_as_white: usize,
-    e2_wins_as_black: usize,
-    draws_e1_white: usize,
-    draws_e1_black: usize,
+impl Wdl {
+    fn add(&mut self, result: EngineResult) {
+        match result {
+            EngineResult::Win => self.wins += 1,
+            EngineResult::Loss => self.losses += 1,
+            EngineResult::Draw => self.draws += 1,
+        }
+    }
 
-    // Termination reasons
-    checkmates: usize,
-    stalemates: usize,
-    repetitions: usize,
-    fifty_move: usize,
-    insufficient_material: usize,
-    flag_falls: usize,
-    move_limits: usize,
-    illegal_moves: usize,
-    crashes: usize,
+    const fn games(self) -> usize {
+        self.wins + self.losses + self.draws
+    }
 
-    // Game length tracking
+    fn points(self) -> f64 {
+        self.wins as f64 + self.draws as f64 * 0.5
+    }
+
+    /// The same games from the opponent's side.
+    const fn opponent(self) -> Self {
+        Self {
+            wins: self.losses,
+            losses: self.wins,
+            draws: self.draws,
+        }
+    }
+}
+
+/// The standings so far, from engine 1's side.
+#[derive(Default)]
+struct Score {
+    e1: Wdl,
+    e1_as_white: Wdl,
+    e1_as_black: Wdl,
+    terminations: HashMap<GameEndReason, usize>,
     total_plies: usize,
-    shortest_game: usize,
+    shortest_game: Option<usize>,
     longest_game: usize,
-
-    // Game-pair statistics (pair = same opening, colors swapped)
+    /// Game pairs: the same opening with colours swapped.
     penta: Pentanomial,
     unpaired_e1_points: HashMap<usize, f64>,
     sprt_decision: Option<SprtDecision>,
 }
 
 impl Score {
-    fn new() -> Self {
-        Self {
-            e1_wins: 0,
-            e2_wins: 0,
-            draws: 0,
-            completed: 0,
-            e1_wins_as_white: 0,
-            e1_wins_as_black: 0,
-            e2_wins_as_white: 0,
-            e2_wins_as_black: 0,
-            draws_e1_white: 0,
-            draws_e1_black: 0,
-            checkmates: 0,
-            stalemates: 0,
-            repetitions: 0,
-            fifty_move: 0,
-            insufficient_material: 0,
-            flag_falls: 0,
-            move_limits: 0,
-            illegal_moves: 0,
-            crashes: 0,
-            total_plies: 0,
-            shortest_game: usize::MAX,
-            longest_game: 0,
-            penta: Pentanomial::default(),
-            unpaired_e1_points: HashMap::new(),
-            sprt_decision: None,
+    /// Counts game `game_idx`, played by engine 1 as white when `e1_is_white`;
+    /// returns true when it completes a pair.
+    fn record(&mut self, outcome: &GameOutcome, e1_is_white: bool, game_idx: usize) -> bool {
+        let e1_result = EngineResult::of(outcome.result, e1_is_white);
+        self.e1.add(e1_result);
+        if e1_is_white {
+            self.e1_as_white.add(e1_result);
+        } else {
+            self.e1_as_black.add(e1_result);
         }
+        *self.terminations.entry(outcome.reason).or_default() += 1;
+        self.total_plies += outcome.move_count;
+        self.shortest_game = Some(self.shortest_game.map_or(outcome.move_count, |shortest| {
+            shortest.min(outcome.move_count)
+        }));
+        self.longest_game = self.longest_game.max(outcome.move_count);
+        self.record_pair_game(game_idx, e1_result.points())
+    }
+
+    fn completed(&self) -> usize {
+        self.e1.games()
     }
 
     /// Records engine 1's points for a game; returns true when this completes a pair.
@@ -200,16 +235,16 @@ pub(crate) fn spawn_and_init_pinned(
 }
 
 fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
-    let total = s.completed;
-    let e1_score = s.e1_wins as f64 + s.draws as f64 * 0.5;
-    let e2_score = s.e2_wins as f64 + s.draws as f64 * 0.5;
-    let elo = format_elo(s.e1_wins, s.e2_wins, s.draws);
+    let total = s.completed();
+    let e1_score = s.e1.wins as f64 + s.e1.draws as f64 * 0.5;
+    let e2_score = s.e1.losses as f64 + s.e1.draws as f64 * 0.5;
+    let elo = format_elo(s.e1.wins, s.e1.losses, s.e1.draws);
     let err = match s.penta.elo() {
         Some((_, pair_error)) => Some(pair_error),
-        None => elo_error_95(s.e1_wins, s.e2_wins, s.draws),
+        None => elo_error_95(s.e1.wins, s.e1.losses, s.e1.draws),
     };
     let draw_rate = if total > 0 {
-        s.draws as f64 / total as f64 * 100.0
+        s.e1.draws as f64 / total as f64 * 100.0
     } else {
         0.0
     };
@@ -285,20 +320,20 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     println!(
         "  | {name:<w$} | {wins:>4} | {losses:>4} | {draws:>4} | {pct} | {pts:>5.1} |",
         name = e1_name,
-        wins = s.e1_wins,
-        losses = s.e2_wins,
-        draws = s.draws,
-        pct = format_pct(s.e1_wins * 2 + s.draws, total * 2),
+        wins = s.e1.wins,
+        losses = s.e1.losses,
+        draws = s.e1.draws,
+        pct = format_pct(s.e1.wins * 2 + s.e1.draws, total * 2),
         pts = e1_score,
         w = w,
     );
     println!(
         "  | {name:<w$} | {wins:>4} | {losses:>4} | {draws:>4} | {pct} | {pts:>5.1} |",
         name = e2_name,
-        wins = s.e2_wins,
-        losses = s.e1_wins,
-        draws = s.draws,
-        pct = format_pct(s.e2_wins * 2 + s.draws, total * 2),
+        wins = s.e1.losses,
+        losses = s.e1.wins,
+        draws = s.e1.draws,
+        pct = format_pct(s.e1.losses * 2 + s.e1.draws, total * 2),
         pts = e2_score,
         w = w,
     );
@@ -310,8 +345,8 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     println!();
 
     // White/Black breakdown
-    let e1_as_white = s.e1_wins_as_white + s.e2_wins_as_white + s.draws_e1_white;
-    let e1_as_black = s.e1_wins_as_black + s.e2_wins_as_black + s.draws_e1_black;
+    let e1_as_white = s.e1_as_white.wins + s.e1_as_white.losses + s.e1_as_white.draws;
+    let e1_as_black = s.e1_as_black.wins + s.e1_as_black.losses + s.e1_as_black.draws;
 
     println!("  White/Black Breakdown (from {}'s perspective):", e1_name);
     println!("  +-----------+------+------+------+-------+");
@@ -323,19 +358,25 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     if e1_as_white > 0 {
         println!(
             "  | As white  | {:>4} | {:>4} | {:>4} | {} |",
-            s.e1_wins_as_white,
-            s.e2_wins_as_white,
-            s.draws_e1_white,
-            format_pct(s.e1_wins_as_white * 2 + s.draws_e1_white, e1_as_white * 2),
+            s.e1_as_white.wins,
+            s.e1_as_white.losses,
+            s.e1_as_white.draws,
+            format_pct(
+                s.e1_as_white.wins * 2 + s.e1_as_white.draws,
+                e1_as_white * 2
+            ),
         );
     }
     if e1_as_black > 0 {
         println!(
             "  | As black  | {:>4} | {:>4} | {:>4} | {} |",
-            s.e1_wins_as_black,
-            s.e2_wins_as_black,
-            s.draws_e1_black,
-            format_pct(s.e1_wins_as_black * 2 + s.draws_e1_black, e1_as_black * 2),
+            s.e1_as_black.wins,
+            s.e1_as_black.losses,
+            s.e1_as_black.draws,
+            format_pct(
+                s.e1_as_black.wins * 2 + s.e1_as_black.draws,
+                e1_as_black * 2
+            ),
         );
     }
     println!("  +-----------+------+------+------+-------+");
@@ -343,24 +384,25 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
 
     // Termination stats
     println!("  Terminations:");
-    let reasons: Vec<(&str, usize)> = vec![
-        ("Checkmate", s.checkmates),
-        ("Stalemate", s.stalemates),
-        ("Repetition", s.repetitions),
-        ("50-move rule", s.fifty_move),
-        ("Insufficient material", s.insufficient_material),
-        ("Flag fall", s.flag_falls),
-        ("Move limit", s.move_limits),
-        ("Illegal move", s.illegal_moves),
-        ("Engine crash", s.crashes),
+    let reasons = [
+        ("Checkmate", GameEndReason::Checkmate),
+        ("Stalemate", GameEndReason::Stalemate),
+        ("Repetition", GameEndReason::Repetition),
+        ("50-move rule", GameEndReason::FiftyMoveRule),
+        ("Insufficient material", GameEndReason::InsufficientMaterial),
+        ("Flag fall", GameEndReason::FlagFall),
+        ("Move limit", GameEndReason::MoveLimitExceeded),
+        ("Illegal move", GameEndReason::IllegalMove),
+        ("Engine crash", GameEndReason::EngineCrash),
     ];
-    for (name, count) in &reasons {
-        if *count > 0 {
+    for (name, reason) in reasons {
+        let count = s.terminations.get(&reason).copied().unwrap_or(0);
+        if count > 0 {
             println!(
                 "    {:<21} {:>4}  ({})",
                 name,
                 count,
-                format_pct(*count, total),
+                format_pct(count, total),
             );
         }
     }
@@ -373,12 +415,8 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         avg_len,
         avg_len / 2.0
     );
-    if s.shortest_game != usize::MAX {
-        println!(
-            "    Shortest: {} plies ({} moves)",
-            s.shortest_game,
-            s.shortest_game / 2
-        );
+    if let Some(shortest) = s.shortest_game {
+        println!("    Shortest: {} plies ({} moves)", shortest, shortest / 2);
     }
     println!(
         "    Longest:  {} plies ({} moves)",
@@ -454,7 +492,7 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
 
     let start_time = Instant::now();
     let next_game = Arc::new(AtomicUsize::new(0));
-    let score = Arc::new(Mutex::new(Score::new()));
+    let score = Arc::new(Mutex::new(Score::default()));
     let stop = Arc::new(AtomicBool::new(false));
     let config = Arc::new(config);
     let mut handles = Vec::new();
@@ -522,12 +560,6 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
 
                 let outcome = play_game(white, black, &game_config);
 
-                let (e1_win, e2_win) = match outcome.result {
-                    GameResult::WhiteWin => (e1_is_white, !e1_is_white),
-                    GameResult::BlackWin => (!e1_is_white, e1_is_white),
-                    GameResult::Draw => (false, false),
-                };
-
                 let result_str = match outcome.result {
                     GameResult::WhiteWin => "1-0",
                     GameResult::BlackWin => "0-1",
@@ -535,74 +567,15 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
                 };
 
                 let mut s = score.lock().unwrap();
+                let pair_completed = s.record(&outcome, e1_is_white, game_idx);
 
-                // Basic score
-                if e1_win {
-                    s.e1_wins += 1;
-                } else if e2_win {
-                    s.e2_wins += 1;
-                } else {
-                    s.draws += 1;
-                }
-                s.completed += 1;
-
-                // White/Black breakdown
-                if e1_is_white {
-                    if e1_win {
-                        s.e1_wins_as_white += 1;
-                    } else if e2_win {
-                        s.e2_wins_as_white += 1;
-                    } else {
-                        s.draws_e1_white += 1;
-                    }
-                } else {
-                    if e1_win {
-                        s.e1_wins_as_black += 1;
-                    } else if e2_win {
-                        s.e2_wins_as_black += 1;
-                    } else {
-                        s.draws_e1_black += 1;
-                    }
-                }
-
-                // Termination reason
-                match outcome.reason {
-                    GameEndReason::Checkmate => s.checkmates += 1,
-                    GameEndReason::Stalemate => s.stalemates += 1,
-                    GameEndReason::Repetition => s.repetitions += 1,
-                    GameEndReason::FiftyMoveRule => s.fifty_move += 1,
-                    GameEndReason::InsufficientMaterial => s.insufficient_material += 1,
-                    GameEndReason::FlagFall => s.flag_falls += 1,
-                    GameEndReason::MoveLimitExceeded => s.move_limits += 1,
-                    GameEndReason::IllegalMove => s.illegal_moves += 1,
-                    GameEndReason::EngineCrash => s.crashes += 1,
-                }
-
-                // Game length
-                s.total_plies += outcome.move_count;
-                if outcome.move_count < s.shortest_game {
-                    s.shortest_game = outcome.move_count;
-                }
-                if outcome.move_count > s.longest_game {
-                    s.longest_game = outcome.move_count;
-                }
-
-                let e1_points = if e1_win {
-                    1.0
-                } else if e2_win {
-                    0.0
-                } else {
-                    0.5
-                };
-                let pair_completed = s.record_pair_game(game_idx, e1_points);
-
-                let e1_score = s.e1_wins as f64 + s.draws as f64 * 0.5;
-                let e2_score = s.e2_wins as f64 + s.draws as f64 * 0.5;
-                let elo = format_elo(s.e1_wins, s.e2_wins, s.draws);
+                let e1_score = s.e1.points();
+                let e2_score = s.e1.opponent().points();
+                let elo = format_elo(s.e1.wins, s.e1.losses, s.e1.draws);
 
                 println!(
                     "Game {:>3}/{}: {} vs {} -> {} ({}, {} plies)  [{} {:.1} - {:.1} {}] [{}]",
-                    s.completed,
+                    s.completed(),
                     config.rounds,
                     white_name,
                     black_name,
@@ -746,9 +719,72 @@ mod tests {
         assert_eq!(shown, ["+inf", "-inf", "0", "+191"]);
     }
 
+    fn outcome(result: GameResult, reason: GameEndReason, move_count: usize) -> GameOutcome {
+        GameOutcome {
+            result,
+            reason,
+            move_count,
+        }
+    }
+
+    #[test]
+    fn a_game_result_reads_from_each_engines_side() {
+        let results = [
+            EngineResult::of(GameResult::WhiteWin, true),
+            EngineResult::of(GameResult::WhiteWin, false),
+            EngineResult::of(GameResult::BlackWin, true),
+            EngineResult::of(GameResult::BlackWin, false),
+            EngineResult::of(GameResult::Draw, true),
+            EngineResult::of(GameResult::Draw, false),
+        ];
+
+        use EngineResult::{Draw, Loss, Win};
+        assert_eq!(results, [Win, Loss, Loss, Win, Draw, Draw]);
+    }
+
+    #[test]
+    fn recorded_games_count_by_colour_ending_and_length() {
+        let mut score = Score::default();
+
+        let first = score.record(
+            &outcome(GameResult::WhiteWin, GameEndReason::Checkmate, 40),
+            true,
+            0,
+        );
+        let second = score.record(
+            &outcome(GameResult::WhiteWin, GameEndReason::FlagFall, 10),
+            false,
+            1,
+        );
+
+        let wdl = |wins, losses, draws| Wdl {
+            wins,
+            losses,
+            draws,
+        };
+        assert_eq!((first, second), (false, true));
+        assert_eq!(score.e1, wdl(1, 1, 0));
+        assert_eq!(
+            (score.e1_as_white, score.e1_as_black),
+            (wdl(1, 0, 0), wdl(0, 1, 0))
+        );
+        assert_eq!(score.terminations[&GameEndReason::Checkmate], 1);
+        assert_eq!(score.terminations[&GameEndReason::FlagFall], 1);
+        assert_eq!(
+            (score.shortest_game, score.longest_game, score.total_plies),
+            (Some(10), 40, 50)
+        );
+        assert_eq!(score.penta.counts(), [0, 0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn a_tournament_without_games_has_no_shortest_game() {
+        assert_eq!(Score::default().shortest_game, None);
+    }
+
     #[test]
     fn the_two_games_of_a_pair_count_once_whichever_finishes_first() {
-        let mut score = Score::new();
+        let mut score = Score::default();
 
         let first_halves = [
             score.record_pair_game(3, 1.0),
