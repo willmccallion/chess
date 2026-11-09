@@ -595,6 +595,18 @@ impl Search<'_> {
         }
     }
 
+    /// The static evaluations of a node not in check, given its TT entry.
+    fn evaluate_node(&mut self, tt_entry: Option<TTEntry>) -> NodeEval {
+        let raw = self.static_eval(tt_entry.and_then(|e| e.eval()));
+        let corrected = self.corrected_eval(raw);
+        let refined = refined_eval(tt_entry, corrected, self.ply);
+        NodeEval {
+            raw,
+            corrected,
+            refined,
+        }
+    }
+
     /// Static eval for the current node, reusing the TT's copy when it has one.
     fn static_eval(&mut self, tt_eval: Option<i32>) -> i32 {
         tt_eval.unwrap_or_else(|| cp_to_search_units(evaluate(&mut self.board)))
@@ -830,9 +842,8 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         return quiesce_evasions(s, alpha, beta, &legality);
     }
 
-    let raw_eval = s.static_eval(tt_entry.and_then(|e| e.eval()));
-    let corrected_eval = s.corrected_eval(raw_eval);
-    let stand_pat = refined_eval(tt_entry, corrected_eval, s.ply);
+    let node_eval = s.evaluate_node(tt_entry);
+    let stand_pat = node_eval.refined;
     if stand_pat >= beta {
         if tt_entry.is_none() {
             s.tt.store(
@@ -840,7 +851,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 TTWrite {
                     depth: 0,
                     score: score_to_tt(stand_pat, s.ply),
-                    eval: Some(raw_eval),
+                    eval: Some(node_eval.raw),
                     bound: Bound::Lower,
                     best_move: None,
                     is_pv: tt_pv,
@@ -895,7 +906,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         TTWrite {
             depth: 0,
             score: score_to_tt(best_score, s.ply),
-            eval: Some(raw_eval),
+            eval: Some(node_eval.raw),
             bound,
             best_move,
             is_pv: tt_pv,
@@ -1177,6 +1188,17 @@ impl Search<'_> {
     }
 }
 
+/// The static evaluations of a node not in check.
+#[derive(Clone, Copy)]
+struct NodeEval {
+    /// The evaluation itself, which the TT keeps.
+    raw: i32,
+    /// `raw` adjusted by what searches learned about the pawn structure.
+    corrected: i32,
+    /// `corrected`, or the TT score where its bound places the value past it.
+    refined: i32,
+}
+
 /// What searching a node's moves found.
 #[derive(Clone, Copy)]
 struct NodeOutcome {
@@ -1375,21 +1397,15 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
     s.killers[(s.ply + 1).min(MAX_PLY - 1)] = [None; 2];
     s.stack[(s.ply + 2).min(MAX_PLY)].cutoff_count = 0;
 
-    let raw_eval = if in_check {
-        None
-    } else {
-        Some(s.static_eval(tt_entry.and_then(|e| e.eval())))
-    };
-    let corrected_eval = raw_eval.map(|raw| s.corrected_eval(raw));
+    let node_eval = (!in_check).then(|| s.evaluate_node(tt_entry));
+    let corrected_eval = node_eval.map(|e| e.corrected);
     s.stack[s.ply].static_eval = corrected_eval;
-    let eval = corrected_eval.map(|corrected| refined_eval(tt_entry, corrected, s.ply));
-
     let improving = s.is_improving(corrected_eval);
 
-    if !is_pv && let Some(eval) = eval {
+    if !is_pv && let Some(e) = node_eval {
         let candidate = NodePruning {
             depth,
-            eval,
+            eval: e.refined,
             alpha,
             beta,
             improving,
@@ -1470,10 +1486,10 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         };
 
         let can_prune = !is_root && !in_check && moves_searched > 0 && best_score > -MATE_THRESHOLD;
-        if can_prune && let Some(eval) = eval {
+        if can_prune && let Some(e) = node_eval {
             let candidate = PruningCandidate {
                 depth,
-                eval,
+                eval: e.refined,
                 alpha,
                 is_quiet,
                 quiets_seen,
@@ -1613,7 +1629,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         TTWrite {
             depth: depth as i16,
             score: score_to_tt(best_score, s.ply),
-            eval: raw_eval,
+            eval: node_eval.map(|e| e.raw),
             bound,
             best_move,
             is_pv: tt_pv,
