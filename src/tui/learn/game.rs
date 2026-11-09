@@ -109,6 +109,46 @@ pub struct CoachGame {
 }
 
 /// The engine's verdict on `board` from a finished search.
+/// The blunder check's warning about the move about to be played.
+fn warning_lines(warning: &Warning) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::raw(""),
+        Line::styled(
+            "Are you sure?",
+            Style::new().fg(WARN).add_modifier(Modifier::BOLD),
+        ),
+        colored(warning.verdict.clone(), WARN),
+    ];
+    if !warning.explanation.is_empty() {
+        lines.push(Line::styled(
+            warning.explanation.clone(),
+            Style::new().fg(TEXT),
+        ));
+    }
+    if let Some(story) = &warning.punishment {
+        lines.push(dim(format!("For example: {}", story.moves)));
+        lines.push(colored(format!("→ {}", story.outcome), WARN));
+    }
+    lines.push(dim(format!(
+        "Enter: play {} anyway   Esc: think again",
+        warning.san
+    )));
+    lines
+}
+
+/// The question that ending the game early asks.
+fn confirm_lines(confirm: Confirm) -> Vec<Line<'static>> {
+    let question = match confirm {
+        Confirm::Resign => "Resign this game? It counts as a loss.",
+        Confirm::Leave => "Leave this game? It won't be saved or rated.",
+    };
+    vec![
+        Line::raw(""),
+        colored(question, WARN),
+        dim("y: yes   n: no"),
+    ]
+}
+
 pub fn eval_after_search(board: &Board, score: Option<Score>) -> Eval {
     match position_outcome(board) {
         Some((GameResult::Draw, _)) => Eval::DRAWN,
@@ -292,69 +332,57 @@ impl CoachGame {
     }
 
     fn side_lines(&self, data: &CoachData, now: Instant) -> Vec<Line<'static>> {
-        let board = self.app.board();
-        let mut lines = Vec::new();
-        for color in [Color::White, Color::Black] {
-            let to_move = board.turn() == color && !self.is_over();
-            let (name, rating) = if color == self.settings.human {
-                ("You".to_string(), self.rating_before.0.to_string())
-            } else {
-                (
-                    format!("Coach level {}", self.settings.level.number()),
-                    format!("≈{}", self.settings.level.spec().elo.0),
-                )
-            };
-            let mut spans = vec![
-                turn_marker(to_move),
-                Span::styled(
-                    format!("{name:<15}"),
-                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("{rating:<7}"), Style::new().fg(DIM)),
-            ];
-            if let Some(clocks) = self.app.clocks() {
-                let left = clocks.remaining(color, board.turn(), now);
-                spans.push(clock_span(left, to_move, Style::new().fg(TEXT)));
-            }
-            lines.push(Line::from(spans));
-        }
+        let mut lines: Vec<_> = [Color::White, Color::Black]
+            .into_iter()
+            .map(|color| self.player_line(color, now))
+            .collect();
         lines.push(Line::raw(""));
         lines.push(self.state_line());
         if let Some(warning) = &self.warning {
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "Are you sure?",
-                Style::new().fg(WARN).add_modifier(Modifier::BOLD),
-            ));
-            lines.push(colored(warning.verdict.clone(), WARN));
-            if !warning.explanation.is_empty() {
-                lines.push(Line::styled(
-                    warning.explanation.clone(),
-                    Style::new().fg(TEXT),
-                ));
-            }
-            if let Some(story) = &warning.punishment {
-                lines.push(dim(format!("For example: {}", story.moves)));
-                lines.push(colored(format!("→ {}", story.outcome), WARN));
-            }
-            lines.push(dim(format!(
-                "Enter: play {} anyway   Esc: think again",
-                warning.san
-            )));
+            lines.extend(warning_lines(warning));
         }
         if let Some(confirm) = self.confirm {
-            lines.push(Line::raw(""));
-            let question = match confirm {
-                Confirm::Resign => "Resign this game? It counts as a loss.",
-                Confirm::Leave => "Leave this game? It won't be saved or rated.",
-            };
-            lines.push(colored(question, WARN));
-            lines.push(dim("y: yes   n: no"));
+            lines.extend(confirm_lines(confirm));
         }
         if let Some(finished) = &self.finished {
-            lines.push(Line::raw(""));
-            let change = data.profile.rating.0 - self.rating_before.0;
-            lines.push(Line::from(vec![
+            lines.extend(self.finished_lines(finished, data));
+        }
+        lines
+    }
+
+    /// One player's name, rating and clock, marked when it is their move.
+    fn player_line(&self, color: Color, now: Instant) -> Line<'static> {
+        let board = self.app.board();
+        let to_move = board.turn() == color && !self.is_over();
+        let (name, rating) = if color == self.settings.human {
+            ("You".to_string(), self.rating_before.0.to_string())
+        } else {
+            (
+                format!("Coach level {}", self.settings.level.number()),
+                format!("≈{}", self.settings.level.spec().elo.0),
+            )
+        };
+        let mut spans = vec![
+            turn_marker(to_move),
+            Span::styled(
+                format!("{name:<15}"),
+                Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("{rating:<7}"), Style::new().fg(DIM)),
+        ];
+        if let Some(clocks) = self.app.clocks() {
+            let left = clocks.remaining(color, board.turn(), now);
+            spans.push(clock_span(left, to_move, Style::new().fg(TEXT)));
+        }
+        Line::from(spans)
+    }
+
+    /// The rating change of the finished game and what to do next.
+    fn finished_lines(&self, finished: &Finished, data: &CoachData) -> Vec<Line<'static>> {
+        let change = data.profile.rating.0 - self.rating_before.0;
+        let mut lines = vec![
+            Line::raw(""),
+            Line::from(vec![
                 Span::styled("Rating ", Style::new().fg(DIM)),
                 Span::styled(
                     format!(
@@ -363,17 +391,17 @@ impl CoachGame {
                     ),
                     Style::new().fg(if change >= 0 { GOOD } else { BAD }),
                 ),
-            ]));
-            if let Err(e) = &finished.saved {
-                lines.push(colored(e.clone(), BAD));
-            }
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "Enter: review this game with the coach",
-                Style::new().fg(ACCENT),
-            ));
-            lines.push(dim("n: play again   Esc: back to the menu"));
+            ]),
+        ];
+        if let Err(e) = &finished.saved {
+            lines.push(colored(e.clone(), BAD));
         }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Enter: review this game with the coach",
+            Style::new().fg(ACCENT),
+        ));
+        lines.push(dim("n: play again   Esc: back to the menu"));
         lines
     }
 
@@ -456,32 +484,31 @@ impl CoachGame {
         }
         false
     }
-}
 
-impl Screen for CoachGame {
-    fn draw(&self, frame: &mut Frame, data: &CoachData, now: Instant) {
-        let layout = screen_layout(frame.area());
+    /// The board as drawn, marking the proposed move, in red under a warning.
+    fn scene(&self, data: &CoachData) -> BoardScene<'_> {
         let mark = if self.warning.is_some() {
             MARK_BAD
         } else {
             super::common::MARK_HINT
         };
-        let marks = self
-            .app
-            .proposed()
-            .map_or_else(Vec::new, |m| move_marks(m, mark));
-        let scene = BoardScene {
+        BoardScene {
             board: self.app.board(),
             flipped: self.app.flipped,
             piece_style: data.piece_style,
             selected: self.app.selected(),
             targets: self.app.targets(),
             last_move: self.app.last_move(),
-            marks,
+            marks: self
+                .app
+                .proposed()
+                .map_or_else(Vec::new, |m| move_marks(m, mark)),
             promotion_open: self.app.pending_promotion().is_some(),
-        };
-        draw_board(frame, &layout, &scene);
-        let side = layout.side;
+        }
+    }
+
+    /// The game panel in `side`, with the moves below it where they fit.
+    fn draw_side(&self, frame: &mut Frame, side: Rect, data: &CoachData, now: Instant) {
         let info = self.side_lines(data, now);
         let info_height = (info.len() as u16 + 2 + 3).min(side.height);
         let title = format!("Game · level {}", self.settings.level.number());
@@ -491,19 +518,99 @@ impl Screen for CoachGame {
                 .block(panel(&title)),
             Rect::new(side.x, side.y, side.width, info_height),
         );
-        if side.height > info_height + 3 {
-            let moves_area = Rect::new(
-                side.x,
-                side.y + info_height,
-                side.width,
-                side.height - info_height,
-            );
-            let rows = usize::from(moves_area.height.saturating_sub(2));
-            frame.render_widget(
-                Paragraph::new(self.moves_lines(rows)).block(panel("Moves")),
-                moves_area,
-            );
+        if side.height <= info_height + 3 {
+            return;
         }
+        let moves_area = Rect::new(
+            side.x,
+            side.y + info_height,
+            side.width,
+            side.height - info_height,
+        );
+        let rows = usize::from(moves_area.height.saturating_sub(2));
+        frame.render_widget(
+            Paragraph::new(self.moves_lines(rows)).block(panel("Moves")),
+            moves_area,
+        );
+    }
+
+    /// Answers the question whether to resign or leave.
+    fn confirm_key(&mut self, confirm: Confirm, key: KeyEvent, data: &mut CoachData) -> Nav {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                self.confirm = None;
+                match confirm {
+                    Confirm::Leave => return Nav::Back,
+                    Confirm::Resign => {
+                        let result = win_for(self.settings.human.other());
+                        self.finish(result, Ending::Resigned, data);
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.confirm = None,
+            _ => {}
+        }
+        Nav::Stay
+    }
+
+    /// Plays the warned-about move anyway, or takes it back.
+    fn warning_key(&mut self, key: KeyEvent, now: Instant) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                self.warning = None;
+                self.app.play_proposed(now);
+            }
+            KeyCode::Esc | KeyCode::Char('n' | 'u') => {
+                self.warning = None;
+                self.app.discard_proposed();
+            }
+            _ => {}
+        }
+    }
+
+    fn finished_key(&mut self, key: KeyEvent, data: &CoachData) -> Nav {
+        match key.code {
+            KeyCode::Enter => Nav::Replace(Box::new(ReviewScreen::new(self.id, data))),
+            KeyCode::Char('n') => Nav::Replace(Box::new(Self::new(self.settings, data))),
+            KeyCode::Esc | KeyCode::Char('q') => Nav::Back,
+            KeyCode::Char('f') => {
+                self.app.flipped = !self.app.flipped;
+                Nav::Stay
+            }
+            _ => Nav::Stay,
+        }
+    }
+
+    /// The keys of a game in progress that the board does not take.
+    fn playing_key(&mut self, key: KeyEvent, data: &mut CoachData) -> Nav {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                if self.app.history().is_empty() {
+                    return Nav::Back;
+                }
+                self.confirm = Some(Confirm::Leave);
+            }
+            KeyCode::Char('r') => self.confirm = Some(Confirm::Resign),
+            KeyCode::Char('f') => self.app.flipped = !self.app.flipped,
+            KeyCode::Char('p') => {
+                data.piece_style = data.piece_style.next();
+                self.app.piece_style = data.piece_style;
+            }
+            KeyCode::Char('?' | 'h') => self.help = true,
+            KeyCode::Enter | KeyCode::Char(':') if !self.is_bot_turn() => {
+                self.app.typed = Some(String::new());
+            }
+            _ => {}
+        }
+        Nav::Stay
+    }
+}
+
+impl Screen for CoachGame {
+    fn draw(&self, frame: &mut Frame, data: &CoachData, now: Instant) {
+        let layout = screen_layout(frame.area());
+        draw_board(frame, &layout, &self.scene(data));
+        self.draw_side(frame, layout.side, data, now);
         let hints = if self.finished.is_some() {
             "Enter review · n play again · Esc menu"
         } else {
@@ -528,75 +635,19 @@ impl Screen for CoachGame {
             return Nav::Stay;
         }
         if let Some(confirm) = self.confirm {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Enter => {
-                    self.confirm = None;
-                    return match confirm {
-                        Confirm::Leave => Nav::Back,
-                        Confirm::Resign => {
-                            self.finish(
-                                win_for(self.settings.human.other()),
-                                Ending::Resigned,
-                                data,
-                            );
-                            Nav::Stay
-                        }
-                    };
-                }
-                KeyCode::Char('n') | KeyCode::Esc => self.confirm = None,
-                _ => {}
-            }
-            return Nav::Stay;
+            return self.confirm_key(confirm, key, data);
         }
         if self.warning.is_some() {
-            match key.code {
-                KeyCode::Enter | KeyCode::Char('y') => {
-                    self.warning = None;
-                    self.app.play_proposed(now);
-                }
-                KeyCode::Esc | KeyCode::Char('n' | 'u') => {
-                    self.warning = None;
-                    self.app.discard_proposed();
-                }
-                _ => {}
-            }
+            self.warning_key(key, now);
             return Nav::Stay;
         }
         if self.finished.is_some() {
-            return match key.code {
-                KeyCode::Enter => Nav::Replace(Box::new(ReviewScreen::new(self.id, data))),
-                KeyCode::Char('n') => Nav::Replace(Box::new(Self::new(self.settings, data))),
-                KeyCode::Esc | KeyCode::Char('q') => Nav::Back,
-                KeyCode::Char('f') => {
-                    self.app.flipped = !self.app.flipped;
-                    Nav::Stay
-                }
-                _ => Nav::Stay,
-            };
+            return self.finished_key(key, data);
         }
         if self.handle_board_key(key, now) {
             return Nav::Stay;
         }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                if self.app.history().is_empty() {
-                    return Nav::Back;
-                }
-                self.confirm = Some(Confirm::Leave);
-            }
-            KeyCode::Char('r') => self.confirm = Some(Confirm::Resign),
-            KeyCode::Char('f') => self.app.flipped = !self.app.flipped,
-            KeyCode::Char('p') => {
-                data.piece_style = data.piece_style.next();
-                self.app.piece_style = data.piece_style;
-            }
-            KeyCode::Char('?' | 'h') => self.help = true,
-            KeyCode::Enter | KeyCode::Char(':') if !self.is_bot_turn() => {
-                self.app.typed = Some(String::new());
-            }
-            _ => {}
-        }
-        Nav::Stay
+        self.playing_key(key, data)
     }
 
     fn mouse(&mut self, mouse: MouseEvent, area: Rect, _data: &mut CoachData, now: Instant) -> Nav {
