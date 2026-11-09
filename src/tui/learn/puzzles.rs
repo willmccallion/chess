@@ -75,7 +75,8 @@ impl Puzzles {
     pub fn new(data: &mut CoachData) -> Self {
         let mut screen = Self {
             current: None,
-            panel: BoardPanel::new(crate::board::Board::empty(), false),
+            // Drawn only once a puzzle is loaded onto it.
+            panel: BoardPanel::new(crate::board::Board::start(), false),
             message: None,
             rating_before: data.profile.puzzle_rating,
             help: false,

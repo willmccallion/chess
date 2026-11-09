@@ -124,7 +124,7 @@ impl Board {
         self.zobrist
     }
 
-    pub(crate) fn empty() -> Self {
+    fn empty() -> Self {
         Self {
             piece_bb: [0; 13],
             piece_on: [Piece::Empty; 64],

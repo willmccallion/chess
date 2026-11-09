@@ -64,8 +64,10 @@ impl ReviewScreen {
         let game = data.game(id);
         let record = game.map(|g| g.record.clone());
         let habits = game.map(|g| g.habits.clone()).unwrap_or_default();
-        let record = record.unwrap_or_else(|| empty_record(id));
-        let mut board = record.start().unwrap_or_else(|_| Board::empty());
+        // A game whose start no longer reads has nothing to replay.
+        let (record, mut board) = record
+            .and_then(|record| record.start().ok().map(|start| (record, start)))
+            .unwrap_or_else(|| (empty_record(id), Board::start()));
         let mut positions = vec![board.clone()];
         for &m in &record.moves {
             board.make_move(m);

@@ -80,16 +80,16 @@ pub enum BoardKey {
 
 impl BoardPanel {
     pub fn new(board: Board, flipped: bool) -> Self {
-        let mut panel = Self {
-            board: Board::empty(),
-            legal: MoveList::new(),
+        let mut legal = MoveList::new();
+        board.generate_legal_moves(&mut legal);
+        Self {
+            board,
+            legal,
             input: MoveInput::default(),
             flipped,
             last_move: None,
             typed: None,
-        };
-        panel.set_position(board, None);
-        panel
+        }
     }
 
     pub const fn board(&self) -> &Board {
