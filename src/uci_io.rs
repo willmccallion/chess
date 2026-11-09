@@ -69,6 +69,13 @@ mod tests {
     }
 
     #[test]
+    fn the_null_moves_engines_send_are_not_moves() {
+        for text in ["0000", "(none)"] {
+            assert_eq!(parsed(START_FEN, text), None, "{text}");
+        }
+    }
+
+    #[test]
     fn a_promotion_needs_a_piece_letter_and_keeps_it() {
         let fen = "8/4P1k1/8/8/8/8/6K1/8 w - - 0 1";
 

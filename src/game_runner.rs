@@ -124,139 +124,123 @@ pub const fn win_for(winner: Color) -> GameResult {
 }
 
 pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConfig) -> GameOutcome {
-    if let Err(e) = white.new_game() {
-        eprintln!("Warning: white engine new_game failed: {}", e);
-    }
-    if let Err(e) = black.new_game() {
-        eprintln!("Warning: black engine new_game failed: {}", e);
-    }
-
-    let mut board = config.start.board.clone();
-    let start_fen_arg = (config.start.fen() != START_FEN).then(|| config.start.fen());
-    let mut wtime = config.white_clock.base_ms as i64;
-    let mut btime = config.black_clock.base_ms as i64;
-    let (winc, binc) = (
-        config.white_clock.increment_ms,
-        config.black_clock.increment_ms,
-    );
-    let mut moves: Vec<String> = Vec::new();
-    let mut ply = 0usize;
-
+    start_new_game(white, "white");
+    start_new_game(black, "black");
+    let mut game = Game::new(config);
     loop {
-        // Check move limit
-        if ply / 2 >= config.max_moves {
-            return GameOutcome {
-                result: GameResult::Draw,
-                reason: GameEndReason::MoveLimitExceeded,
-                move_count: ply,
-            };
+        if let Some((result, reason)) = game.result_by_rules(config.max_moves) {
+            return game.outcome(result, reason);
         }
-
-        if let Some((result, reason)) = position_outcome(&board) {
-            return GameOutcome {
-                result,
-                reason,
-                move_count: ply,
-            };
-        }
-
-        let engine = if board.turn == Color::White {
-            &mut *white
-        } else {
-            &mut *black
+        let engine = match game.board.turn {
+            Color::White => &mut *white,
+            Color::Black => &mut *black,
         };
-
-        // Send position
-        if engine.set_position(start_fen_arg, &moves).is_err() {
-            let result = if board.turn == Color::White {
-                GameResult::BlackWin
-            } else {
-                GameResult::WhiteWin
-            };
-            return GameOutcome {
-                result,
-                reason: GameEndReason::EngineCrash,
-                move_count: ply,
-            };
+        if let Err(reason) = game.play_turn(engine) {
+            return game.outcome(win_for(game.board.turn.other()), reason);
         }
+    }
+}
 
-        // Send go and measure time
+fn start_new_game(engine: &mut UciEngine, side: &str) {
+    if let Err(e) = engine.new_game() {
+        eprintln!("Warning: {side} engine new_game failed: {e}");
+    }
+}
+
+/// Both sides' time left and the increment each gains after a move.
+struct Clocks {
+    white_ms: i64,
+    black_ms: i64,
+    white_increment_ms: u64,
+    black_increment_ms: u64,
+}
+
+impl Clocks {
+    fn new(config: &GameConfig) -> Self {
+        Self {
+            white_ms: config.white_clock.base_ms as i64,
+            black_ms: config.black_clock.base_ms as i64,
+            white_increment_ms: config.white_clock.increment_ms,
+            black_increment_ms: config.black_clock.increment_ms,
+        }
+    }
+
+    /// Charges `side` for a move that took `elapsed_ms`, then adds its
+    /// increment, unless its flag fell first.
+    fn charge(&mut self, side: Color, elapsed_ms: i64) -> Result<(), GameEndReason> {
+        let (left_ms, increment_ms) = match side {
+            Color::White => (&mut self.white_ms, self.white_increment_ms),
+            Color::Black => (&mut self.black_ms, self.black_increment_ms),
+        };
+        *left_ms -= elapsed_ms;
+        if *left_ms <= 0 {
+            return Err(GameEndReason::FlagFall);
+        }
+        *left_ms += increment_ms as i64;
+        Ok(())
+    }
+}
+
+/// A game in progress: the position, the moves that reached it and the clocks.
+struct Game<'a> {
+    /// The start FEN to send engines, or `None` for the standard start.
+    start_fen: Option<&'a str>,
+    board: Board,
+    moves: Vec<String>,
+    clocks: Clocks,
+}
+
+impl<'a> Game<'a> {
+    fn new(config: &'a GameConfig) -> Self {
+        Self {
+            start_fen: (config.start.fen() != START_FEN).then(|| config.start.fen()),
+            board: config.start.board.clone(),
+            moves: Vec::new(),
+            clocks: Clocks::new(config),
+        }
+    }
+
+    /// The result if the rules or the move limit have ended the game.
+    fn result_by_rules(&self, max_moves: usize) -> Option<(GameResult, GameEndReason)> {
+        if self.moves.len() / 2 >= max_moves {
+            return Some((GameResult::Draw, GameEndReason::MoveLimitExceeded));
+        }
+        position_outcome(&self.board)
+    }
+
+    fn outcome(&self, result: GameResult, reason: GameEndReason) -> GameOutcome {
+        GameOutcome {
+            result,
+            reason,
+            move_count: self.moves.len(),
+        }
+    }
+
+    /// Asks `engine` for the side to move's move and plays it, or says why
+    /// that side loses instead.
+    fn play_turn(&mut self, engine: &mut UciEngine) -> Result<(), GameEndReason> {
+        engine
+            .set_position(self.start_fen, &self.moves)
+            .map_err(|_| GameEndReason::EngineCrash)?;
         let start = Instant::now();
-        let bestmove = match engine.go(wtime, btime, winc, binc) {
-            Ok(m) => m,
-            Err(_) => {
-                let result = if board.turn == Color::White {
-                    GameResult::BlackWin
-                } else {
-                    GameResult::WhiteWin
-                };
-                return GameOutcome {
-                    result,
-                    reason: GameEndReason::EngineCrash,
-                    move_count: ply,
-                };
-            }
+        let c = &self.clocks;
+        let bestmove = engine
+            .go(
+                c.white_ms,
+                c.black_ms,
+                c.white_increment_ms,
+                c.black_increment_ms,
+            )
+            .map_err(|_| GameEndReason::EngineCrash)?;
+        self.clocks
+            .charge(self.board.turn, start.elapsed().as_millis() as i64)?;
+        let Some(m) = parse_uci_move(&mut self.board, &bestmove) else {
+            report_rejected_move(&engine.name, &bestmove, &self.board);
+            return Err(GameEndReason::IllegalMove);
         };
-        let elapsed_ms = start.elapsed().as_millis() as i64;
-
-        // Deduct time
-        let (clock, increment_ms) = if board.turn == Color::White {
-            (&mut wtime, winc)
-        } else {
-            (&mut btime, binc)
-        };
-        *clock -= elapsed_ms;
-        if *clock <= 0 {
-            let result = if board.turn == Color::White {
-                GameResult::BlackWin
-            } else {
-                GameResult::WhiteWin
-            };
-            return GameOutcome {
-                result,
-                reason: GameEndReason::FlagFall,
-                move_count: ply,
-            };
-        }
-        *clock += increment_ms as i64;
-
-        // Handle "(none)" or "0000"
-        if bestmove == "(none)" || bestmove == "0000" {
-            report_rejected_move(&engine.name, &bestmove, &board);
-            let result = if board.turn == Color::White {
-                GameResult::BlackWin
-            } else {
-                GameResult::WhiteWin
-            };
-            return GameOutcome {
-                result,
-                reason: GameEndReason::IllegalMove,
-                move_count: ply,
-            };
-        }
-
-        // Validate and apply move
-        let mv = parse_uci_move(&mut board, &bestmove);
-        match mv {
-            Some(m) => {
-                let _ = board.make_move(m);
-                moves.push(bestmove);
-                ply += 1;
-            }
-            None => {
-                report_rejected_move(&engine.name, &bestmove, &board);
-                let result = if board.turn == Color::White {
-                    GameResult::BlackWin
-                } else {
-                    GameResult::WhiteWin
-                };
-                return GameOutcome {
-                    result,
-                    reason: GameEndReason::IllegalMove,
-                    move_count: ply,
-                };
-            }
-        }
+        self.board.make_move(m);
+        self.moves.push(bestmove);
+        Ok(())
     }
 }
 
