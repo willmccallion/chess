@@ -1007,6 +1007,71 @@ fn singular_extension(
     }
 }
 
+/// What a late move's reduction weighs about the move and its node.
+#[derive(Clone, Copy)]
+struct LateMove {
+    depth: i32,
+    /// The depth the move is searched to before any reduction.
+    new_depth: i32,
+    moves_searched: i32,
+    quiet_history: i32,
+    is_quiet: bool,
+    is_pv: bool,
+    node: NodeKind,
+    improving: bool,
+    killer_or_counter: bool,
+    tt_capture: bool,
+    tt_pv: bool,
+}
+
+impl Search<'_> {
+    /// How many plies to reduce a late move by, with the move made on the
+    /// board and `node_ply` the ply of the node it was played from.
+    fn late_move_reduction(&self, node_ply: usize, m: LateMove) -> i32 {
+        let gives_check = self.board.in_check();
+        let p = &self.params;
+        let mut r_1024 = 1024
+            * self
+                .lmr
+                .base_reduction(m.depth, m.moves_searched, m.is_quiet);
+        r_1024 += if m.is_pv { 0 } else { p.lmr_non_pv_x1024 };
+        r_1024 += if m.node == NodeKind::Cut {
+            p.lmr_cut_node_x1024
+        } else {
+            0
+        };
+        r_1024 += if m.improving {
+            0
+        } else {
+            p.lmr_not_improving_x1024
+        };
+        r_1024 -= if m.killer_or_counter {
+            p.lmr_killer_or_counter_x1024
+        } else {
+            0
+        };
+        r_1024 -= if gives_check {
+            p.lmr_gives_check_x1024
+        } else {
+            0
+        };
+        r_1024 += if m.tt_capture {
+            p.lmr_tt_capture_x1024
+        } else {
+            0
+        };
+        r_1024 -= if m.tt_pv { p.lmr_tt_pv_x1024 } else { 0 };
+        let child_cutoffs = i32::from(self.stack[node_ply + 1].cutoff_count);
+        r_1024 += if child_cutoffs > p.child_cutoff_threshold {
+            p.lmr_child_cutoffs_x1024
+        } else {
+            0
+        };
+        let r = r_1024 / 1024 - m.quiet_history / p.lmr_history_divisor;
+        r.clamp(0, (m.new_depth - 1).max(0))
+    }
+}
+
 /// What a node is expected to do, as Stockfish's cut and all nodes; a PV
 /// node, told apart by its open window, counts as an all node.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1285,44 +1350,22 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         } else {
             let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv)
             {
-                let gives_check = s.board.in_check();
-                let p = &s.params;
-                let mut r_1024 = 1024 * s.lmr.base_reduction(depth, moves_searched, is_quiet);
-                r_1024 += if is_pv { 0 } else { p.lmr_non_pv_x1024 };
-                r_1024 += if node == NodeKind::Cut {
-                    p.lmr_cut_node_x1024
-                } else {
-                    0
-                };
-                r_1024 += if improving {
-                    0
-                } else {
-                    p.lmr_not_improving_x1024
-                };
-                r_1024 -= if is_killer_or_counter {
-                    p.lmr_killer_or_counter_x1024
-                } else {
-                    0
-                };
-                r_1024 -= if gives_check {
-                    p.lmr_gives_check_x1024
-                } else {
-                    0
-                };
-                r_1024 += if tt_capture {
-                    p.lmr_tt_capture_x1024
-                } else {
-                    0
-                };
-                r_1024 -= if tt_pv { p.lmr_tt_pv_x1024 } else { 0 };
-                let child_cutoffs = i32::from(s.stack[node_ply + 1].cutoff_count);
-                r_1024 += if child_cutoffs > p.child_cutoff_threshold {
-                    p.lmr_child_cutoffs_x1024
-                } else {
-                    0
-                };
-                let r = r_1024 / 1024 - quiet_history / p.lmr_history_divisor;
-                r.clamp(0, (new_depth - 1).max(0))
+                s.late_move_reduction(
+                    node_ply,
+                    LateMove {
+                        depth,
+                        new_depth,
+                        moves_searched,
+                        quiet_history,
+                        is_quiet,
+                        is_pv,
+                        node,
+                        improving,
+                        killer_or_counter: is_killer_or_counter,
+                        tt_capture,
+                        tt_pv,
+                    },
+                )
             } else {
                 0
             };
