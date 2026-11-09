@@ -50,6 +50,7 @@ const HASHFULL_SAMPLE_CLUSTERS: usize = 1000;
 /// What a search learned about a position, to be written into the table.
 #[derive(Copy, Clone, Debug)]
 pub struct TTWrite {
+    /// The plies the search went below this node; kept within 0 to 255.
     pub depth: i16,
     pub score: i32,
     pub eval: Option<i32>,
@@ -77,7 +78,7 @@ impl TTEntry {
         let packed_score = u64::from(score as i16 as u16);
         let packed_eval = u64::from(eval.map_or(NO_EVAL, |e| e as i16) as u16);
         let packed_move = u64::from(best_move.map_or(0u16, u16::from));
-        let packed_depth = u64::from(depth as u8);
+        let packed_depth = u64::from(u8::try_from(depth.max(0)).unwrap_or(u8::MAX));
         let data = (packed_score << SCORE_SHIFT)
             | (packed_eval << EVAL_SHIFT)
             | (packed_move << MOVE_SHIFT)
@@ -382,6 +383,24 @@ mod tests {
         let entry = tt.probe(5).unwrap();
         assert_eq!(entry.best_move(), Some(mv));
         assert_eq!(entry.bound(), Bound::Upper);
+    }
+
+    #[test]
+    fn a_depth_below_zero_is_stored_as_zero() {
+        let tt = SharedTransTable::new(1);
+        tt.store(
+            42,
+            TTWrite {
+                depth: -2,
+                score: 0,
+                eval: None,
+                bound: Bound::Lower,
+                best_move: None,
+                is_pv: false,
+            },
+        );
+
+        assert_eq!(tt.probe(42).map(|entry| entry.depth()), Some(0));
     }
 
     #[test]
