@@ -440,115 +440,111 @@ impl Board {
         self.gen_piece_moves(MoveKinds::Quiet, out);
     }
 
-    /// Check if a move is pseudo-legal in the current position.
-    /// Must match every assumption that `make_move` relies on.
+    /// Whether `m` could be played here if checks were ignored. Must match
+    /// every assumption that `make_move` relies on.
     pub fn is_pseudo_legal(&self, m: Move) -> bool {
-        let from = m.from.index();
-        let to = m.to.index();
-        if from >= 64 || to >= 64 || from == to {
+        if m.from == m.to {
             return false;
         }
-
-        let piece = self.piece_on[from];
-        if piece == Piece::Empty || piece.color() != Some(self.turn) {
+        let Some(kind) = self.own_piece_on(m.from) else {
             return false;
-        }
-        let kind = match piece.kind() {
-            Some(k) => k,
-            None => return false,
         };
-
-        // Flag consistency: special flags require specific piece types
-        if m.is_castle() && kind != PieceKind::King {
+        if !Self::flags_fit_piece(m, kind) {
             return false;
         }
-        if (m.is_en_passant() || m.is_double_push() || m.promotion().is_some())
-            && kind != PieceKind::Pawn
-        {
-            return false;
-        }
-
-        // ── Castling ────────────────────────────────────────────────
-        // Must replicate every check from gen_leapers/gen_leaper_quiets
-        // because make_move blindly moves the rook from a computed square.
         if m.is_castle() {
-            let castlings = &CASTLINGS[self.turn as usize];
-            let Some(castling) = castlings
-                .iter()
-                .find(|c| c.king_from == m.from && c.king_to == m.to)
-            else {
-                return false;
-            };
-            return !self.is_square_attacked(m.from, self.turn.other())
-                && self.can_castle(castling);
+            return self.can_castle_as(m);
         }
+        self.target_fits(m) && self.piece_reaches(kind, m)
+    }
 
-        // ── Target square ───────────────────────────────────────────
-        let to_piece = self.piece_on[to];
+    /// The kind of the side to move's piece on `square`, if it has one there.
+    fn own_piece_on(&self, square: Square) -> Option<PieceKind> {
+        let piece = self.piece_on[square.index()];
+        if piece.color() != Some(self.turn) {
+            return None;
+        }
+        piece.kind()
+    }
+
+    /// Whether only a king castles and only a pawn captures en passant,
+    /// double-pushes or promotes.
+    fn flags_fit_piece(m: Move, kind: PieceKind) -> bool {
+        if m.is_castle() {
+            return kind == PieceKind::King;
+        }
+        let pawn_only = m.is_en_passant() || m.is_double_push() || m.promotion().is_some();
+        !pawn_only || kind == PieceKind::Pawn
+    }
+
+    /// Whether the king's move `m` is one of the side to move's castlings and
+    /// may be played now. make_move moves the rook from the square the
+    /// castling names, so every check the generator makes is repeated here.
+    fn can_castle_as(&self, m: Move) -> bool {
+        let Some(castling) = CASTLINGS[self.turn as usize]
+            .iter()
+            .find(|c| c.king_from == m.from && c.king_to == m.to)
+        else {
+            return false;
+        };
+        !self.is_square_attacked(m.from, self.turn.other()) && self.can_castle(castling)
+    }
+
+    /// Whether `m`'s target square holds what the move expects: nothing for a
+    /// quiet move, an enemy piece for a capture, and for en passant an empty
+    /// en-passant square beside an enemy pawn.
+    fn target_fits(&self, m: Move) -> bool {
+        let target = self.piece_on[m.to.index()];
+        if m.is_en_passant() {
+            let enemy_pawn = Piece::from_kind(PieceKind::Pawn, self.turn.other());
+            return self.en_passant == Some(m.to)
+                && target == Piece::Empty
+                && self.piece_on[m.captured_square(self.turn)] == enemy_pawn;
+        }
         if m.is_capture() {
-            if m.is_en_passant() {
-                // En-passant: target square must be empty (pawn is beside us),
-                // the en-passant square must match, and the captured pawn must exist.
-                if self.en_passant != Some(m.to) {
-                    return false;
-                }
-                if to_piece != Piece::Empty {
-                    return false;
-                }
-                let enemy_pawn = if self.turn == Color::White {
-                    Piece::BP
-                } else {
-                    Piece::WP
-                };
-                if self.piece_on[m.captured_square(self.turn)] != enemy_pawn {
-                    return false;
-                }
-            } else {
-                // Regular capture: target must be an enemy piece.
-                if to_piece == Piece::Empty || to_piece.color() == Some(self.turn) {
-                    return false;
-                }
-            }
-        } else {
-            // Non-capture: target must be empty.
-            if to_piece != Piece::Empty {
-                return false;
-            }
+            return target != Piece::Empty && target.color() != Some(self.turn);
         }
+        target == Piece::Empty
+    }
 
-        // ── Piece-specific geometry ─────────────────────────────────
-        let occ = self.all_pieces;
-        match kind {
-            PieceKind::Knight => (magics::knight_attacks_from(from) & (1u64 << to)) != 0,
-            PieceKind::Bishop => (magics::get_bishop_attacks(from, occ) & (1u64 << to)) != 0,
-            PieceKind::Rook => (magics::get_rook_attacks(from, occ) & (1u64 << to)) != 0,
+    /// Whether a `kind` on `m.from` can move to `m.to` on this board.
+    fn piece_reaches(&self, kind: PieceKind, m: Move) -> bool {
+        let (from, occupied) = (m.from.index(), self.all_pieces);
+        let targets = match kind {
+            PieceKind::Pawn => return self.pawn_reaches(m),
+            PieceKind::Knight => magics::knight_attacks_from(from),
+            PieceKind::Bishop => magics::get_bishop_attacks(from, occupied),
+            PieceKind::Rook => magics::get_rook_attacks(from, occupied),
             PieceKind::Queen => {
-                ((magics::get_bishop_attacks(from, occ) | magics::get_rook_attacks(from, occ))
-                    & (1u64 << to))
-                    != 0
+                magics::get_bishop_attacks(from, occupied)
+                    | magics::get_rook_attacks(from, occupied)
             }
-            PieceKind::King => (magics::king_attacks_from(from) & (1u64 << to)) != 0,
-            PieceKind::Pawn => {
-                let white = self.turn == Color::White;
-                let forward: i8 = if white { 8 } else { -8 };
-                let (start_rank, promo_rank) = if white { (1, 6) } else { (6, 1) };
-                let ahead = m.from.offset(forward);
-                let reaches = if m.is_capture() {
-                    m.to.file().abs_diff(m.from.file()) == 1
-                        && (m.from.offset(forward - 1) == Some(m.to)
-                            || m.from.offset(forward + 1) == Some(m.to))
-                } else if m.is_double_push() {
-                    m.from.rank() == start_rank
-                        && ahead.is_some_and(|mid| {
-                            (self.all_pieces & mid.bb()) == 0 && mid.offset(forward) == Some(m.to)
-                        })
-                } else {
-                    ahead == Some(m.to)
-                };
-                // A pawn promotes exactly when it reaches the last rank.
-                reaches && (m.from.rank() == promo_rank) == m.promotion().is_some()
-            }
-        }
+            PieceKind::King => magics::king_attacks_from(from),
+        };
+        targets & m.to.bb() != 0
+    }
+
+    /// Whether the side to move's pawn on `m.from` makes `m`: a diagonal step
+    /// for a capture, two clear squares from its start rank for a double
+    /// push, else one step; promoting exactly when it reaches the last rank.
+    fn pawn_reaches(&self, m: Move) -> bool {
+        let white = self.turn == Color::White;
+        let forward: i8 = if white { 8 } else { -8 };
+        let (start_rank, promo_rank) = if white { (1, 6) } else { (6, 1) };
+        let ahead = m.from.offset(forward);
+        let reaches = if m.is_capture() {
+            m.to.file().abs_diff(m.from.file()) == 1
+                && (m.from.offset(forward - 1) == Some(m.to)
+                    || m.from.offset(forward + 1) == Some(m.to))
+        } else if m.is_double_push() {
+            m.from.rank() == start_rank
+                && ahead.is_some_and(|mid| {
+                    (self.all_pieces & mid.bb()) == 0 && mid.offset(forward) == Some(m.to)
+                })
+        } else {
+            ahead == Some(m.to)
+        };
+        reaches && (m.from.rank() == promo_rank) == m.promotion().is_some()
     }
 
     #[inline]
