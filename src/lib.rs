@@ -21,6 +21,8 @@ pub mod search_params;
 pub mod see;
 pub mod sprt;
 pub mod spsa;
+#[cfg(test)]
+mod test_support;
 pub mod time;
 pub mod tournament;
 pub mod tt;

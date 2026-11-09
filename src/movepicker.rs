@@ -410,6 +410,83 @@ impl Default for QMovePicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::random_game_positions;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    fn sorted(moves: impl IntoIterator<Item = Move>) -> Vec<u16> {
+        let mut encoded: Vec<u16> = moves.into_iter().map(u16::from).collect();
+        encoded.sort_unstable();
+        encoded
+    }
+
+    /// One of `own` moves, one of `elsewhere`, or none.
+    fn special(rng: &mut StdRng, own: &[Move], elsewhere: &[Move]) -> Option<Move> {
+        match rng.gen_range(0..3) {
+            0 if !own.is_empty() => Some(own[rng.gen_range(0..own.len())]),
+            1 => Some(elsewhere[rng.gen_range(0..elsewhere.len())]),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn every_pseudo_legal_move_is_picked_exactly_once_whatever_the_specials() {
+        let positions = random_game_positions(17, 30, 80);
+        let elsewhere: Vec<Move> = positions
+            .iter()
+            .flat_map(|board| {
+                let mut moves = MoveList::new();
+                board.generate_pseudo_legal_moves(&mut moves);
+                moves.as_slice().to_vec()
+            })
+            .collect();
+        let histories = Histories::new();
+        let ctx = OrderingContext {
+            histories: &histories,
+            continuations: [None, None],
+        };
+        let mut rng = StdRng::seed_from_u64(3);
+
+        for board in &positions {
+            let mut generated = MoveList::new();
+            board.generate_pseudo_legal_moves(&mut generated);
+            let own = generated.as_slice();
+            let mut picker = MovePicker::new(
+                special(&mut rng, own, &elsewhere),
+                special(&mut rng, own, &elsewhere),
+                special(&mut rng, own, &elsewhere),
+                special(&mut rng, own, &elsewhere),
+            );
+
+            let picked = std::iter::from_fn(|| picker.next(board, &ctx));
+
+            assert_eq!(
+                sorted(picked),
+                sorted(own.iter().copied()),
+                "{}",
+                board.to_fen()
+            );
+        }
+    }
+
+    #[test]
+    fn skipping_quiets_still_picks_every_capture_bad_ones_included() {
+        let histories = Histories::new();
+        let ctx = OrderingContext {
+            histories: &histories,
+            continuations: [None, None],
+        };
+        for board in random_game_positions(19, 30, 80) {
+            let mut captures = MoveList::new();
+            board.generate_captures(&mut captures);
+            let mut picker = MovePicker::new(None, None, None, None);
+            picker.skip_quiets();
+
+            let picked = std::iter::from_fn(|| picker.next(&board, &ctx));
+
+            assert_eq!(sorted(picked), sorted(captures.as_slice().iter().copied()));
+        }
+    }
 
     #[test]
     fn quiet_ordering_rescues_a_queen_attacked_by_a_pawn_first() {

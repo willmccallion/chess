@@ -1613,28 +1613,9 @@ impl Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::random_game_positions;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
-
-    /// Every position of `games` random games from the start, up to
-    /// `plies` moves each.
-    fn random_game_positions(seed: u64, games: usize, plies: usize) -> Vec<Board> {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut positions = Vec::new();
-        for _ in 0..games {
-            let mut board = Board::from_fen(crate::types::START_FEN).unwrap();
-            for _ in 0..plies {
-                let mut legal = MoveList::new();
-                board.generate_legal_moves(&mut legal);
-                if legal.is_empty() {
-                    break;
-                }
-                board.make_move(legal.get(rng.gen_range(0..legal.len())));
-                positions.push(board.clone());
-            }
-        }
-        positions
-    }
 
     #[test]
     fn played_games_keep_the_same_legal_moves_as_a_board_read_from_their_fen() {
