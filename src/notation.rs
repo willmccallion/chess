@@ -7,8 +7,7 @@ use crate::uci_io::parse_uci_move;
 /// Reads a move typed in UCI (`e7e8q`) or SAN (`Nf3`, `exd5`, `O-O`), ignoring check marks.
 pub fn parse_typed_move(board: &Board, legal: &[Move], text: &str) -> Option<Move> {
     let text = text.trim();
-    let mut scratch = board.without_eval_state();
-    if let Some(m) = parse_uci_move(&mut scratch, text) {
+    if let Some(m) = parse_uci_move(board, text) {
         return Some(m);
     }
     let wanted = normalize_san(text);

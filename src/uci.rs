@@ -176,7 +176,7 @@ fn parse_position(rest: &str) -> Result<Board, String> {
 
     if let Some(idx) = moves_idx {
         for move_str in &parts[idx + 1..] {
-            let Some(mv) = parse_uci_move(&mut board, move_str) else {
+            let Some(mv) = parse_uci_move(&board, move_str) else {
                 send(&format!("info string ignoring illegal move {move_str}"));
                 break;
             };
@@ -276,10 +276,9 @@ impl GoCommand {
 /// The legal moves `go` lists after `searchmoves`, or `None` when it lists
 /// none, or none of them is legal in `board`.
 fn search_moves(go: &GoCommand, board: &Board) -> Option<MoveList> {
-    let mut board = board.clone();
     let mut moves = MoveList::new();
     for word in &go.searchmoves {
-        match parse_uci_move(&mut board, word) {
+        match parse_uci_move(board, word) {
             Some(m) => moves.push(m),
             None => send(&format!("info string ignoring searchmove {word}")),
         }
@@ -697,7 +696,7 @@ mod tests {
         let board = parse_position("startpos moves e2e4 e7e9 d2d4").unwrap();
 
         let mut expected = Board::from_fen(START_FEN).unwrap();
-        let e4 = parse_uci_move(&mut expected, "e2e4").unwrap();
+        let e4 = parse_uci_move(&expected, "e2e4").unwrap();
         expected.make_move(e4);
         assert_eq!(board.to_fen(), expected.to_fen());
     }

@@ -1,7 +1,7 @@
 use crate::board::Board;
 use crate::types::{Move, MoveList, PieceKind, PromotionPiece, Square};
 
-pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
+pub fn parse_uci_move(b: &Board, s: &str) -> Option<Move> {
     let bytes = s.as_bytes();
     let promo = match bytes.len() {
         4 => None,
@@ -52,8 +52,8 @@ mod tests {
     use crate::types::START_FEN;
 
     fn parsed(fen: &str, text: &str) -> Option<String> {
-        let mut board = Board::from_fen(fen).unwrap();
-        parse_uci_move(&mut board, text).map(format_uci)
+        let board = Board::from_fen(fen).unwrap();
+        parse_uci_move(&board, text).map(format_uci)
     }
 
     #[test]

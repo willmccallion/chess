@@ -209,8 +209,8 @@ mod tests {
     use super::*;
 
     fn see_value_bracket(fen: &str, uci: &str, expected: i32) {
-        let mut board = Board::from_fen(fen).unwrap();
-        let m = crate::uci_io::parse_uci_move(&mut board, uci).unwrap();
+        let board = Board::from_fen(fen).unwrap();
+        let m = crate::uci_io::parse_uci_move(&board, uci).unwrap();
         assert!(
             see_ge(&board, m, expected),
             "{uci} should gain at least {expected}"
@@ -253,8 +253,8 @@ mod tests {
 
     #[test]
     fn see_of_en_passant_sees_the_xray_through_the_captured_pawn() {
-        let mut board = Board::from_fen("3r3k/8/8/3pP3/8/8/8/3R3K w - d6 0 1").unwrap();
-        let exd6 = crate::uci_io::parse_uci_move(&mut board, "e5d6").unwrap();
+        let board = Board::from_fen("3r3k/8/8/3pP3/8/8/8/3R3K w - d6 0 1").unwrap();
+        let exd6 = crate::uci_io::parse_uci_move(&board, "e5d6").unwrap();
 
         let value = see(&board, exd6);
 

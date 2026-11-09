@@ -110,12 +110,12 @@ impl LichessPuzzle {
     pub fn to_puzzle(&self) -> Option<Puzzle> {
         let mut board = Board::from_fen(&self.fen).ok()?.without_eval_state();
         let (first, rest) = self.moves.split_first()?;
-        let last_move = parse_uci_move(&mut board, first)?;
+        let last_move = parse_uci_move(&board, first)?;
         board.make_move(last_move);
         let mut scratch = board.clone();
         let mut solution = Vec::with_capacity(rest.len());
         for uci in rest {
-            let m = parse_uci_move(&mut scratch, uci)?;
+            let m = parse_uci_move(&scratch, uci)?;
             scratch.make_move(m);
             solution.push(m);
         }

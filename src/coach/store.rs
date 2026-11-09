@@ -367,7 +367,7 @@ fn moves_from_text(board: &Board, text: &str) -> Option<Vec<Move>> {
     let mut board = board.clone();
     text.split_whitespace()
         .map(|uci| {
-            let m = parse_uci_move(&mut board, uci)?;
+            let m = parse_uci_move(&board, uci)?;
             board.make_move(m);
             Some(m)
         })

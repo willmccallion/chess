@@ -305,7 +305,7 @@ impl<'a> Game<'a> {
             .map_err(|_| GameEndReason::EngineCrash)?;
         self.clocks
             .charge(self.board.turn, start.elapsed().as_millis() as i64)?;
-        let Some(m) = parse_uci_move(&mut self.board, &bestmove) else {
+        let Some(m) = parse_uci_move(&self.board, &bestmove) else {
             report_rejected_move(&engine.name, &bestmove, &self.board);
             return Err(GameEndReason::IllegalMove);
         };
@@ -348,7 +348,7 @@ mod tests {
         for text in [
             "g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8",
         ] {
-            let m = parse_uci_move(&mut board, text).unwrap();
+            let m = parse_uci_move(&board, text).unwrap();
             board.make_move(m);
             outcomes.push(position_outcome(&board));
         }

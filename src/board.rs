@@ -1006,8 +1006,8 @@ mod tests {
 
     /// `text`, a UCI move legal in `fen`, in SAN.
     fn san(fen: &str, text: &str) -> String {
-        let mut board = Board::from_fen(fen).unwrap();
-        let m = crate::uci_io::parse_uci_move(&mut board, text).unwrap();
+        let board = Board::from_fen(fen).unwrap();
+        let m = crate::uci_io::parse_uci_move(&board, text).unwrap();
         let mut legal = MoveList::new();
         board.generate_legal_moves(&mut legal);
         board.to_san(m, legal.as_slice())

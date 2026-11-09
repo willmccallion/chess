@@ -112,7 +112,7 @@ fn reviewing_stateless_game_positions_matches_reviewing_stateful_ones() {
         let mut positions = vec![first];
         for uci in game {
             let mut next = positions.last().expect("non-empty").clone();
-            let m = parse_uci_move(&mut next, uci).expect("legal game move");
+            let m = parse_uci_move(&next, uci).expect("legal game move");
             next.make_move(m);
             positions.push(next);
         }
@@ -155,9 +155,9 @@ fn reported_nodes_include_helper_threads() {
 #[test]
 fn a_search_restricted_to_one_root_move_plays_it() {
     load_stockfish_nets();
-    let mut start = board(START_FEN);
+    let start = board(START_FEN);
     let mut only = MoveList::new();
-    only.push(parse_uci_move(&mut start, "a2a3").expect("legal"));
+    only.push(parse_uci_move(&start, "a2a3").expect("legal"));
     let limits = SearchLimits {
         max_depth: 6,
         params: SearchParams::default(),

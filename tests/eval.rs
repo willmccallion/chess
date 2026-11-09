@@ -20,7 +20,7 @@ fn a_stateless_board_evaluates_the_same_after_make_and_unmake() {
     load_stockfish_nets();
     let fresh = evaluate(&mut board(START_FEN));
     let mut stateless = board(START_FEN).without_eval_state();
-    let e2e4 = parse_uci_move(&mut stateless, "e2e4").expect("legal");
+    let e2e4 = parse_uci_move(&stateless, "e2e4").expect("legal");
 
     let undo = stateless.make_move(e2e4);
     evaluate(&mut stateless);
