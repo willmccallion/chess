@@ -181,70 +181,63 @@ fn validate_kings(b: &Board) -> Result<(), FenError> {
 }
 
 pub fn to_fen(b: &Board) -> String {
-    let mut s = String::new();
+    let side = if b.turn == Color::White { 'w' } else { 'b' };
+    let en_passant = b
+        .en_passant
+        .map_or_else(|| "-".to_string(), |ep| ep.to_string());
+    format!(
+        "{} {side} {} {en_passant} {} {}",
+        placement_field(b),
+        castling_field(b.castle),
+        b.halfmove_clock,
+        b.fullmove_number
+    )
+}
 
-    for r in (0..8).rev() {
-        let mut empty = 0;
-
-        for f in 0..8 {
-            let sq = (r * 8 + f) as usize;
-            let p = b.piece_on[sq];
-
-            if p.is_empty() {
+/// The pieces rank by rank from the eighth, runs of empty squares as digits.
+fn placement_field(b: &Board) -> String {
+    let mut field = String::new();
+    for rank in (0..8).rev() {
+        let mut empty = 0u8;
+        for file in 0..8 {
+            let piece = b.piece_on[rank * 8 + file];
+            if piece.is_empty() {
                 empty += 1;
-            } else {
-                if empty > 0 {
-                    s.push(char::from(b'0' + empty as u8));
-                    empty = 0;
-                }
-                s.push(p.to_char());
+                continue;
             }
+            if empty > 0 {
+                field.push(char::from(b'0' + empty));
+                empty = 0;
+            }
+            field.push(piece.to_char());
         }
-
         if empty > 0 {
-            s.push(char::from(b'0' + empty as u8));
+            field.push(char::from(b'0' + empty));
         }
-
-        if r != 0 {
-            s.push('/');
+        if rank != 0 {
+            field.push('/');
         }
     }
+    field
+}
 
-    s.push(' ');
-    s.push(if b.turn == Color::White { 'w' } else { 'b' });
-    s.push(' ');
-
-    if b.castle == 0 {
-        s.push('-');
+/// The castling rights as `KQkq` letters, or `-` for none.
+fn castling_field(castle: u8) -> String {
+    let field: String = [
+        (WK_CASTLE, 'K'),
+        (WQ_CASTLE, 'Q'),
+        (BK_CASTLE, 'k'),
+        (BQ_CASTLE, 'q'),
+    ]
+    .into_iter()
+    .filter(|&(right, _)| castle & right != 0)
+    .map(|(_, letter)| letter)
+    .collect();
+    if field.is_empty() {
+        "-".to_string()
     } else {
-        if b.castle & WK_CASTLE != 0 {
-            s.push('K');
-        }
-
-        if b.castle & WQ_CASTLE != 0 {
-            s.push('Q');
-        }
-
-        if b.castle & BK_CASTLE != 0 {
-            s.push('k');
-        }
-
-        if b.castle & BQ_CASTLE != 0 {
-            s.push('q');
-        }
+        field
     }
-
-    s.push(' ');
-    match b.en_passant {
-        Some(ep) => s.push_str(&ep.to_string()),
-        None => s.push('-'),
-    }
-
-    s.push(' ');
-    s.push_str(&b.halfmove_clock.to_string());
-    s.push(' ');
-    s.push_str(&b.fullmove_number.to_string());
-    s
 }
 
 #[cfg(test)]
