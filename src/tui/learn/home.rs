@@ -5,7 +5,7 @@ use super::common::{GOOD, TEXT, WARN, centred, dim, draw_help};
 use super::data::{CoachData, now};
 use super::{Nav, Screen, endgames, games_list, openings, progress, puzzles, setup};
 use crate::coach::endgames::DRILLS;
-use crate::coach::profile::{LineStatus, Task, daily_plan, line_status};
+use crate::coach::profile::{LineStatus, Profile, Task, daily_plan, line_status};
 use crate::coach::repertoire::{CHAPTERS, all_lines};
 use crate::coach::store::TrainingItem;
 use ratatui::Frame;
@@ -192,44 +192,96 @@ fn menu_row(area: Rect, index: usize) -> Rect {
     Rect::new(page.x, page.y + MENU_TOP + index as u16, page.width, 1)
 }
 
+/// The title, and your ratings, games and streak.
+fn header_lines(profile: &Profile) -> Vec<Line<'static>> {
+    let streak = match profile.streak_days {
+        0 => String::new(),
+        1 => "   ·   1 day in a row".to_string(),
+        n => format!("   ·   {n} days in a row"),
+    };
+    let bold = Style::new().fg(TEXT).add_modifier(Modifier::BOLD);
+    vec![
+        Line::from(vec![Span::styled(
+            "♞ Chess Coach",
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("Rating ", Style::new().fg(DIM)),
+            Span::styled(profile.rating.0.to_string(), bold),
+            Span::styled("   ·   Puzzles ", Style::new().fg(DIM)),
+            Span::styled(profile.puzzle_rating.0.to_string(), bold),
+            Span::styled(
+                format!(
+                    "   ·   {} game{}{streak}",
+                    profile.games(),
+                    plural(profile.games())
+                ),
+                Style::new().fg(DIM),
+            ),
+        ]),
+    ]
+}
+
+/// The menu's row for `entry`, the `index`th, highlighted when `chosen`.
+fn menu_line(index: usize, entry: Entry, chosen: bool, data: &CoachData) -> Line<'static> {
+    let marker = if chosen { "▸ " } else { "  " };
+    let name_style = if chosen {
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new().fg(TEXT)
+    };
+    Line::from(vec![
+        Span::styled(marker, Style::new().fg(ACCENT)),
+        Span::styled(format!("{} {:<14}", index + 1, entry.name()), name_style),
+        Span::styled(
+            entry.describe(data),
+            Style::new().fg(if chosen { TEXT } else { DIM }),
+        ),
+    ])
+}
+
+/// Today's plan, then your focus and any warnings.
+fn plan_lines(data: &CoachData) -> Vec<Line<'static>> {
+    let profile = &data.profile;
+    let mut lines = vec![Line::styled(
+        "Today",
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )];
+    for (i, task) in daily_plan(profile, &data.own_puzzles, &data.schedules, now())
+        .into_iter()
+        .enumerate()
+    {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {}. ", i + 1), Style::new().fg(DIM)),
+            Span::styled(task_text(task), Style::new().fg(TEXT)),
+            Span::styled(
+                format!("  ({})", task_entry(task).name()),
+                Style::new().fg(DIM),
+            ),
+        ]));
+    }
+    if let Some(focus) = profile.focus.first() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "Focus  ",
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(super::progress::focus_title(*focus), Style::new().fg(GOOD)),
+        ]));
+    }
+    for warning in &data.warnings {
+        lines.push(Line::styled(warning.clone(), Style::new().fg(WARN)));
+    }
+    lines
+}
+
 impl Screen for Home {
     fn draw(&self, frame: &mut Frame, data: &CoachData, _now: Instant) {
         let area = frame.area();
         let page = page(area);
-        let profile = &data.profile;
-        let streak = match profile.streak_days {
-            0 => String::new(),
-            1 => "   ·   1 day in a row".to_string(),
-            n => format!("   ·   {n} days in a row"),
-        };
-        let header = vec![
-            Line::from(vec![Span::styled(
-                "♞ Chess Coach",
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(vec![
-                Span::styled("Rating ", Style::new().fg(DIM)),
-                Span::styled(
-                    profile.rating.0.to_string(),
-                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("   ·   Puzzles ", Style::new().fg(DIM)),
-                Span::styled(
-                    profile.puzzle_rating.0.to_string(),
-                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "   ·   {} game{}{streak}",
-                        profile.games(),
-                        plural(profile.games())
-                    ),
-                    Style::new().fg(DIM),
-                ),
-            ]),
-        ];
         frame.render_widget(
-            Paragraph::new(header),
+            Paragraph::new(header_lines(&data.profile)),
             Rect::new(page.x, page.y, page.width, 2.min(page.height)),
         );
         for (i, entry) in ENTRIES.iter().enumerate() {
@@ -237,58 +289,14 @@ impl Screen for Home {
             if row.bottom() > area.bottom() {
                 break;
             }
-            let chosen = i == self.selected;
-            let marker = if chosen { "▸ " } else { "  " };
-            let name_style = if chosen {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(TEXT)
-            };
-            let line = Line::from(vec![
-                Span::styled(marker, Style::new().fg(ACCENT)),
-                Span::styled(format!("{} {:<14}", i + 1, entry.name()), name_style),
-                Span::styled(
-                    entry.describe(data),
-                    Style::new().fg(if chosen { TEXT } else { DIM }),
-                ),
-            ]);
+            let line = menu_line(i, *entry, i == self.selected, data);
             frame.render_widget(Paragraph::new(line), row);
         }
         let plan_top = menu_row(area, ENTRIES.len()).y + 1;
-        let mut lines = vec![Line::styled(
-            "Today",
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-        )];
-        for (i, task) in daily_plan(profile, &data.own_puzzles, &data.schedules, now())
-            .into_iter()
-            .enumerate()
-        {
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {}. ", i + 1), Style::new().fg(DIM)),
-                Span::styled(task_text(task), Style::new().fg(TEXT)),
-                Span::styled(
-                    format!("  ({})", task_entry(task).name()),
-                    Style::new().fg(DIM),
-                ),
-            ]));
-        }
-        if let Some(focus) = profile.focus.first() {
-            lines.push(Line::raw(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Focus  ",
-                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(super::progress::focus_title(*focus), Style::new().fg(GOOD)),
-            ]));
-        }
-        for warning in &data.warnings {
-            lines.push(Line::styled(warning.clone(), Style::new().fg(WARN)));
-        }
         if plan_top < area.bottom() {
             let height = area.bottom().saturating_sub(plan_top + 1);
             frame.render_widget(
-                Paragraph::new(lines),
+                Paragraph::new(plan_lines(data)),
                 Rect::new(page.x, plan_top, page.width, height),
             );
         }

@@ -7,7 +7,7 @@ use super::common::{
 use super::data::CoachData;
 use super::{Nav, Screen};
 use crate::coach::judgement::Phase;
-use crate::coach::profile::{Focus, PeriodStats, RECENT_GAMES};
+use crate::coach::profile::{Focus, PeriodStats, Profile, RECENT_GAMES};
 use crate::coach::review::CauseKind;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -106,8 +106,18 @@ fn mistakes_lines(recent: &PeriodStats, earlier: Option<&PeriodStats>) -> Vec<Li
 
 fn page_lines(data: &CoachData) -> Vec<Line<'static>> {
     let profile = &data.profile;
-    let mut lines = Vec::new();
-    lines.push(heading("Ratings"));
+    let mut lines = rating_lines(profile);
+    lines.push(Line::raw(""));
+    lines.extend(recent_lines(profile));
+    lines.push(Line::raw(""));
+    lines.extend(focus_lines(profile));
+    lines.push(Line::raw(""));
+    lines.extend(puzzle_database_lines(data));
+    lines
+}
+
+/// Your game rating with its history, then your puzzle rating and results.
+fn rating_lines(profile: &Profile) -> Vec<Line<'static>> {
     let history: Vec<f64> = profile
         .rating_history
         .iter()
@@ -142,90 +152,116 @@ fn page_lines(data: &CoachData) -> Vec<Line<'static>> {
             Style::new().fg(DIM),
         ));
     }
-    lines.push(Line::from(rating_spans));
-    lines.push(label_value(
-        "Puzzles",
-        format!(
-            "{}   {} solved first time of {} tried",
-            profile.puzzle_rating.0, profile.puzzles_solved, profile.puzzles_tried
+    vec![
+        heading("Ratings"),
+        Line::from(rating_spans),
+        label_value(
+            "Puzzles",
+            format!(
+                "{}   {} solved first time of {} tried",
+                profile.puzzle_rating.0, profile.puzzles_solved, profile.puzzles_tried
+            ),
         ),
-    ));
-    lines.push(label_value(
-        "Results",
-        format!(
-            "{} won · {} drawn · {} lost",
-            profile.wins, profile.draws, profile.losses
+        label_value(
+            "Results",
+            format!(
+                "{} won · {} drawn · {} lost",
+                profile.wins, profile.draws, profile.losses
+            ),
         ),
-    ));
-    lines.push(Line::raw(""));
+    ]
+}
 
+/// How your recent games went: accuracy by phase, mistakes by cause,
+/// opening habits and your strongest phase.
+fn recent_lines(profile: &Profile) -> Vec<Line<'static>> {
     let recent = &profile.recent;
-    lines.push(heading(match recent.games.min(RECENT_GAMES) {
+    let mut lines = vec![heading(match recent.games.min(RECENT_GAMES) {
         1 => "Your last game".to_string(),
         n => format!("Your last {n} games"),
-    }));
+    })];
     if recent.games == 0 {
         lines.push(dim("Play a game against the coach and review it to see your strengths and weaknesses here."));
-    } else {
-        if let Some(accuracy) = recent.accuracy {
-            lines.push(label_value(
-                "Accuracy",
-                format!(
-                    "{accuracy:.0}%   ·   {:.1} blunders per game",
-                    recent.blunders_per_game
-                ),
-            ));
-        }
-        for phase in Phase::ALL {
-            if let Some(&accuracy) = recent.phase_accuracy.get(&phase) {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{:<12}", phase.name()), Style::new().fg(DIM)),
-                    Span::styled(
-                        bar(accuracy / 100.0, 20),
-                        Style::new().fg(if accuracy >= 75.0 { GOOD } else { ACCENT }),
-                    ),
-                    Span::styled(format!(" {accuracy:.0}%"), Style::new().fg(TEXT)),
-                ]));
-            }
-        }
-        lines.push(Line::raw(""));
-        lines.push(heading("Mistakes and blunders by cause"));
-        lines.extend(mistakes_lines(recent, profile.earlier.as_ref()));
-        if !recent.habits.is_empty() {
-            lines.push(Line::raw(""));
-            lines.push(heading("Opening habits"));
-            for (habit, games) in &recent.habits {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{:<28}", habit.name()), Style::new().fg(TEXT)),
-                    Span::styled(
-                        format!("in {games} of {} games", recent.games),
-                        Style::new().fg(DIM),
-                    ),
-                ]));
-            }
-        }
-        let strongest = recent
-            .phase_accuracy
-            .iter()
-            .max_by(|a, b| a.1.total_cmp(b.1));
-        if let Some((phase, accuracy)) = strongest
-            && recent.phase_accuracy.len() > 1
-        {
-            lines.push(Line::raw(""));
-            lines.push(Line::from(vec![
-                Span::styled("Strength    ", Style::new().fg(DIM)),
-                Span::styled(
-                    format!(
-                        "your {} ({accuracy:.0}% accuracy)",
-                        phase.name().to_lowercase()
-                    ),
-                    Style::new().fg(GOOD),
-                ),
-            ]));
-        }
+        return lines;
     }
+    if let Some(accuracy) = recent.accuracy {
+        lines.push(label_value(
+            "Accuracy",
+            format!(
+                "{accuracy:.0}%   ·   {:.1} blunders per game",
+                recent.blunders_per_game
+            ),
+        ));
+    }
+    lines.extend(phase_lines(recent));
     lines.push(Line::raw(""));
-    lines.push(heading("What to work on"));
+    lines.push(heading("Mistakes and blunders by cause"));
+    lines.extend(mistakes_lines(recent, profile.earlier.as_ref()));
+    lines.extend(habit_lines(recent));
+    lines.extend(strength_lines(recent));
+    lines
+}
+
+fn phase_lines(recent: &PeriodStats) -> Vec<Line<'static>> {
+    Phase::ALL
+        .into_iter()
+        .filter_map(|phase| {
+            let &accuracy = recent.phase_accuracy.get(&phase)?;
+            Some(Line::from(vec![
+                Span::styled(format!("{:<12}", phase.name()), Style::new().fg(DIM)),
+                Span::styled(
+                    bar(accuracy / 100.0, 20),
+                    Style::new().fg(if accuracy >= 75.0 { GOOD } else { ACCENT }),
+                ),
+                Span::styled(format!(" {accuracy:.0}%"), Style::new().fg(TEXT)),
+            ]))
+        })
+        .collect()
+}
+
+fn habit_lines(recent: &PeriodStats) -> Vec<Line<'static>> {
+    if recent.habits.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![Line::raw(""), heading("Opening habits")];
+    for (habit, games) in &recent.habits {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<28}", habit.name()), Style::new().fg(TEXT)),
+            Span::styled(
+                format!("in {games} of {} games", recent.games),
+                Style::new().fg(DIM),
+            ),
+        ]));
+    }
+    lines
+}
+
+/// Your most accurate phase, when there are at least two to compare.
+fn strength_lines(recent: &PeriodStats) -> Vec<Line<'static>> {
+    let strongest = recent
+        .phase_accuracy
+        .iter()
+        .max_by(|a, b| a.1.total_cmp(b.1));
+    let Some((phase, accuracy)) = strongest.filter(|_| recent.phase_accuracy.len() > 1) else {
+        return Vec::new();
+    };
+    vec![
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("Strength    ", Style::new().fg(DIM)),
+            Span::styled(
+                format!(
+                    "your {} ({accuracy:.0}% accuracy)",
+                    phase.name().to_lowercase()
+                ),
+                Style::new().fg(GOOD),
+            ),
+        ]),
+    ]
+}
+
+fn focus_lines(profile: &Profile) -> Vec<Line<'static>> {
+    let mut lines = vec![heading("What to work on")];
     if profile.focus.is_empty() {
         lines.push(dim(
             "Nothing stands out yet: keep playing and reviewing your games.",
@@ -241,8 +277,12 @@ fn page_lines(data: &CoachData) -> Vec<Line<'static>> {
             Style::new().fg(TEXT),
         ));
     }
-    lines.push(Line::raw(""));
-    lines.push(heading("Puzzle database"));
+    lines
+}
+
+/// Whether the Lichess puzzles are imported, and where your data lives.
+fn puzzle_database_lines(data: &CoachData) -> Vec<Line<'static>> {
+    let mut lines = vec![heading("Puzzle database")];
     if data.lichess.is_empty() {
         lines.push(Line::styled(
             "Not imported. Download lichess_db_puzzle.csv.zst from database.lichess.org, then run:"

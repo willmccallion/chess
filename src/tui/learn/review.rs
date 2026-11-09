@@ -228,6 +228,16 @@ impl ReviewScreen {
         let Some(review) = self.current_review() else {
             return vec![dim("Waiting for the engine…")];
         };
+        let mut lines = self.move_summary_lines(review);
+        if review.class.is_error() && review.class != MoveClass::Book {
+            lines.extend(self.error_lines(review));
+        }
+        lines
+    }
+
+    /// The move with its class and who played it, the evaluation and win
+    /// chance before and after, and its cause.
+    fn move_summary_lines(&self, review: &MoveReview) -> Vec<Line<'static>> {
         let yours = review.mover == self.record.human;
         let who = if yours { "You" } else { "The coach" };
         let symbol = review.class.symbol();
@@ -263,9 +273,14 @@ impl ReviewScreen {
                 Style::new().fg(if yours { WARN } else { GOOD }),
             ));
         }
-        if !review.class.is_error() || review.class == MoveClass::Book {
-            return lines;
-        }
+        lines
+    }
+
+    /// For an error: what happens next, the better move and how they
+    /// differ, and whether it became a puzzle.
+    fn error_lines(&self, review: &MoveReview) -> Vec<Line<'static>> {
+        let yours = review.mover == self.record.human;
+        let mut lines = Vec::new();
         let mover = review.mover;
         if let Some(story) = self.story(Branch::WhatHappens, mover) {
             lines.push(Line::raw(""));

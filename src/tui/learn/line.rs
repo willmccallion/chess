@@ -251,112 +251,126 @@ impl LineScreen {
             dim(format!("{} · you play {side}", self.chapter_name())),
             Line::raw(""),
         ];
-        match &self.mode {
-            Mode::Lesson { cursor } => {
-                lines.push(self.move_list(*cursor, false));
-                lines.push(Line::raw(""));
-                match cursor.checked_sub(1).and_then(|ply| self.step_text(ply)) {
-                    Some((san, note)) => {
-                        let yours = self.line.is_yours(cursor - 1);
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                format!("{san}  "),
-                                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled(
-                                if yours { "your move" } else { "their move" },
-                                Style::new().fg(DIM),
-                            ),
-                        ]));
-                        lines.push(Line::styled(note.to_string(), Style::new().fg(TEXT)));
-                    }
-                    None => lines.push(dim("Press → to go through the line move by move.")),
-                }
-                if *cursor >= self.moves.len() {
-                    lines.push(Line::raw(""));
-                    lines.push(heading("The plan from here"));
-                    lines.push(Line::styled(
-                        self.line.plan.to_string(),
-                        Style::new().fg(TEXT),
-                    ));
-                    lines.push(Line::raw(""));
-                    lines.push(Line::styled(
-                        "Enter: drill this line from memory",
-                        Style::new().fg(ACCENT),
-                    ));
-                }
+        lines.extend(match &self.mode {
+            Mode::Lesson { cursor } => self.lesson_lines(*cursor),
+            Mode::Drill { ply, misses, .. } => self.drill_lines(*ply, *misses),
+            Mode::Done { misses, saved } => self.done_lines(*misses, saved, data),
+        });
+        lines
+    }
+
+    /// The moves up to `cursor`, the last one's note, and at the end the plan.
+    fn lesson_lines(&self, cursor: usize) -> Vec<Line<'static>> {
+        let mut lines = vec![self.move_list(cursor, false), Line::raw("")];
+        match cursor.checked_sub(1).and_then(|ply| self.step_text(ply)) {
+            Some((san, note)) => {
+                let yours = self.line.is_yours(cursor - 1);
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{san}  "),
+                        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        if yours { "your move" } else { "their move" },
+                        Style::new().fg(DIM),
+                    ),
+                ]));
+                lines.push(Line::styled(note.to_string(), Style::new().fg(TEXT)));
             }
-            Mode::Drill { ply, misses, .. } => {
-                lines.push(self.move_list(*ply, true));
-                lines.push(Line::raw(""));
-                let yours_left = (*ply..self.moves.len())
-                    .filter(|&p| self.line.is_yours(p))
-                    .count();
-                let text = if self.your_turn_in_drill() {
-                    "Your move: play the line from memory."
-                } else {
-                    "Their move…"
-                };
-                lines.push(heading(text));
-                lines.push(dim(format!(
-                    "{yours_left} of your moves to go · {misses} missed"
-                )));
-                if let Some(message) = &self.message {
-                    lines.push(Line::raw(""));
-                    lines.push(colored(message.clone(), BAD));
-                }
-            }
-            Mode::Done { misses, saved } => {
-                lines.push(self.move_list(self.moves.len(), false));
-                lines.push(Line::raw(""));
-                if *misses == 0 {
-                    lines.push(Line::styled(
-                        "Perfect! Every move from memory.",
-                        Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
-                    ));
-                } else {
-                    lines.push(colored(
-                        format!(
-                            "Done, with {misses} miss{}.",
-                            if *misses == 1 { "" } else { "es" }
-                        ),
-                        BAD,
-                    ));
-                    lines.push(dim("It will come back soon so you can try again."));
-                }
-                if let Some(schedule) =
-                    data.schedule(&TrainingItem::Opening(self.line.id.to_string()))
-                {
-                    let wait = schedule.due.0.saturating_sub(now().0);
-                    let when = if wait >= DAY {
-                        format!("in {} days", wait.div_ceil(DAY))
-                    } else {
-                        "later today".to_string()
-                    };
-                    lines.push(colored(format!("Next review {when}."), INFO));
-                }
-                if let Err(e) = saved {
-                    lines.push(colored(e.clone(), BAD));
-                }
-                lines.push(Line::raw(""));
-                lines.push(heading("The plan from here"));
-                lines.push(Line::styled(
-                    self.line.plan.to_string(),
-                    Style::new().fg(TEXT),
-                ));
-                lines.push(Line::raw(""));
-                let next = if self.queue.is_empty() {
-                    "Enter: back"
-                } else {
-                    "Enter: next line"
-                };
-                lines.push(Line::styled(
-                    format!("{next}   r: drill again   l: lesson"),
-                    Style::new().fg(ACCENT),
-                ));
-            }
+            None => lines.push(dim("Press → to go through the line move by move.")),
+        }
+        if cursor >= self.moves.len() {
+            lines.extend(self.plan_lines());
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                "Enter: drill this line from memory",
+                Style::new().fg(ACCENT),
+            ));
         }
         lines
+    }
+
+    /// The moves played so far, whose turn it is, and the tally.
+    fn drill_lines(&self, ply: usize, misses: usize) -> Vec<Line<'static>> {
+        let yours_left = (ply..self.moves.len())
+            .filter(|&p| self.line.is_yours(p))
+            .count();
+        let text = if self.your_turn_in_drill() {
+            "Your move: play the line from memory."
+        } else {
+            "Their move…"
+        };
+        let mut lines = vec![
+            self.move_list(ply, true),
+            Line::raw(""),
+            heading(text),
+            dim(format!(
+                "{yours_left} of your moves to go · {misses} missed"
+            )),
+        ];
+        if let Some(message) = &self.message {
+            lines.push(Line::raw(""));
+            lines.push(colored(message.clone(), BAD));
+        }
+        lines
+    }
+
+    /// How the drill went, when the line comes back, and the plan.
+    fn done_lines(
+        &self,
+        misses: usize,
+        saved: &Result<(), String>,
+        data: &CoachData,
+    ) -> Vec<Line<'static>> {
+        let mut lines = vec![self.move_list(self.moves.len(), false), Line::raw("")];
+        if misses == 0 {
+            lines.push(Line::styled(
+                "Perfect! Every move from memory.",
+                Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            lines.push(colored(
+                format!(
+                    "Done, with {misses} miss{}.",
+                    if misses == 1 { "" } else { "es" }
+                ),
+                BAD,
+            ));
+            lines.push(dim("It will come back soon so you can try again."));
+        }
+        if let Some(schedule) = data.schedule(&TrainingItem::Opening(self.line.id.to_string())) {
+            let wait = schedule.due.0.saturating_sub(now().0);
+            let when = if wait >= DAY {
+                format!("in {} days", wait.div_ceil(DAY))
+            } else {
+                "later today".to_string()
+            };
+            lines.push(colored(format!("Next review {when}."), INFO));
+        }
+        if let Err(e) = saved {
+            lines.push(colored(e.clone(), BAD));
+        }
+        lines.extend(self.plan_lines());
+        lines.push(Line::raw(""));
+        let next = if self.queue.is_empty() {
+            "Enter: back"
+        } else {
+            "Enter: next line"
+        };
+        lines.push(Line::styled(
+            format!("{next}   r: drill again   l: lesson"),
+            Style::new().fg(ACCENT),
+        ));
+        lines
+    }
+
+    /// The plan the line leads to, under a blank line.
+    fn plan_lines(&self) -> [Line<'static>; 3] {
+        [
+            Line::raw(""),
+            heading("The plan from here"),
+            Line::styled(self.line.plan.to_string(), Style::new().fg(TEXT)),
+        ]
     }
 }
 
