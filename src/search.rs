@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 pub const MATE_SCORE: i32 = 30_000;
 const MATE_THRESHOLD: i32 = MATE_SCORE - 512;
-const INFINITY: i32 = MATE_SCORE + 1;
+/// Past every score a search can return, mates included: the widest window.
+const SCORE_BOUND: i32 = MATE_SCORE + 1;
 const MAX_PLY: usize = 128;
 const DRAW_SCORE: i32 = 0;
 
@@ -415,8 +416,8 @@ impl Default for StackEntry {
 struct Search<'a> {
     board: Board,
     tt: &'a SharedTransTable,
-    td: &'a mut ThreadData,
-    tm: TimeManager,
+    thread_data: &'a mut ThreadData,
+    time: TimeManager,
     killers: [[Option<Move>; 2]; MAX_PLY],
     stack: [StackEntry; MAX_PLY + 1],
     ply: usize,
@@ -598,7 +599,7 @@ impl Search<'_> {
     /// The move that last refuted the previous move, played where it was.
     fn counter_move(&self) -> Option<Move> {
         let (capture, piece, to) = counter_move_slot(&self.board, self.previous_move()?);
-        self.td.counter_moves[capture][piece][to]
+        self.thread_data.counter_moves[capture][piece][to]
     }
 
     /// The static evaluations of a node not in check, given its TT entry.
@@ -621,7 +622,7 @@ impl Search<'_> {
     /// Static eval adjusted by what searches have learned about this pawn structure.
     fn corrected_eval(&self, raw_eval: i32) -> i32 {
         let correction = self
-            .td
+            .thread_data
             .correction
             .correction(self.board.turn, self.board.pawn_key());
         (raw_eval + correction).clamp(-MATE_THRESHOLD + 1, MATE_THRESHOLD - 1)
@@ -729,7 +730,7 @@ impl Search<'_> {
             return;
         }
         let pawn_key = self.board.pawn_key();
-        self.td.correction.update(
+        self.thread_data.correction.update(
             self.board.turn,
             pawn_key,
             outcome.best_score - static_eval,
@@ -745,7 +746,7 @@ impl Search<'_> {
         }
         let piece = self.board.piece_on[m.from.index()];
         let continuations = self.continuation_keys();
-        self.td.histories.update_quiet(
+        self.thread_data.histories.update_quiet(
             self.board.turn,
             m,
             piece,
@@ -767,7 +768,7 @@ impl Search<'_> {
             return;
         }
         let continuations = self.continuation_keys_at(parent_ply);
-        self.td.histories.update_quiet(
+        self.thread_data.histories.update_quiet(
             self.board.turn.other(),
             prior,
             parent.moved_piece,
@@ -784,7 +785,9 @@ impl Search<'_> {
     fn update_capture_history(&mut self, m: Move, bonus: i32) {
         let piece = self.board.piece_on[m.from.index()];
         if let Some(victim) = captured_kind(self.board.piece_on[m.to.index()], m) {
-            self.td.histories.update_capture(piece, m.to, victim, bonus);
+            self.thread_data
+                .histories
+                .update_capture(piece, m.to, victim, bonus);
         }
     }
 
@@ -804,17 +807,21 @@ impl Search<'_> {
             }
             if let Some(prev) = self.previous_move() {
                 let (capture, piece, to) = counter_move_slot(&self.board, prev);
-                self.td.counter_moves[capture][piece][to] = Some(best);
+                self.thread_data.counter_moves[capture][piece][to] = Some(best);
             }
             let piece = self.board.piece_on[best.from.index()];
-            self.td
+            self.thread_data
                 .histories
                 .update_quiet(color, best, piece, &continuations, bonus);
             for &quiet in tried.quiets.as_slice() {
                 let piece = self.board.piece_on[quiet.from.index()];
-                self.td
-                    .histories
-                    .update_quiet(color, quiet, piece, &continuations, -bonus);
+                self.thread_data.histories.update_quiet(
+                    color,
+                    quiet,
+                    piece,
+                    &continuations,
+                    -bonus,
+                );
             }
         }
 
@@ -824,48 +831,48 @@ impl Search<'_> {
     }
 }
 
-fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
+fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
     use crate::movepicker::QMovePicker;
 
-    s.seldepth = s.seldepth.max(s.ply);
-    s.tm.count_node();
+    search.seldepth = search.seldepth.max(search.ply);
+    search.time.count_node();
 
-    if s.tm.check_hard_limit() {
+    if search.time.check_hard_limit() {
         return Err(Aborted);
     }
-    if s.ply >= MAX_PLY - 1 {
-        return Ok(cp_to_search_units(evaluate(&mut s.board)));
+    if search.ply >= MAX_PLY - 1 {
+        return Ok(cp_to_search_units(evaluate(&mut search.board)));
     }
 
     let is_pv = beta - alpha > 1;
     let alpha_orig = alpha;
-    let key = s.board.zobrist;
-    let tt_entry = s.tt.probe(key);
+    let key = search.board.zobrist;
+    let tt_entry = search.tt.probe(key);
     let tt_pv = tt_entry.is_some_and(|e| e.is_pv());
     if let Some(entry) = tt_entry {
-        let tt_score = score_from_tt(entry.score(), s.ply);
+        let tt_score = score_from_tt(entry.score(), search.ply);
         if !is_pv && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
             return Ok(tt_score);
         }
     }
 
-    let Some(legality) = s.board.legality_info() else {
+    let Some(legality) = search.board.legality_info() else {
         // Unreachable from a parsed FEN: every position has both kings.
         return Ok(DRAW_SCORE);
     };
     if legality.in_check() {
-        return quiesce_evasions(s, alpha, beta, &legality);
+        return quiesce_evasions(search, alpha, beta, &legality);
     }
 
-    let node_eval = s.evaluate_node(tt_entry);
+    let node_eval = search.evaluate_node(tt_entry);
     let stand_pat = node_eval.refined;
     if stand_pat >= beta {
         if tt_entry.is_none() {
-            s.tt.store(
+            search.tt.store(
                 key,
                 TTWrite {
                     depth: 0,
-                    score: score_to_tt(stand_pat, s.ply),
+                    score: score_to_tt(stand_pat, search.ply),
                     eval: Some(node_eval.raw),
                     bound: Bound::Lower,
                     best_move: None,
@@ -880,18 +887,18 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
     let mut best_score = stand_pat;
     let mut best_move = None;
     let mut picker = QMovePicker::new();
-    while let Some(m) = picker.next(&s.board) {
-        if s.is_futile_capture(m, stand_pat, alpha) {
+    while let Some(m) = picker.next(&search.board) {
+        if search.is_futile_capture(m, stand_pat, alpha) {
             continue;
         }
-        let Some(undo) = s.make_move(m, &legality) else {
+        let Some(undo) = search.make_move(m, &legality) else {
             continue;
         };
-        let score = quiesce(s, -beta, -alpha);
-        s.unmake_move(m, undo);
+        let score = quiesce(search, -beta, -alpha);
+        search.unmake_move(m, undo);
         let score = -score?;
 
-        if s.tm.check_hard_limit() {
+        if search.time.check_hard_limit() {
             return Err(Aborted);
         }
 
@@ -908,11 +915,11 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
-    s.tt.store(
+    search.tt.store(
         key,
         TTWrite {
             depth: 0,
-            score: score_to_tt(best_score, s.ply),
+            score: score_to_tt(best_score, search.ply),
             eval: Some(node_eval.raw),
             bound,
             best_move,
@@ -924,27 +931,33 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
 
 /// Quiescence when in check: every evasion is searched so mates are found.
 fn quiesce_evasions(
-    s: &mut Search,
+    search: &mut Search,
     mut alpha: i32,
     beta: i32,
     legality: &LegalityInfo,
 ) -> Result<i32, Aborted> {
     let mut evasions = ScoredMoves::new();
     evasions.fill(
-        |moves| s.board.generate_pseudo_legal_moves(moves),
-        |m| if m.is_capture() { see(&s.board, m) } else { 0 },
+        |moves| search.board.generate_pseudo_legal_moves(moves),
+        |m| {
+            if m.is_capture() {
+                see(&search.board, m)
+            } else {
+                0
+            }
+        },
     );
 
-    let mut best_score = -MATE_SCORE + s.ply as i32;
+    let mut best_score = -MATE_SCORE + search.ply as i32;
     while let Some(m) = evasions.pick_best() {
-        let Some(undo) = s.make_move(m, legality) else {
+        let Some(undo) = search.make_move(m, legality) else {
             continue;
         };
-        let score = quiesce(s, -beta, -alpha);
-        s.unmake_move(m, undo);
+        let score = quiesce(search, -beta, -alpha);
+        search.unmake_move(m, undo);
         let score = -score?;
 
-        if s.tm.check_hard_limit() {
+        if search.time.check_hard_limit() {
             return Err(Aborted);
         }
 
@@ -977,42 +990,43 @@ struct NodePruning {
 
 /// The score a node returns without searching its moves, when its static
 /// evaluation is far enough outside the window.
-fn prune_node(s: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
-    let razor_margin = s.params.razor_margin + s.params.razor_depth_sq_margin * n.depth * n.depth;
+fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
+    let razor_margin =
+        search.params.razor_margin + search.params.razor_depth_sq_margin * n.depth * n.depth;
     if n.eval < n.alpha - razor_margin {
-        let q_score = quiesce(s, n.alpha, n.beta)?;
+        let q_score = quiesce(search, n.alpha, n.beta)?;
         if q_score < n.alpha {
             return Ok(Some(q_score));
         }
     }
-    if n.depth <= s.params.rfp_max_depth
-        && n.eval - s.params.rfp_margin * (n.depth - i32::from(n.improving)) >= n.beta
+    if n.depth <= search.params.rfp_max_depth
+        && n.eval - search.params.rfp_margin * (n.depth - i32::from(n.improving)) >= n.beta
     {
         return Ok(Some(n.eval));
     }
-    null_move_cutoff(s, n)
+    null_move_cutoff(search, n)
 }
 
 /// Passes the move and searches the reply shallower; a side that still fails
 /// high after giving its opponent a free move fails high here too.
-fn null_move_cutoff(s: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
-    let previous_was_null = s.ply > 0 && s.stack[s.ply - 1].current_move.is_none();
-    if n.depth < s.params.nmp_min_depth
+fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
+    let previous_was_null = search.ply > 0 && search.stack[search.ply - 1].current_move.is_none();
+    if n.depth < search.params.nmp_min_depth
         || n.is_singular_search
         || n.eval < n.beta
         || previous_was_null
-        || !has_non_pawn_material(&s.board)
+        || !has_non_pawn_material(&search.board)
     {
         return Ok(None);
     }
-    let r = s.params.nmp_base_reduction
-        + n.depth / s.params.nmp_depth_divisor
-        + ((n.eval - n.beta) / s.params.nmp_eval_divisor).min(s.params.nmp_eval_max);
-    let undo = s.make_null_move();
-    let null_score = negamax(s, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
-    s.unmake_null_move(undo);
+    let r = search.params.nmp_base_reduction
+        + n.depth / search.params.nmp_depth_divisor
+        + ((n.eval - n.beta) / search.params.nmp_eval_divisor).min(search.params.nmp_eval_max);
+    let undo = search.make_null_move();
+    let null_score = negamax(search, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
+    search.unmake_null_move(undo);
     let null_score = -null_score?;
-    if s.tm.check_hard_limit() {
+    if search.time.check_hard_limit() {
         return Err(Aborted);
     }
     if null_score < n.beta {
@@ -1040,49 +1054,49 @@ struct ProbCutNode {
 /// reduced search; if one exists the node almost certainly fails high at full
 /// depth too. Skipped near mate scores and where the TT entry already falls short.
 fn probcut(
-    s: &mut Search,
+    search: &mut Search,
     legality: &LegalityInfo,
     n: ProbCutNode,
 ) -> Result<Option<i32>, Aborted> {
     use crate::movepicker::QMovePicker;
 
-    if n.depth < s.params.probcut_min_depth || n.beta.abs() >= MATE_THRESHOLD {
+    if n.depth < search.params.probcut_min_depth || n.beta.abs() >= MATE_THRESHOLD {
         return Ok(None);
     }
-    let probcut_beta = n.beta + s.params.probcut_margin;
+    let probcut_beta = n.beta + search.params.probcut_margin;
     let tt_rules_out_probcut = n.tt_entry.is_some_and(|entry| {
         i32::from(entry.depth()) >= n.depth - 3
-            && score_from_tt(entry.score(), s.ply) < probcut_beta
+            && score_from_tt(entry.score(), search.ply) < probcut_beta
     });
     if tt_rules_out_probcut {
         return Ok(None);
     }
-    let probe_depth = n.depth - s.params.probcut_reduction;
+    let probe_depth = n.depth - search.params.probcut_reduction;
     let mut picker = QMovePicker::new();
-    while let Some(m) = picker.next(&s.board) {
-        if !see_ge(&s.board, m, probcut_beta - n.static_eval) {
+    while let Some(m) = picker.next(&search.board) {
+        if !see_ge(&search.board, m, probcut_beta - n.static_eval) {
             continue;
         }
-        let Some(undo) = s.make_move(m, legality) else {
+        let Some(undo) = search.make_move(m, legality) else {
             continue;
         };
-        let score = probe_capture(s, probcut_beta, probe_depth, n.node);
-        s.unmake_move(m, undo);
+        let score = probe_capture(search, probcut_beta, probe_depth, n.node);
+        search.unmake_move(m, undo);
         let score = score?;
 
-        if s.tm.check_hard_limit() {
+        if search.time.check_hard_limit() {
             return Err(Aborted);
         }
         if score >= probcut_beta {
-            s.tt.store(
-                s.board.zobrist,
+            search.tt.store(
+                search.board.zobrist,
                 TTWrite {
                     depth: (probe_depth + 1) as i16,
-                    score: score_to_tt(score, s.ply),
+                    score: score_to_tt(score, search.ply),
                     eval: None,
                     bound: Bound::Lower,
                     best_move: Some(m),
-                    is_pv: s.stack[s.ply].tt_pv,
+                    is_pv: search.stack[search.ply].tt_pv,
                 },
             );
             return Ok(Some(score));
@@ -1094,17 +1108,17 @@ fn probcut(
 /// The score of a ProbCut capture already made: its quiescence score, and if
 /// that beats `probcut_beta`, a reduced search's.
 fn probe_capture(
-    s: &mut Search,
+    search: &mut Search,
     probcut_beta: i32,
     probe_depth: i32,
     node: NodeKind,
 ) -> Result<i32, Aborted> {
-    let q_score = -quiesce(s, -probcut_beta, -probcut_beta + 1)?;
+    let q_score = -quiesce(search, -probcut_beta, -probcut_beta + 1)?;
     if q_score < probcut_beta {
         return Ok(q_score);
     }
     Ok(-negamax(
-        s,
+        search,
         -probcut_beta,
         -probcut_beta + 1,
         probe_depth,
@@ -1121,7 +1135,7 @@ enum Singularity {
 
 /// Verifies whether the TT move is singular by searching the node without it.
 fn singular_extension(
-    s: &mut Search,
+    search: &mut Search,
     tt_move: Move,
     tt_entry: Option<crate::tt::TTEntry>,
     depth: i32,
@@ -1132,29 +1146,35 @@ fn singular_extension(
     let Some(entry) = tt_entry else {
         return Ok(Singularity::Extend(0));
     };
-    let tt_score = score_from_tt(entry.score(), s.ply);
-    let reliable = depth >= s.params.singular_min_depth
-        && i32::from(entry.depth()) >= depth - s.params.singular_tt_depth_margin
+    let tt_score = score_from_tt(entry.score(), search.ply);
+    let reliable = depth >= search.params.singular_min_depth
+        && i32::from(entry.depth()) >= depth - search.params.singular_tt_depth_margin
         && entry.bound() != Bound::Upper
         && tt_score.abs() < MATE_THRESHOLD;
     if !reliable {
         return Ok(Singularity::Extend(0));
     }
 
-    let singular_beta = tt_score - s.params.singular_beta_per_depth_x16 * depth / 16;
+    let singular_beta = tt_score - search.params.singular_beta_per_depth_x16 * depth / 16;
     let singular_depth = (depth - 1) / 2;
-    s.stack[s.ply].excluded_move = Some(tt_move);
-    let singular_score = negamax(s, singular_beta - 1, singular_beta, singular_depth, node);
-    s.stack[s.ply].excluded_move = None;
+    search.stack[search.ply].excluded_move = Some(tt_move);
+    let singular_score = negamax(
+        search,
+        singular_beta - 1,
+        singular_beta,
+        singular_depth,
+        node,
+    );
+    search.stack[search.ply].excluded_move = None;
     let singular_score = singular_score?;
-    if s.tm.check_hard_limit() {
+    if search.time.check_hard_limit() {
         return Err(Aborted);
     }
 
     Ok(if singular_score < singular_beta {
         let double = !is_pv
-            && singular_score < singular_beta - s.params.double_extension_margin
-            && s.stack[s.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
+            && singular_score < singular_beta - search.params.double_extension_margin
+            && search.stack[search.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
         Singularity::Extend(if double { 2 } else { 1 })
     } else if singular_beta >= beta {
         Singularity::MultiCut(singular_beta)
@@ -1188,10 +1208,10 @@ struct PruningCandidate {
 impl Search<'_> {
     /// Applies late-move, history, futility and SEE pruning to `m`.
     fn prune_move(&self, m: Move, c: PruningCandidate) -> Pruning {
-        let p = &self.params;
-        let shallow = c.depth <= p.move_pruning_max_depth;
+        let params = &self.params;
+        let shallow = c.depth <= params.move_pruning_max_depth;
         if !c.is_quiet {
-            let losing = shallow && !see_ge(&self.board, m, -p.see_capture_margin * c.depth);
+            let losing = shallow && !see_ge(&self.board, m, -params.see_capture_margin * c.depth);
             return if losing {
                 Pruning::Skip
             } else {
@@ -1201,15 +1221,16 @@ impl Search<'_> {
         if c.quiets_seen > c.lmp_limit {
             return Pruning::SkipQuiets;
         }
-        if c.depth <= p.history_pruning_max_depth
-            && c.quiet_history < -p.history_pruning_margin * c.depth
+        if c.depth <= params.history_pruning_max_depth
+            && c.quiet_history < -params.history_pruning_margin * c.depth
         {
             return Pruning::Skip;
         }
-        if shallow && c.eval + p.futility_base + p.futility_per_depth * c.depth <= c.alpha {
+        if shallow && c.eval + params.futility_base + params.futility_per_depth * c.depth <= c.alpha
+        {
             return Pruning::SkipQuiets;
         }
-        if shallow && !see_ge(&self.board, m, -p.see_quiet_margin * c.depth * c.depth) {
+        if shallow && !see_ge(&self.board, m, -params.see_quiet_margin * c.depth * c.depth) {
             return Pruning::Skip;
         }
         Pruning::Search
@@ -1270,7 +1291,7 @@ struct NodeBounds {
 /// window at reduced depth, again at full depth if it beats alpha, and with
 /// the full window if it then lands inside a PV node's window.
 fn search_late_move(
-    s: &mut Search,
+    search: &mut Search,
     node_ply: usize,
     m: LateMove,
     bounds: NodeBounds,
@@ -1280,19 +1301,25 @@ fn search_late_move(
         beta,
         best_score,
     } = bounds;
-    let reduction = s.late_move_reduction(node_ply, m);
+    let reduction = search.late_move_reduction(node_ply, m);
     let reduced_depth = m.new_depth - reduction;
-    let mut score = -negamax(s, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut)?;
+    let mut score = -negamax(search, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut)?;
     if score > alpha && reduction > 0 {
-        let deeper = score > best_score + s.params.deeper_margin + 2 * m.new_depth;
-        let shallower = score < best_score + s.params.shallower_margin;
+        let deeper = score > best_score + search.params.deeper_margin + 2 * m.new_depth;
+        let shallower = score < best_score + search.params.shallower_margin;
         let research_depth = m.new_depth + i32::from(deeper) - i32::from(shallower);
         if research_depth > reduced_depth {
-            score = -negamax(s, -alpha - 1, -alpha, research_depth, m.node.opposite())?;
+            score = -negamax(
+                search,
+                -alpha - 1,
+                -alpha,
+                research_depth,
+                m.node.opposite(),
+            )?;
         }
     }
     if m.is_pv && score > alpha && score < beta {
-        score = -negamax(s, -beta, -alpha, m.new_depth, NodeKind::All)?;
+        score = -negamax(search, -beta, -alpha, m.new_depth, NodeKind::All)?;
     }
     Ok(score)
 }
@@ -1319,49 +1346,49 @@ impl Search<'_> {
     /// How many plies to reduce a late move by, with the move made on the
     /// board and `node_ply` the ply of the node it was played from.
     fn late_move_reduction(&self, node_ply: usize, m: LateMove) -> i32 {
-        let p = &self.params;
-        if m.depth < p.lmr_min_depth || m.in_check || (m.is_pv && !m.is_quiet) {
+        let params = &self.params;
+        if m.depth < params.lmr_min_depth || m.in_check || (m.is_pv && !m.is_quiet) {
             return 0;
         }
         let gives_check = self.board.in_check();
-        let mut r_1024 = 1024
+        let mut reduction_1024 = 1024
             * self
                 .lmr
                 .base_reduction(m.depth, m.moves_searched, m.is_quiet);
-        r_1024 += if m.is_pv { 0 } else { p.lmr_non_pv_x1024 };
-        r_1024 += if m.node == NodeKind::Cut {
-            p.lmr_cut_node_x1024
+        reduction_1024 += if m.is_pv { 0 } else { params.lmr_non_pv_x1024 };
+        reduction_1024 += if m.node == NodeKind::Cut {
+            params.lmr_cut_node_x1024
         } else {
             0
         };
-        r_1024 += if m.improving {
+        reduction_1024 += if m.improving {
             0
         } else {
-            p.lmr_not_improving_x1024
+            params.lmr_not_improving_x1024
         };
-        r_1024 -= if m.killer_or_counter {
-            p.lmr_killer_or_counter_x1024
-        } else {
-            0
-        };
-        r_1024 -= if gives_check {
-            p.lmr_gives_check_x1024
+        reduction_1024 -= if m.killer_or_counter {
+            params.lmr_killer_or_counter_x1024
         } else {
             0
         };
-        r_1024 += if m.tt_capture {
-            p.lmr_tt_capture_x1024
+        reduction_1024 -= if gives_check {
+            params.lmr_gives_check_x1024
         } else {
             0
         };
-        r_1024 -= if m.tt_pv { p.lmr_tt_pv_x1024 } else { 0 };
+        reduction_1024 += if m.tt_capture {
+            params.lmr_tt_capture_x1024
+        } else {
+            0
+        };
+        reduction_1024 -= if m.tt_pv { params.lmr_tt_pv_x1024 } else { 0 };
         let child_cutoffs = i32::from(self.stack[node_ply + 1].cutoff_count);
-        r_1024 += if child_cutoffs > p.child_cutoff_threshold {
-            p.lmr_child_cutoffs_x1024
+        reduction_1024 += if child_cutoffs > params.child_cutoff_threshold {
+            params.lmr_child_cutoffs_x1024
         } else {
             0
         };
-        let r = r_1024 / 1024 - m.quiet_history / p.lmr_history_divisor;
+        let r = reduction_1024 / 1024 - m.quiet_history / params.lmr_history_divisor;
         r.clamp(0, (m.new_depth - 1).max(0))
     }
 }
@@ -1400,20 +1427,20 @@ impl NodeKind {
 }
 
 fn negamax(
-    s: &mut Search,
+    search: &mut Search,
     mut alpha: i32,
     mut beta: i32,
     mut depth: i32,
     node: NodeKind,
 ) -> Result<i32, Aborted> {
-    s.seldepth = s.seldepth.max(s.ply);
-    if s.tm.check_hard_limit() {
+    search.seldepth = search.seldepth.max(search.ply);
+    if search.time.check_hard_limit() {
         return Err(Aborted);
     }
 
-    let is_root = s.ply == 0;
+    let is_root = search.ply == 0;
     if !is_root {
-        match s.window_below_root(alpha, beta) {
+        match search.window_below_root(alpha, beta) {
             ControlFlow::Break(score) => return Ok(score),
             ControlFlow::Continue(window) => (alpha, beta) = window,
         }
@@ -1421,32 +1448,32 @@ fn negamax(
 
     let is_pv = beta - alpha > 1;
     let alpha_orig = alpha;
-    let key = s.board.zobrist;
-    let excluded_move = s.stack[s.ply].excluded_move;
+    let key = search.board.zobrist;
+    let excluded_move = search.stack[search.ply].excluded_move;
     if excluded_move.is_none() {
-        s.stack[s.ply].double_extensions = if is_root {
+        search.stack[search.ply].double_extensions = if is_root {
             0
         } else {
-            s.stack[s.ply - 1].double_extensions
+            search.stack[search.ply - 1].double_extensions
         };
     }
 
-    let tt_entry = s.tt.probe(key);
+    let tt_entry = search.tt.probe(key);
     let tt_move = tt_entry.and_then(|e| e.best_move());
     let tt_capture = tt_move.is_some_and(|m| m.is_capture());
     if excluded_move.is_none() {
-        s.stack[s.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
+        search.stack[search.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
     }
-    let tt_pv = s.stack[s.ply].tt_pv;
+    let tt_pv = search.stack[search.ply].tt_pv;
     if !is_pv
         && excluded_move.is_none()
         && let Some(entry) = tt_entry
-        && let Some(score) = s.tt_cutoff(entry, depth, alpha, beta)
+        && let Some(score) = search.tt_cutoff(entry, depth, alpha, beta)
     {
         return Ok(score);
     }
 
-    let Some(legality) = s.board.legality_info() else {
+    let Some(legality) = search.board.legality_info() else {
         // Unreachable from a parsed FEN: every position has both kings.
         return Ok(DRAW_SCORE);
     };
@@ -1455,17 +1482,17 @@ fn negamax(
         depth += 1;
     }
     if depth <= 0 {
-        return quiesce(s, alpha, beta);
+        return quiesce(search, alpha, beta);
     }
 
-    s.tm.count_node();
-    s.killers[(s.ply + 1).min(MAX_PLY - 1)] = [None; 2];
-    s.stack[(s.ply + 2).min(MAX_PLY)].cutoff_count = 0;
+    search.time.count_node();
+    search.killers[(search.ply + 1).min(MAX_PLY - 1)] = [None; 2];
+    search.stack[(search.ply + 2).min(MAX_PLY)].cutoff_count = 0;
 
-    let node_eval = (!in_check).then(|| s.evaluate_node(tt_entry));
+    let node_eval = (!in_check).then(|| search.evaluate_node(tt_entry));
     let corrected_eval = node_eval.map(|e| e.corrected);
-    s.stack[s.ply].static_eval = corrected_eval;
-    let improving = s.is_improving(corrected_eval);
+    search.stack[search.ply].static_eval = corrected_eval;
+    let improving = search.is_improving(corrected_eval);
 
     if !is_pv && let Some(e) = node_eval {
         let candidate = NodePruning {
@@ -1477,7 +1504,7 @@ fn negamax(
             node,
             is_singular_search: excluded_move.is_some(),
         };
-        if let Some(score) = prune_node(s, candidate)? {
+        if let Some(score) = prune_node(search, candidate)? {
             return Ok(score);
         }
     }
@@ -1493,38 +1520,38 @@ fn negamax(
             node,
             tt_entry,
         };
-        if let Some(score) = probcut(s, &legality, candidate)? {
+        if let Some(score) = probcut(search, &legality, candidate)? {
             return Ok(score);
         }
     }
 
-    if depth >= s.params.iir_min_depth && tt_move.is_none() && excluded_move.is_none() {
+    if depth >= search.params.iir_min_depth && tt_move.is_none() && excluded_move.is_none() {
         depth -= 1;
     }
 
-    let killer1 = s.killers[s.ply][0];
-    let killer2 = s.killers[s.ply][1];
-    let counter_move = s.counter_move();
+    let killer1 = search.killers[search.ply][0];
+    let killer2 = search.killers[search.ply][1];
+    let counter_move = search.counter_move();
 
     let mut picker = MovePicker::new(tt_move, killer1, killer2, counter_move);
-    let continuations = s.continuation_keys();
-    let mut best_score = -INFINITY;
+    let continuations = search.continuation_keys();
+    let mut best_score = -SCORE_BOUND;
     let mut best_move: Option<Move> = None;
     let mut moves_searched = 0;
     let mut tried = TriedMoves::default();
 
-    let lmp_limit = (s.params.lmp_base + depth * depth) / (2 - i32::from(improving));
+    let lmp_limit = (search.params.lmp_base + depth * depth) / (2 - i32::from(improving));
     let mut quiets_seen = 0;
 
     loop {
         let ordering = OrderingContext {
-            histories: &s.td.histories,
+            histories: &search.thread_data.histories,
             continuations,
         };
-        let Some(m) = picker.next(&s.board, &ordering) else {
+        let Some(m) = picker.next(&search.board, &ordering) else {
             break;
         };
-        if Some(m) == excluded_move || (is_root && !s.is_allowed_root_move(m)) {
+        if Some(m) == excluded_move || (is_root && !search.is_allowed_root_move(m)) {
             continue;
         }
         let is_quiet = m.is_quiet();
@@ -1533,9 +1560,11 @@ fn negamax(
         }
 
         let quiet_history = if is_quiet {
-            let piece = s.board.piece_on[m.from.index()];
-            s.td.histories
-                .quiet_history(s.board.turn, piece, m, &continuations)
+            let piece = search.board.piece_on[m.from.index()];
+            search
+                .thread_data
+                .histories
+                .quiet_history(search.board.turn, piece, m, &continuations)
         } else {
             0
         };
@@ -1551,7 +1580,7 @@ fn negamax(
                 lmp_limit,
                 quiet_history,
             };
-            match s.prune_move(m, candidate) {
+            match search.prune_move(m, candidate) {
                 Pruning::Search => {}
                 Pruning::Skip => continue,
                 Pruning::SkipQuiets => {
@@ -1565,26 +1594,26 @@ fn negamax(
             Some(m) == killer1 || Some(m) == killer2 || Some(m) == counter_move;
 
         let extension = if Some(m) == tt_move && !is_root && excluded_move.is_none() {
-            match singular_extension(s, m, tt_entry, depth, beta, is_pv, node)? {
+            match singular_extension(search, m, tt_entry, depth, beta, is_pv, node)? {
                 Singularity::Extend(plies) => plies,
                 Singularity::MultiCut(score) => return Ok(score),
             }
         } else {
             0
         };
-        let node_ply = s.ply;
-        let nodes_before = s.tm.nodes;
-        let Some(undo) = s.make_move(m, &legality) else {
+        let node_ply = search.ply;
+        let nodes_before = search.time.nodes;
+        let Some(undo) = search.make_move(m, &legality) else {
             continue;
         };
         moves_searched += 1;
         let new_depth = depth - 1 + extension;
         if extension >= 2 {
-            s.stack[node_ply].double_extensions += 1;
+            search.stack[node_ply].double_extensions += 1;
         }
 
         let score = if moves_searched == 1 {
-            negamax(s, -beta, -alpha, new_depth, node.first_child(is_pv)).map(|score| -score)
+            negamax(search, -beta, -alpha, new_depth, node.first_child(is_pv)).map(|score| -score)
         } else {
             let late_move = LateMove {
                 depth,
@@ -1605,24 +1634,24 @@ fn negamax(
                 beta,
                 best_score,
             };
-            search_late_move(s, node_ply, late_move, bounds)
+            search_late_move(search, node_ply, late_move, bounds)
         };
 
-        s.unmake_move(m, undo);
+        search.unmake_move(m, undo);
         if extension >= 2 {
-            s.stack[node_ply].double_extensions -= 1;
+            search.stack[node_ply].double_extensions -= 1;
         }
         if is_root {
-            s.record_root_move_nodes(m, s.tm.nodes - nodes_before);
+            search.record_root_move_nodes(m, search.time.nodes - nodes_before);
         }
         let score = score?;
 
-        if s.tm.check_hard_limit() {
+        if search.time.check_hard_limit() {
             return Err(Aborted);
         }
 
-        if is_root && (s.root_best.is_none() || score > alpha) {
-            s.root_best = Some((m, score));
+        if is_root && (search.root_best.is_none() || score > alpha) {
+            search.root_best = Some((m, score));
         }
 
         if score > best_score {
@@ -1631,8 +1660,8 @@ fn negamax(
                 best_move = Some(m);
                 alpha = score;
                 if alpha >= beta {
-                    s.update_cutoff_stats(m, depth, &tried);
-                    let entry = &mut s.stack[s.ply];
+                    search.update_cutoff_stats(m, depth, &tried);
+                    let entry = &mut search.stack[search.ply];
                     entry.cutoff_count = entry
                         .cutoff_count
                         .saturating_add(1 + u8::from(tt_move.is_none()));
@@ -1648,7 +1677,7 @@ fn negamax(
         return Ok(if excluded_move.is_some() {
             alpha
         } else if in_check {
-            -MATE_SCORE + s.ply as i32
+            -MATE_SCORE + search.ply as i32
         } else {
             DRAW_SCORE
         });
@@ -1659,7 +1688,7 @@ fn negamax(
 
     let bound = bound_for(best_score, alpha_orig, beta);
     if bound == Bound::Upper && !is_root {
-        s.reward_prior_quiet_move(depth);
+        search.reward_prior_quiet_move(depth);
     }
     if let Some(static_eval) = corrected_eval {
         let outcome = NodeOutcome {
@@ -1668,13 +1697,13 @@ fn negamax(
             best_move,
             bound,
         };
-        s.update_correction(static_eval, outcome);
+        search.update_correction(static_eval, outcome);
     }
-    s.tt.store(
+    search.tt.store(
         key,
         TTWrite {
             depth: depth as i16,
-            score: score_to_tt(best_score, s.ply),
+            score: score_to_tt(best_score, search.ply),
             eval: node_eval.map(|e| e.raw),
             bound,
             best_move,
@@ -1761,20 +1790,24 @@ pub fn print_uci_info(info: &IterationInfo) {
     );
 }
 
-fn iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) -> IterationInfo {
-    let elapsed_ms = s.tm.control.elapsed_ms();
-    let nodes = s.tm.nodes_of_all_threads();
+fn iteration_info(search: &Search, depth: usize, best_move: Move, score: i32) -> IterationInfo {
+    let elapsed_ms = search.time.control.elapsed_ms();
+    let nodes = search.time.nodes_of_all_threads();
     let nps = (nodes * 1000).checked_div(elapsed_ms).unwrap_or(0);
-    let mut after_best = s.board.clone();
+    let mut after_best = search.board.clone();
     after_best.make_move(best_move);
     let pv = std::iter::once(best_move)
-        .chain(get_pv_from_tt(after_best, s.tt, depth.saturating_sub(1)))
+        .chain(get_pv_from_tt(
+            after_best,
+            search.tt,
+            depth.saturating_sub(1),
+        ))
         .collect();
     IterationInfo {
         depth,
-        seldepth: s.seldepth,
+        seldepth: search.seldepth,
         score: Score::from_search(score),
-        hashfull_permill: s.tt.hashfull_permill(),
+        hashfull_permill: search.tt.hashfull_permill(),
         nodes,
         nps,
         time_ms: elapsed_ms,
@@ -1792,7 +1825,7 @@ fn legal_moves(board: &Board) -> MoveList {
 fn iterative_deepening(
     board: &Board,
     tt: &SharedTransTable,
-    td: &mut ThreadData,
+    thread_data: &mut ThreadData,
     limits: SearchLimits,
     control: Arc<SearchControl>,
     reporter: Option<InfoReporter>,
@@ -1802,8 +1835,8 @@ fn iterative_deepening(
     let mut search = Search {
         board: board.clone(),
         tt,
-        td,
-        tm: TimeManager::new(control, is_main_thread, limits.nodes),
+        thread_data,
+        time: TimeManager::new(control, is_main_thread, limits.nodes),
         killers: [[None; 2]; MAX_PLY],
         stack: [StackEntry::default(); MAX_PLY + 1],
         ply: 0,
@@ -1823,11 +1856,11 @@ fn iterative_deepening(
         let mut delta = search.params.aspiration_delta;
         let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
             (
-                (score - delta).max(-INFINITY),
-                (score + delta).min(INFINITY),
+                (score - delta).max(-SCORE_BOUND),
+                (score + delta).min(SCORE_BOUND),
             )
         } else {
-            (-INFINITY, INFINITY)
+            (-SCORE_BOUND, SCORE_BOUND)
         };
 
         let mut aborted = false;
@@ -1835,17 +1868,17 @@ fn iterative_deepening(
         loop {
             let search_depth = (depth as i32 - fail_highs).max(1);
             let iteration = negamax(&mut search, alpha, beta, search_depth, NodeKind::All);
-            let (Ok(iteration_score), false) = (iteration, search.tm.check_hard_limit()) else {
+            let (Ok(iteration_score), false) = (iteration, search.time.check_hard_limit()) else {
                 aborted = true;
                 break;
             };
             score = iteration_score;
             if score <= alpha {
                 beta = (alpha + beta) / 2;
-                alpha = (score - delta).max(-INFINITY);
+                alpha = (score - delta).max(-SCORE_BOUND);
                 fail_highs = 0;
             } else if score >= beta {
-                beta = (score + delta).min(INFINITY);
+                beta = (score + delta).min(SCORE_BOUND);
                 fail_highs += 1;
             } else {
                 break;
@@ -1867,7 +1900,7 @@ fn iterative_deepening(
             best_move_node_share: best_move.map_or(0.0, |m| search.root_move_node_share(m)),
             score_drop: if depth > 1 { previous_score - score } else { 0 },
         };
-        if search.tm.should_stop_iterating(depth, &summary) {
+        if search.time.should_stop_iterating(depth, &summary) {
             break;
         }
         if score.abs() > MATE_THRESHOLD {
@@ -1877,7 +1910,7 @@ fn iterative_deepening(
 
     ThreadOutcome {
         best_move: search.root_best.map(|(m, _)| m),
-        nodes: search.tm.nodes,
+        nodes: search.time.nodes,
         score: completed_score,
     }
 }
@@ -1943,13 +1976,14 @@ pub fn search_reporting(
         let helpers: Vec<_> = helper_tds
             .iter_mut()
             .enumerate()
-            .filter_map(|(i, td)| {
+            .filter_map(|(i, thread_data)| {
                 let helper_control = Arc::clone(control);
                 thread::Builder::new()
                     .name(format!("search-helper-{}", i + 1))
                     .stack_size(SEARCH_THREAD_STACK)
                     .spawn_scoped(scope, move || {
-                        iterative_deepening(board, tt, td, limits, helper_control, None).nodes
+                        iterative_deepening(board, tt, thread_data, limits, helper_control, None)
+                            .nodes
                     })
                     .ok()
             })
@@ -2037,9 +2071,9 @@ mod time_tests {
     fn a_fresh_search_keeps_iterating_right_after_it_starts() {
         let control = untimed_control_started_ms_ago(0);
         control.set_budget_from_now(BUDGET);
-        let mut tm = TimeManager::new(Arc::new(control), true, None);
+        let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = tm.should_stop_iterating(10, &iteration(0.9, 0));
+        let stop = time.should_stop_iterating(10, &iteration(0.9, 0));
 
         assert!(!stop);
     }
@@ -2048,9 +2082,9 @@ mod time_tests {
     fn a_search_keeps_iterating_right_after_ponderhit() {
         let control = untimed_control_started_ms_ago(PONDER_MS);
         control.set_budget_from_now(BUDGET);
-        let mut tm = TimeManager::new(Arc::new(control), true, None);
+        let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = tm.should_stop_iterating(10, &iteration(0.9, 0));
+        let stop = time.should_stop_iterating(10, &iteration(0.9, 0));
 
         assert!(
             !stop,
@@ -2063,9 +2097,9 @@ mod time_tests {
         let mut control = untimed_control_started_ms_ago(PONDER_MS);
         control.set_budget_from_now(BUDGET);
         control.start -= Duration::from_millis(3 * BUDGET.soft_ms);
-        let mut tm = TimeManager::new(Arc::new(control), true, None);
+        let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = tm.should_stop_iterating(10, &iteration(0.0, SCORE_DROP_CAP));
+        let stop = time.should_stop_iterating(10, &iteration(0.0, SCORE_DROP_CAP));
 
         assert!(
             stop,
