@@ -1621,7 +1621,7 @@ mod tests {
     fn played_games_keep_the_same_legal_moves_as_a_board_read_from_their_fen() {
         let mut rng = StdRng::seed_from_u64(7);
         for _ in 0..300 {
-            let mut board = Board::from_fen(crate::types::START_FEN).unwrap();
+            let mut board = Board::from_fen(START_FEN).unwrap();
             for _ in 0..120 {
                 let mut played = MoveList::new();
                 board.generate_legal_moves(&mut played);
@@ -1777,65 +1777,36 @@ mod tests {
         )
     }
 
-    fn assert_split_equals_all(fen: &str) {
-        let b = Board::from_fen(fen).unwrap();
-
-        let mut all = MoveList::new();
-        b.generate_pseudo_legal_moves(&mut all);
-
-        let mut caps = MoveList::new();
-        b.generate_captures(&mut caps);
-
-        let mut quiets = MoveList::new();
-        b.generate_quiets(&mut quiets);
-
-        let mut all_sorted: Vec<_> = all.as_slice().iter().map(move_key).collect();
-        all_sorted.sort();
-
-        let mut split_sorted: Vec<_> = caps
-            .as_slice()
-            .iter()
-            .chain(quiets.as_slice().iter())
-            .map(move_key)
-            .collect();
-        split_sorted.sort();
-
-        assert_eq!(
-            all_sorted,
-            split_sorted,
-            "Split mismatch for FEN: {}.\n all={} captures={} quiets={}",
-            fen,
-            all.len(),
-            caps.len(),
-            quiets.len()
-        );
-    }
+    /// The FENs the perft suite checks, and an en-passant position.
+    const SPLIT_FENS: [&str; 6] = [
+        START_FEN,
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+        "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+    ];
 
     #[test]
-    fn test_split_generators_startpos() {
-        assert_split_equals_all("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-    }
+    fn captures_and_quiets_together_are_the_pseudo_legal_moves() {
+        let fixed = SPLIT_FENS.iter().map(|fen| Board::from_fen(fen).unwrap());
+        for board in fixed.chain(random_game_positions(23, 20, 80)) {
+            let mut all = MoveList::new();
+            board.generate_pseudo_legal_moves(&mut all);
+            let mut split = MoveList::new();
+            board.generate_captures(&mut split);
+            let mut quiets = MoveList::new();
+            board.generate_quiets(&mut quiets);
+            for &m in quiets.as_slice() {
+                split.push(m);
+            }
 
-    #[test]
-    fn test_split_generators_kiwipete() {
-        assert_split_equals_all(
-            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-        );
-    }
-
-    #[test]
-    fn test_split_generators_position3() {
-        assert_split_equals_all("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
-    }
-
-    #[test]
-    fn test_split_generators_position4() {
-        assert_split_equals_all("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1");
-    }
-
-    #[test]
-    fn test_split_generators_position5() {
-        assert_split_equals_all("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8");
+            let mut all_keys: Vec<_> = all.as_slice().iter().map(move_key).collect();
+            let mut split_keys: Vec<_> = split.as_slice().iter().map(move_key).collect();
+            all_keys.sort();
+            split_keys.sort();
+            assert_eq!(all_keys, split_keys, "{}", board.to_fen());
+        }
     }
 
     fn play(board: &mut Board, moves: &[&str]) {
@@ -1895,10 +1866,5 @@ mod tests {
         play(&mut board, &["g8f6", "g1f3", "f6g8", "f3g1"]);
         play(&mut board, &["g8f6", "g1f3", "f6g8", "f3g1"]);
         assert!(board.is_draw_by_repetition());
-    }
-
-    #[test]
-    fn test_split_generators_en_passant() {
-        assert_split_equals_all("rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3");
     }
 }
