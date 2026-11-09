@@ -226,30 +226,29 @@ impl EvalOptions {
         lines
     }
 
-    /// Applies `setoption name <name> value <value>`; false if `name` is not one of these.
-    pub fn set_uci_option(&mut self, name: &str, value: &str) -> bool {
+    /// Applies `setoption name <name> value <value>`: whether `name` is one
+    /// of these options, or why `value` is not one it takes.
+    pub fn set_uci_option(&mut self, name: &str, value: &str) -> Result<bool, String> {
         if name.eq_ignore_ascii_case("Evaluator") {
-            if let Ok(kind) = value.parse() {
-                self.kind = kind;
-            }
-            return true;
+            self.kind = value.parse()?;
+            return Ok(true);
         }
         if name.eq_ignore_ascii_case("OwnEvalFile") {
             self.own_net = value.into();
-            return true;
+            return Ok(true);
         }
         #[cfg(feature = "stockfish-nnue")]
         {
             if name.eq_ignore_ascii_case("EvalFile") {
                 self.stockfish_nets.big = value.into();
-                return true;
+                return Ok(true);
             }
             if name.eq_ignore_ascii_case("EvalFileSmall") {
                 self.stockfish_nets.small = value.into();
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     /// Makes these settings' evaluator the one in use, reading its networks

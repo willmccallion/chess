@@ -35,8 +35,33 @@ fn parse_setoption(rest: &str) -> Option<(String, String)> {
     }
 }
 
-fn parse_check_value(value: &str) -> bool {
-    matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "on")
+fn parse_check_value(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "on" => Ok(true),
+        "false" | "0" | "off" => Ok(false),
+        _ => Err(format!("expected true or false, not '{value}'")),
+    }
+}
+
+/// `value` as a number in `range`.
+fn parse_in_range<T>(value: &str, range: std::ops::RangeInclusive<T>) -> Result<T, String>
+where
+    T: std::str::FromStr + PartialOrd + std::fmt::Display,
+{
+    match value.parse::<T>() {
+        Ok(number) if range.contains(&number) => Ok(number),
+        _ => Err(format!(
+            "expected a number from {} to {}, not '{value}'",
+            range.start(),
+            range.end()
+        )),
+    }
+}
+
+fn parse_number<T: std::str::FromStr>(value: &str) -> Result<T, String> {
+    value
+        .parse()
+        .map_err(|_| format!("expected a number, not '{value}'"))
 }
 
 fn send(line: &str) {
@@ -351,35 +376,39 @@ fn start_search(
     }
 }
 
-fn apply_option(name: &str, value: &str, options: &mut Options, tt: &mut SharedTransTable) {
+/// Applies `setoption name <name> value <value>`, or says why it cannot;
+/// the option then keeps its value.
+fn apply_option(
+    name: &str,
+    value: &str,
+    options: &mut Options,
+    tt: &mut SharedTransTable,
+) -> Result<(), String> {
     if name.eq_ignore_ascii_case("Hash") {
-        if let Ok(size) = value.parse::<usize>()
-            && (1..=MAX_HASH_MB).contains(&size)
-            && options.hash_mb != size
-        {
+        let size = parse_in_range(value, 1..=MAX_HASH_MB)?;
+        if options.hash_mb != size {
             options.hash_mb = size;
             *tt = SharedTransTable::new(size);
         }
     } else if name.eq_ignore_ascii_case("Threads") {
-        if let Ok(n) = value.parse::<usize>()
-            && (1..=MAX_THREADS).contains(&n)
-        {
-            options.threads = n;
-        }
+        options.threads = parse_in_range(value, 1..=MAX_THREADS)?;
     } else if name.eq_ignore_ascii_case("OwnBook") {
-        options.own_book = parse_check_value(value);
+        options.own_book = parse_check_value(value)?;
     } else if name.eq_ignore_ascii_case("CoachLevel") {
-        options.coach_level = value.parse::<u8>().ok().and_then(Level::new);
+        // Level 0 is the engine itself, with no coach.
+        let number = parse_in_range(value, 0..=Level::STRONGEST.number())?;
+        options.coach_level = Level::new(number);
     } else if name.eq_ignore_ascii_case("Move Overhead") {
-        if let Ok(ms) = value.parse::<i64>() {
-            options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
-        }
-    } else if !options.eval.set_uci_option(name, value)
-        && let Ok(number) = value.parse::<i32>()
-    {
+        let ms: i64 = parse_number(value)?;
+        options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
+    } else if !options.eval.set_uci_option(name, value)? {
         // Tunable search parameters are accepted by name but not advertised.
-        options.search_params.set(name, number);
+        let number = parse_number(value)?;
+        if !options.search_params.set(name, number) {
+            return Err("no such option".to_string());
+        }
     }
+    Ok(())
 }
 
 /// The coach bot's move at `level`: from the book early on, otherwise from every move's
@@ -491,8 +520,11 @@ impl Session {
             }
             "setoption" => {
                 self.stop_search();
-                if let Some((name, value)) = parse_setoption(rest) {
-                    apply_option(&name, &value, &mut self.options, &mut self.tt);
+                if let Some((name, value)) = parse_setoption(rest)
+                    && let Err(reason) =
+                        apply_option(&name, &value, &mut self.options, &mut self.tt)
+                {
+                    send(&format!("info string ignoring option {name}: {reason}"));
                 }
             }
             "position" => {
@@ -711,7 +743,7 @@ mod tests {
             ("Threads", "0"),
             ("Threads", "100000"),
         ] {
-            apply_option(name, value, &mut options, &mut tt);
+            assert!(apply_option(name, value, &mut options, &mut tt).is_err());
         }
 
         assert_eq!(
@@ -725,11 +757,42 @@ mod tests {
         let mut options = Options::new(EvalOptions::built_in());
         let mut tt = SharedTransTable::new(1);
 
-        apply_option("Move Overhead", "-5", &mut options, &mut tt);
+        apply_option("Move Overhead", "-5", &mut options, &mut tt).unwrap();
         let low = options.move_overhead_ms;
-        apply_option("Move Overhead", "999999", &mut options, &mut tt);
+        apply_option("Move Overhead", "999999", &mut options, &mut tt).unwrap();
 
         assert_eq!((low, options.move_overhead_ms), (0, MAX_MOVE_OVERHEAD_MS));
+    }
+
+    #[test]
+    fn a_coach_level_out_of_range_keeps_the_coach_and_zero_turns_it_off() {
+        let mut options = Options::new(EvalOptions::built_in());
+        let mut tt = SharedTransTable::new(1);
+        apply_option("CoachLevel", "3", &mut options, &mut tt).unwrap();
+
+        let too_strong = apply_option("CoachLevel", "200", &mut options, &mut tt);
+        let kept = options.coach_level;
+        apply_option("CoachLevel", "0", &mut options, &mut tt).unwrap();
+
+        assert!(too_strong.is_err());
+        assert_eq!((kept, options.coach_level), (Level::new(3), None));
+    }
+
+    #[test]
+    fn unknown_options_and_unreadable_values_are_refused() {
+        let mut options = Options::new(EvalOptions::built_in());
+        let mut tt = SharedTransTable::new(1);
+
+        let refused = [
+            ("NoSuchOption", "1"),
+            ("OwnBook", "maybe"),
+            ("Move Overhead", "soon"),
+            ("Evaluator", "magic"),
+        ]
+        .map(|(name, value)| apply_option(name, value, &mut options, &mut tt).is_err());
+
+        assert_eq!(refused, [true; 4]);
+        assert!(options.own_book);
     }
 
     #[test]
