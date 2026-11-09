@@ -318,9 +318,7 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
 }
 
 fn in_check_king_square(board: &Board) -> Option<Square> {
-    board
-        .in_check()
-        .then(|| Square::new(board.king_square(board.turn) as u8))
+    board.king_square(board.turn).filter(|_| board.in_check())
 }
 
 /// A dot a third of the square across, centred, drawn in half-block pixels.

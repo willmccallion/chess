@@ -174,8 +174,9 @@ mod tests {
     fn legal_by_making(board: &mut Board, m: crate::types::Move) -> bool {
         let mover = board.turn;
         let undo = board.make_move(m);
-        let king = board.king_square(mover) as i32;
-        let legal = !board.is_square_attacked(king, board.turn);
+        let legal = board
+            .king_square(mover)
+            .is_some_and(|king| !board.is_square_attacked(king, board.turn));
         board.unmake_move(m, undo);
         legal
     }

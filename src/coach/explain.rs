@@ -141,11 +141,10 @@ fn castling_rights(board: &Board, color: Color) -> u32 {
 
 /// Own pawns on the two ranks in front of a king on its back rank, on its file and beside it.
 fn king_cover(board: &Board, color: Color) -> u32 {
-    let king = board.king_square(color);
-    if king >= 64 {
+    let Some(king) = board.king_square(color) else {
         return 0;
-    }
-    let (file, rank) = (king % 8, king / 8);
+    };
+    let (file, rank) = (u32::from(king.file()), u32::from(king.rank()));
     let (home, step): (u32, i32) = if color == Color::White {
         (0, 1)
     } else {

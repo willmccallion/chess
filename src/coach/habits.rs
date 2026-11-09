@@ -107,7 +107,7 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
             && !m.capture
             && own_moves <= REPEAT_PIECE_MOVES
             && undeveloped >= 1
-            && !board.is_square_attacked(m.from.index() as i32, side.other())
+            && !board.is_square_attacked(m.from, side.other())
         {
             note(Habit::SamePieceTwice, ply);
         }
@@ -150,7 +150,7 @@ fn queens_on(board: &Board) -> bool {
 
 fn king_on_home_square(board: &Board, side: Color) -> bool {
     let home = if side == Color::White { 4 } else { 60 };
-    board.king_square(side) == home
+    board.king_square(side) == Some(Square::new(home))
 }
 
 #[cfg(test)]

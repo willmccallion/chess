@@ -2,7 +2,9 @@ use crate::board::Board;
 use crate::history::{ContinuationKey, Histories, captured_kind};
 use crate::magics;
 use crate::see::{PIECE_VALUES, see, see_ge};
-use crate::types::{Bitboard, Color, MAX_MOVES, Move, MoveList, Piece, PieceKind, StackVec};
+use crate::types::{
+    Bitboard, Color, MAX_MOVES, Move, MoveList, Piece, PieceKind, Square, StackVec,
+};
 
 const MAX_BAD_CAPTURES: usize = 64;
 const MVV_SCALE: i32 = 8;
@@ -39,6 +41,25 @@ fn attacks_of(board: &Board, kind: PieceKind, color: Color) -> Bitboard {
     attacks
 }
 
+/// The squares from which each kind of piece of the side to move would
+/// check the king on `king`, indexed by `PieceKind`.
+fn checking_squares(board: &Board, king: Square) -> [Bitboard; 6] {
+    let king_sq = king.index();
+    let pawn_checks = match board.turn {
+        Color::White => magics::BLACK_PAWN_ATTACKS[king_sq],
+        Color::Black => magics::WHITE_PAWN_ATTACKS[king_sq],
+    };
+    let bishop_checks = magics::get_bishop_attacks(king_sq, board.all_pieces);
+    let rook_checks = magics::get_rook_attacks(king_sq, board.all_pieces);
+    let mut checks = [0; 6];
+    checks[PieceKind::Pawn as usize] = pawn_checks;
+    checks[PieceKind::Knight as usize] = magics::knight_attacks_from(king_sq);
+    checks[PieceKind::Bishop as usize] = bishop_checks;
+    checks[PieceKind::Rook as usize] = rook_checks;
+    checks[PieceKind::Queen as usize] = bishop_checks | rook_checks;
+    checks
+}
+
 impl QuietThreats {
     fn new(board: &Board) -> Self {
         let them = board.turn.other();
@@ -48,19 +69,9 @@ impl QuietThreats {
             | attacks_of(board, PieceKind::Bishop, them);
         let by_rook = by_minor | attacks_of(board, PieceKind::Rook, them);
 
-        let king_sq = board.king_square(them) as usize;
-        let pawn_checks = match board.turn {
-            Color::White => magics::BLACK_PAWN_ATTACKS[king_sq],
-            Color::Black => magics::WHITE_PAWN_ATTACKS[king_sq],
-        };
-        let bishop_checks = magics::get_bishop_attacks(king_sq, board.all_pieces);
-        let rook_checks = magics::get_rook_attacks(king_sq, board.all_pieces);
-        let mut checks = [0; 6];
-        checks[PieceKind::Pawn as usize] = pawn_checks;
-        checks[PieceKind::Knight as usize] = magics::knight_attacks_from(king_sq);
-        checks[PieceKind::Bishop as usize] = bishop_checks;
-        checks[PieceKind::Rook as usize] = rook_checks;
-        checks[PieceKind::Queen as usize] = bishop_checks | rook_checks;
+        let checks = board
+            .king_square(them)
+            .map_or([0; 6], |king| checking_squares(board, king));
         Self {
             by_pawn,
             by_minor,

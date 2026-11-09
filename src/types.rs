@@ -612,7 +612,7 @@ pub struct Castling {
     /// The squares between the king and the rook, which must be empty.
     pub between: Bitboard,
     /// The squares the king crosses and lands on, which must not be attacked.
-    pub king_path: [i32; 2],
+    pub king_path: [Square; 2],
 }
 
 impl Castling {
@@ -632,7 +632,7 @@ pub const CASTLINGS: [[Castling; 2]; 2] = [
             king_to: Square::new(6),
             rook: Piece::WR,
             between: (1 << 5) | (1 << 6),
-            king_path: [5, 6],
+            king_path: [Square::new(5), Square::new(6)],
         },
         Castling {
             right: WQ_CASTLE,
@@ -640,7 +640,7 @@ pub const CASTLINGS: [[Castling; 2]; 2] = [
             king_to: Square::new(2),
             rook: Piece::WR,
             between: (1 << 1) | (1 << 2) | (1 << 3),
-            king_path: [3, 2],
+            king_path: [Square::new(3), Square::new(2)],
         },
     ],
     [
@@ -650,7 +650,7 @@ pub const CASTLINGS: [[Castling; 2]; 2] = [
             king_to: Square::new(62),
             rook: Piece::BR,
             between: (1 << 61) | (1 << 62),
-            king_path: [61, 62],
+            king_path: [Square::new(61), Square::new(62)],
         },
         Castling {
             right: BQ_CASTLE,
@@ -658,7 +658,7 @@ pub const CASTLINGS: [[Castling; 2]; 2] = [
             king_to: Square::new(58),
             rook: Piece::BR,
             between: (1 << 57) | (1 << 58) | (1 << 59),
-            king_path: [59, 58],
+            king_path: [Square::new(59), Square::new(58)],
         },
     ],
 ];
@@ -667,16 +667,3 @@ pub const WK_CASTLE: u8 = 1 << 0;
 pub const WQ_CASTLE: u8 = 1 << 1;
 pub const BK_CASTLE: u8 = 1 << 2;
 pub const BQ_CASTLE: u8 = 1 << 3;
-
-#[inline(always)]
-pub fn file_of(sq: i32) -> i32 {
-    sq & 7
-}
-#[inline(always)]
-pub fn rank_of(sq: i32) -> i32 {
-    sq >> 3
-}
-#[inline(always)]
-pub fn in_board(sq: i32) -> bool {
-    (0..64).contains(&sq)
-}

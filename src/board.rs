@@ -71,9 +71,8 @@ impl Board {
     }
 
     #[inline(always)]
-    pub fn king_square(&self, c: Color) -> u32 {
-        let king_piece = Piece::from_kind(PieceKind::King, c);
-        self.piece_bb[king_piece.index()].trailing_zeros()
+    pub const fn king_square(&self, c: Color) -> Option<Square> {
+        Square::first_in(self.pieces(PieceKind::King, c))
     }
 
     /// Whether the side to move may castle as `castling` describes, its
@@ -112,8 +111,8 @@ impl Board {
     /// king is not in check.
     #[inline(always)]
     pub fn in_check(&self) -> bool {
-        let king = self.king_square(self.turn);
-        king < 64 && self.is_square_attacked(king as i32, self.turn.other())
+        self.king_square(self.turn)
+            .is_some_and(|king| self.is_square_attacked(king, self.turn.other()))
     }
 
     #[inline]
@@ -232,8 +231,8 @@ impl Board {
     }
 
     #[inline]
-    pub fn is_square_attacked(&self, square: i32, by: Color) -> bool {
-        let sq = square as usize;
+    pub fn is_square_attacked(&self, square: Square, by: Color) -> bool {
+        let sq = square.index();
         let (pawn, knight, king, bishop_like, rook_like) = if by == Color::White {
             (
                 Piece::WP,
@@ -304,36 +303,27 @@ impl Board {
     fn gen_pawn_moves(&self, kinds: MoveKinds, out: &mut MoveList) {
         let white = self.turn == Color::White;
         let enemy = self.pieces_of(self.turn.other());
-        let dir = if white { 8 } else { -8 };
-        let start_rank = if white { 1 } else { 6 };
-        let promo_rank = if white { 6 } else { 1 };
-        let mut pawns = self.pieces(PieceKind::Pawn, self.turn);
+        let forward: i8 = if white { 8 } else { -8 };
+        let (start_rank, promo_rank) = if white { (1, 6) } else { (6, 1) };
 
-        while pawns != 0 {
-            let from = pawns.trailing_zeros() as i32;
-            pawns &= pawns - 1;
-            let promoting = rank_of(from) == promo_rank;
-
-            let to = from + dir;
-            if in_board(to) && (self.all_pieces & (1u64 << to)) == 0 {
+        for from in squares(self.pieces(PieceKind::Pawn, self.turn)) {
+            let promoting = from.rank() == promo_rank;
+            if let Some(to) = from.offset(forward)
+                && (self.all_pieces & to.bb()) == 0
+            {
                 if promoting {
                     if kinds != MoveKinds::Quiet {
                         for kind in PROMOTION_KINDS {
-                            out.push(Move::promotion(
-                                Square::new(from as u8),
-                                Square::new(to as u8),
-                                kind,
-                            ));
+                            out.push(Move::promotion(from, to, kind));
                         }
                     }
                 } else if kinds != MoveKinds::Tactical {
-                    out.push(Move::quiet(Square::new(from as u8), Square::new(to as u8)));
-                    let to2 = from + 2 * dir;
-                    if rank_of(from) == start_rank && (self.all_pieces & (1u64 << to2)) == 0 {
-                        out.push(Move::double_push(
-                            Square::new(from as u8),
-                            Square::new(to2 as u8),
-                        ));
+                    out.push(Move::quiet(from, to));
+                    if from.rank() == start_rank
+                        && let Some(to2) = to.offset(forward)
+                        && (self.all_pieces & to2.bb()) == 0
+                    {
+                        out.push(Move::double_push(from, to2));
                     }
                 }
             }
@@ -341,35 +331,24 @@ impl Board {
             if kinds == MoveKinds::Quiet {
                 continue;
             }
-            for df in [-1, 1] {
-                let cap = from + dir + df;
-                if (df == -1 && file_of(from) == 0)
-                    || (df == 1 && file_of(from) == 7)
-                    || !in_board(cap)
-                {
+            for side in [-1, 1] {
+                if (side == -1 && from.file() == 0) || (side == 1 && from.file() == 7) {
                     continue;
                 }
-                if (enemy & (1u64 << cap)) != 0 {
+                let Some(cap) = from.offset(forward + side) else {
+                    continue;
+                };
+                if (enemy & cap.bb()) != 0 {
                     if promoting {
                         for kind in PROMOTION_KINDS {
-                            out.push(Move::promotion_capture(
-                                Square::new(from as u8),
-                                Square::new(cap as u8),
-                                kind,
-                            ));
+                            out.push(Move::promotion_capture(from, cap, kind));
                         }
                     } else {
-                        out.push(Move::capture(
-                            Square::new(from as u8),
-                            Square::new(cap as u8),
-                        ));
+                        out.push(Move::capture(from, cap));
                     }
                 }
-                if self.en_passant == Some(Square::new(cap as u8)) {
-                    out.push(Move::en_passant(
-                        Square::new(from as u8),
-                        Square::new(cap as u8),
-                    ));
+                if self.en_passant == Some(cap) {
+                    out.push(Move::en_passant(from, cap));
                 }
             }
         }
@@ -432,8 +411,10 @@ impl Board {
 
     /// Adds the castlings the side to move may make.
     fn gen_castling(&self, out: &mut MoveList) {
-        let king = self.king_square(self.turn);
-        if king >= 64 || self.is_square_attacked(king as i32, self.turn.other()) {
+        let Some(king) = self.king_square(self.turn) else {
+            return;
+        };
+        if self.is_square_attacked(king, self.turn.other()) {
             return;
         }
         for castling in &CASTLINGS[self.turn as usize] {
@@ -495,7 +476,7 @@ impl Board {
             else {
                 return false;
             };
-            return !self.is_square_attacked(from as i32, self.turn.other())
+            return !self.is_square_attacked(m.from, self.turn.other())
                 && self.can_castle(castling);
         }
 
@@ -546,34 +527,23 @@ impl Board {
             PieceKind::King => (magics::king_attacks_from(from) & (1u64 << to)) != 0,
             PieceKind::Pawn => {
                 let white = self.turn == Color::White;
-                let dir: i32 = if white { 8 } else { -8 };
-                let from_i = from as i32;
-                let to_i = to as i32;
-
-                if m.capture {
-                    let diff = to_i - from_i;
-                    let beside = (file_of(to_i) - file_of(from_i)).abs() == 1;
-                    if (diff != dir - 1 && diff != dir + 1) || !beside {
-                        return false;
-                    }
+                let forward: i8 = if white { 8 } else { -8 };
+                let (start_rank, promo_rank) = if white { (1, 6) } else { (6, 1) };
+                let ahead = m.from.offset(forward);
+                let reaches = if m.capture {
+                    m.to.file().abs_diff(m.from.file()) == 1
+                        && (m.from.offset(forward - 1) == Some(m.to)
+                            || m.from.offset(forward + 1) == Some(m.to))
                 } else if m.double_push {
-                    let start_rank = if white { 1 } else { 6 };
-                    let mid = from_i + dir;
-                    if rank_of(from_i) != start_rank
-                        || to_i != from_i + 2 * dir
-                        || (self.all_pieces & (1u64 << mid)) != 0
-                    {
-                        return false;
-                    }
+                    m.from.rank() == start_rank
+                        && ahead.is_some_and(|mid| {
+                            (self.all_pieces & mid.bb()) == 0 && mid.offset(forward) == Some(m.to)
+                        })
                 } else {
-                    if to_i != from_i + dir {
-                        return false;
-                    }
-                }
-
+                    ahead == Some(m.to)
+                };
                 // A pawn promotes exactly when it reaches the last rank.
-                let promo_rank = if white { 6 } else { 1 };
-                (rank_of(from_i) == promo_rank) == m.promotion.is_some()
+                reaches && (m.from.rank() == promo_rank) == m.promotion.is_some()
             }
         }
     }
@@ -924,11 +894,7 @@ impl Board {
         let mut temp_board = self.clone();
         let undo = temp_board.make_move(m);
 
-        let opp_king_sq = temp_board.piece_bb
-            [Piece::from_kind(PieceKind::King, temp_board.turn).index()]
-        .trailing_zeros() as i32;
-
-        if temp_board.is_square_attacked(opp_king_sq, self.turn) {
+        if temp_board.in_check() {
             let mut has_legal_move = false;
             let mut next_moves = MoveList::new();
             temp_board.generate_legal_moves(&mut next_moves);

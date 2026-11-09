@@ -111,8 +111,9 @@ fn validate_kings(b: &Board) -> Result<(), String> {
         }
     }
     let waiting_side = b.turn.other();
-    let waiting_king = b.king_square(waiting_side) as i32;
-    if b.is_square_attacked(waiting_king, b.turn) {
+    if let Some(waiting_king) = b.king_square(waiting_side)
+        && b.is_square_attacked(waiting_king, b.turn)
+    {
         return Err("side not to move is in check".into());
     }
     Ok(())
