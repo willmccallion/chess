@@ -1140,7 +1140,8 @@ impl Board {
 
                 if m.capture {
                     let diff = to_i - from_i;
-                    if diff != dir - 1 && diff != dir + 1 {
+                    let beside = (file_of(to_i) - file_of(from_i)).abs() == 1;
+                    if (diff != dir - 1 && diff != dir + 1) || !beside {
                         return false;
                     }
                 } else if m.double_push {
@@ -1158,14 +1159,9 @@ impl Board {
                     }
                 }
 
-                // Promotion rank consistency
-                if m.promotion.is_some() {
-                    let promo_rank = if white { 6 } else { 1 };
-                    if rank_of(from_i) != promo_rank {
-                        return false;
-                    }
-                }
-                true
+                // A pawn promotes exactly when it reaches the last rank.
+                let promo_rank = if white { 6 } else { 1 };
+                (rank_of(from_i) == promo_rank) == m.promotion.is_some()
             }
         }
     }
@@ -1670,6 +1666,32 @@ mod tests {
                 }
                 let m = played.get(rng.gen_range(0..played.len()));
                 board.make_move(m);
+            }
+        }
+    }
+
+    #[test]
+    fn pseudo_legality_agrees_with_the_generator_for_moves_from_anywhere() {
+        let positions = random_game_positions(11, 40, 80);
+        let mut candidates: Vec<Move> = (0..=u16::MAX).map(Move::from).collect();
+        for board in &positions {
+            let mut moves = MoveList::new();
+            board.generate_pseudo_legal_moves(&mut moves);
+            candidates.extend_from_slice(moves.as_slice());
+        }
+        candidates.sort_unstable_by_key(|&m| u16::from(m));
+        candidates.dedup();
+
+        for board in positions.iter().step_by(40) {
+            let mut generated = MoveList::new();
+            board.generate_pseudo_legal_moves(&mut generated);
+            for &m in &candidates {
+                assert_eq!(
+                    board.is_pseudo_legal(m),
+                    generated.as_slice().contains(&m),
+                    "{m:?} in {}",
+                    board.to_fen()
+                );
             }
         }
     }
