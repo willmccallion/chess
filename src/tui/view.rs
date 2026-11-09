@@ -318,8 +318,9 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
 }
 
 fn in_check_king_square(board: &Board) -> Option<u8> {
-    let king = board.king_square(board.turn);
-    (king < 64 && board.is_square_attacked(king as i32, board.turn.other())).then_some(king as u8)
+    board
+        .in_check()
+        .then(|| board.king_square(board.turn) as u8)
 }
 
 /// A dot a third of the square across, centred, drawn in half-block pixels.

@@ -249,8 +249,7 @@ fn gives_mate(board: &Board, m: Move) -> bool {
     after.make_move(m);
     let mut legal = MoveList::new();
     after.generate_legal_moves(&mut legal);
-    let king = after.king_square(after.turn);
-    legal.is_empty() && king < 64 && after.is_square_attacked(king as i32, after.turn.other())
+    legal.is_empty() && after.in_check()
 }
 
 /// Lichess themes worth naming, with how to say them.

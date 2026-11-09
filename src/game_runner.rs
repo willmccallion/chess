@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::types::{Color, MoveList, Piece, PieceKind, START_FEN};
+use crate::types::{Color, MoveList, START_FEN};
 use crate::uci_client::UciEngine;
 use crate::uci_io::parse_uci_move;
 use std::time::Instant;
@@ -97,10 +97,7 @@ pub fn position_outcome(board: &Board) -> Option<(GameResult, GameEndReason)> {
     let mut legal = MoveList::new();
     board.generate_legal_moves(&mut legal);
     if legal.is_empty() {
-        let king = Piece::from_kind(PieceKind::King, board.turn);
-        let king_sq = board.piece_bb[king.index()].trailing_zeros();
-        let in_check = king_sq < 64 && board.is_square_attacked(king_sq as i32, board.turn.other());
-        return Some(if in_check {
+        return Some(if board.in_check() {
             (win_for(board.turn.other()), GameEndReason::Checkmate)
         } else {
             (GameResult::Draw, GameEndReason::Stalemate)

@@ -58,6 +58,14 @@ impl Board {
         self.piece_bb[king_piece.index()].trailing_zeros()
     }
 
+    /// Whether the side to move's king is attacked; a board without that
+    /// king is not in check.
+    #[inline(always)]
+    pub fn in_check(&self) -> bool {
+        let king = self.king_square(self.turn);
+        king < 64 && self.is_square_attacked(king as i32, self.turn.other())
+    }
+
     #[inline]
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
         let mut b = fen::parse_fen(fen_str)?;

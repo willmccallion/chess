@@ -418,9 +418,7 @@ fn lost_material_cause(
 
 /// Whether the opponent could already have won the piece on `square` had it been their move.
 fn was_already_attacked(board: &Board, square: u8) -> bool {
-    let mover = board.turn;
-    let king = board.king_square(mover);
-    if king < 64 && board.is_square_attacked(king as i32, mover.other()) {
+    if board.in_check() {
         return false;
     }
     let mut passed = board.clone();

@@ -213,11 +213,6 @@ fn random_opening(rng: &mut StdRng, plies: usize) -> Option<Board> {
     position_outcome(&board).is_none().then_some(board)
 }
 
-fn in_check(board: &Board) -> bool {
-    let king = board.king_square(board.turn);
-    king < 64 && board.is_square_attacked(king as i32, board.turn.other())
-}
-
 /// Positions whose best move changes material teach the network little about quiet play.
 fn is_quiet(m: Move) -> bool {
     !m.capture && m.promotion.is_none()
@@ -265,7 +260,7 @@ fn play_game(
         if let Verdict::Centipawns(cp) = verdict
             && cp.abs() <= MAX_KEPT_SCORE_CP
             && is_quiet(best)
-            && !in_check(&board)
+            && !board.in_check()
         {
             positions.push((board.to_fen(), cp));
         }

@@ -430,17 +430,11 @@ struct Search<'a> {
     lmr: LmrTables,
 }
 
-#[inline(always)]
-fn side_to_move_in_check(board: &Board) -> bool {
-    let king_sq = board.king_square(board.turn) as i32;
-    board.is_square_attacked(king_sq, board.turn.other())
-}
-
 /// True when the fifty-move rule ends the game at `board`: a hundred
 /// half-moves without a capture or pawn move, unless the side to move is
 /// checkmated, which the mate decides.
 fn is_fifty_move_draw(board: &Board) -> bool {
-    board.halfmove_clock >= 100 && !(side_to_move_in_check(board) && has_no_legal_move(board))
+    board.halfmove_clock >= 100 && !(board.in_check() && has_no_legal_move(board))
 }
 
 fn has_no_legal_move(board: &Board) -> bool {
@@ -1286,7 +1280,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         } else {
             let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv)
             {
-                let gives_check = side_to_move_in_check(&s.board);
+                let gives_check = s.board.in_check();
                 let p = &s.params;
                 let mut r_1024 = 1024 * s.lmr.base_reduction(depth, moves_searched, is_quiet);
                 r_1024 += if is_pv { 0 } else { p.lmr_non_pv_x1024 };
