@@ -849,70 +849,60 @@ impl Board {
         if m.is_castle() {
             return if m.to > m.from { "O-O" } else { "O-O-O" }.to_string();
         }
-
-        let from = m.from.index();
-        let moving_piece = self.piece_on[from];
         let mut san = String::new();
-
-        if let Some(pk) = moving_piece.kind() {
-            if pk == PieceKind::Pawn {
-                if m.is_capture() {
-                    san.push(m.from.file_char());
-                }
-            } else {
-                san.push(pk.to_char_upper());
-                let mut ambiguous_moves = Vec::new();
-                for other_move in legal_moves {
-                    let other_from = other_move.from.index();
-                    if self.piece_on[other_from].kind() == Some(pk)
-                        && other_from != from
-                        && other_move.to == m.to
-                    {
-                        ambiguous_moves.push(other_move);
-                    }
-                }
-
-                if !ambiguous_moves.is_empty() {
-                    let mut file_is_unique = true;
-                    let mut rank_is_unique = true;
-
-                    for amb_move in &ambiguous_moves {
-                        if amb_move.from.file() == m.from.file() {
-                            file_is_unique = false;
-                        }
-                        if amb_move.from.rank() == m.from.rank() {
-                            rank_is_unique = false;
-                        }
-                    }
-
-                    if file_is_unique {
-                        san.push(m.from.file_char());
-                    } else if rank_is_unique {
-                        san.push(m.from.rank_char());
-                    } else {
-                        san.push_str(&m.from.to_string());
-                    }
-                }
+        match self.piece_on[m.from.index()].kind() {
+            Some(PieceKind::Pawn) if m.is_capture() => san.push(m.from.file_char()),
+            Some(PieceKind::Pawn) | None => {}
+            Some(kind) => {
+                san.push(kind.to_char_upper());
+                san.push_str(&self.disambiguation(m, kind, legal_moves));
             }
         }
-
         if m.is_capture() {
             san.push('x');
         }
-
         san.push_str(&m.to.to_string());
-
         if let Some(promo) = m.promotion() {
             san.push('=');
             san.push(promo.to_char_upper());
         }
-
-        let mut after = self.clone();
-        after.make_move(m);
-        if after.in_check() {
-            san.push(if after.has_legal_move() { '+' } else { '#' });
+        if let Some(mark) = self.check_mark(m) {
+            san.push(mark);
         }
         san
+    }
+
+    /// What SAN adds after the piece letter so `m` names one piece: nothing
+    /// if no other `kind` reaches its square, else its file if that tells
+    /// them apart, else its rank, else both.
+    fn disambiguation(&self, m: Move, kind: PieceKind, legal_moves: &[Move]) -> String {
+        let rivals: Vec<Square> = legal_moves
+            .iter()
+            .filter(|other| {
+                other.to == m.to
+                    && other.from != m.from
+                    && self.piece_on[other.from.index()].kind() == Some(kind)
+            })
+            .map(|other| other.from)
+            .collect();
+        if rivals.is_empty() {
+            String::new()
+        } else if rivals.iter().all(|sq| sq.file() != m.from.file()) {
+            m.from.file_char().to_string()
+        } else if rivals.iter().all(|sq| sq.rank() != m.from.rank()) {
+            m.from.rank_char().to_string()
+        } else {
+            m.from.to_string()
+        }
+    }
+
+    /// `+` if `m` gives check, `#` if it mates.
+    fn check_mark(&self, m: Move) -> Option<char> {
+        let mut after = self.clone();
+        after.make_move(m);
+        after
+            .in_check()
+            .then(|| if after.has_legal_move() { '+' } else { '#' })
     }
 }
 
