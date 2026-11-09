@@ -686,6 +686,25 @@ impl Search<'_> {
         Some(tt_score)
     }
 
+    /// Moves the correction history toward the gap between `static_eval` and
+    /// a quiet, non-mate search result that lies past it.
+    fn update_correction(&mut self, static_eval: i32, outcome: NodeOutcome) {
+        if outcome.best_move.is_some_and(|m| m.is_capture())
+            || outcome.best_score.abs() >= MATE_THRESHOLD
+            || !bound_beyond(outcome.bound, outcome.best_score, static_eval)
+        {
+            return;
+        }
+        let pawn_key = self.board.pawn_key();
+        self.td.correction.update(
+            self.board.turn,
+            pawn_key,
+            outcome.best_score - static_eval,
+            outcome.depth,
+            self.params.correction_max_weight,
+        );
+    }
+
     /// Credits a quiet TT move whose stored score still fails high.
     fn reward_tt_cutoff_move(&mut self, m: Move, depth: i32) {
         if !m.is_quiet() || !self.board.is_pseudo_legal(m) {
@@ -1158,6 +1177,15 @@ impl Search<'_> {
     }
 }
 
+/// What searching a node's moves found.
+#[derive(Clone, Copy)]
+struct NodeOutcome {
+    depth: i32,
+    best_score: i32,
+    best_move: Option<Move>,
+    bound: Bound,
+}
+
 /// A node's window and the best score its moves have reached so far.
 #[derive(Clone, Copy)]
 struct NodeBounds {
@@ -1571,19 +1599,14 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
     if bound == Bound::Upper && !is_root {
         s.reward_prior_quiet_move(depth);
     }
-    if let Some(static_eval) = corrected_eval
-        && best_move.is_none_or(|m| !m.is_capture())
-        && best_score.abs() < MATE_THRESHOLD
-        && bound_beyond(bound, best_score, static_eval)
-    {
-        let pawn_key = s.board.pawn_key();
-        s.td.correction.update(
-            s.board.turn,
-            pawn_key,
-            best_score - static_eval,
+    if let Some(static_eval) = corrected_eval {
+        let outcome = NodeOutcome {
             depth,
-            s.params.correction_max_weight,
-        );
+            best_score,
+            best_move,
+            bound,
+        };
+        s.update_correction(static_eval, outcome);
     }
     s.tt.store(
         key,
