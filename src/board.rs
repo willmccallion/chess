@@ -4,6 +4,24 @@ use crate::magics;
 use crate::types::*;
 use crate::zobrist;
 
+/// The squares a piece move may land on, and which of them hold enemy
+/// pieces to capture.
+#[derive(Clone, Copy)]
+struct PieceTargets {
+    targets: Bitboard,
+    enemy: Bitboard,
+}
+
+/// Which of a position's pseudo-legal moves a generator adds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MoveKinds {
+    All,
+    /// Captures, en passant and promotions.
+    Tactical,
+    /// Every other move, castling included.
+    Quiet,
+}
+
 #[derive(Clone)]
 pub struct Board {
     pub piece_bb: [Bitboard; 13],
@@ -260,9 +278,8 @@ impl Board {
     #[inline]
     pub fn generate_pseudo_legal_moves(&self, out: &mut MoveList) {
         out.clear();
-        self.gen_pawns(out);
-        self.gen_leapers(out);
-        self.gen_sliders(out);
+        self.gen_pawn_moves(MoveKinds::All, out);
+        self.gen_piece_moves(MoveKinds::All, out);
     }
 
     #[inline]
@@ -280,652 +297,147 @@ impl Board {
         }
     }
 
-    fn gen_pawns(&self, out: &mut MoveList) {
+    /// Adds `kinds` of the side to move's pawn moves: for each pawn, its
+    /// advance or promotions, its double advance, then its captures to
+    /// either side, each followed by en passant onto that square.
+    fn gen_pawn_moves(&self, kinds: MoveKinds, out: &mut MoveList) {
         let white = self.turn == Color::White;
-        let pawn = if white { Piece::WP } else { Piece::BP };
-        let pawns = self.piece_bb[pawn.index()];
         let enemy = self.pieces_of(self.turn.other());
         let dir = if white { 8 } else { -8 };
         let start_rank = if white { 1 } else { 6 };
         let promo_rank = if white { 6 } else { 1 };
-        let mut bb = pawns;
+        let mut pawns = self.pieces(PieceKind::Pawn, self.turn);
 
-        while bb != 0 {
-            let from = bb.trailing_zeros() as i32;
-            bb &= bb - 1;
-            let r = rank_of(from);
-            let f = file_of(from);
+        while pawns != 0 {
+            let from = pawns.trailing_zeros() as i32;
+            pawns &= pawns - 1;
+            let promoting = rank_of(from) == promo_rank;
 
             let to = from + dir;
             if in_board(to) && (self.all_pieces & (1u64 << to)) == 0 {
-                if r == promo_rank {
-                    for pk in [
-                        PieceKind::Queen,
-                        PieceKind::Rook,
-                        PieceKind::Bishop,
-                        PieceKind::Knight,
-                    ] {
-                        out.push(Move {
-                            from: from as u8,
-                            to: to as u8,
-                            capture: false,
-                            en_passant: false,
-                            double_push: false,
-                            castle: false,
-                            promotion: Some(pk),
-                        });
+                if promoting {
+                    if kinds != MoveKinds::Quiet {
+                        for kind in PROMOTION_KINDS {
+                            out.push(Move::promotion(from as u8, to as u8, kind));
+                        }
                     }
-                } else {
+                } else if kinds != MoveKinds::Tactical {
                     out.push(Move::quiet(from as u8, to as u8));
-                    if r == start_rank {
-                        let to2 = from + 2 * dir;
-                        if (self.all_pieces & (1u64 << to2)) == 0 {
-                            out.push(Move {
-                                from: from as u8,
-                                to: to2 as u8,
-                                capture: false,
-                                en_passant: false,
-                                double_push: true,
-                                castle: false,
-                                promotion: None,
-                            });
-                        }
+                    let to2 = from + 2 * dir;
+                    if rank_of(from) == start_rank && (self.all_pieces & (1u64 << to2)) == 0 {
+                        out.push(Move::double_push(from as u8, to2 as u8));
                     }
                 }
             }
 
-            for df in [-1, 1] {
-                let cap = from + dir + df;
-                if (df == -1 && f == 0) || (df == 1 && f == 7) {
-                    continue;
-                }
-
-                if !in_board(cap) {
-                    continue;
-                }
-
-                let cap_bb = 1u64 << cap;
-                if (enemy & cap_bb) != 0 {
-                    if r == promo_rank {
-                        for pk in [
-                            PieceKind::Queen,
-                            PieceKind::Rook,
-                            PieceKind::Bishop,
-                            PieceKind::Knight,
-                        ] {
-                            out.push(Move {
-                                from: from as u8,
-                                to: cap as u8,
-                                capture: true,
-                                en_passant: false,
-                                double_push: false,
-                                castle: false,
-                                promotion: Some(pk),
-                            });
-                        }
-                    } else {
-                        out.push(Move {
-                            from: from as u8,
-                            to: cap as u8,
-                            capture: true,
-                            en_passant: false,
-                            double_push: false,
-                            castle: false,
-                            promotion: None,
-                        });
-                    }
-                }
-
-                if self.en_passant_sq == cap {
-                    out.push(Move {
-                        from: from as u8,
-                        to: cap as u8,
-                        capture: true,
-                        en_passant: true,
-                        double_push: false,
-                        castle: false,
-                        promotion: None,
-                    });
-                }
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn first_sq(bb: u64) -> Option<i32> {
-        if bb == 0 {
-            None
-        } else {
-            Some(bb.trailing_zeros() as i32)
-        }
-    }
-
-    #[inline]
-    fn gen_leapers(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let friendly = self.pieces_of(self.turn);
-
-        let kn = if white { Piece::WN } else { Piece::BN };
-        let mut bb = self.piece_bb[kn.index()];
-        while bb != 0 {
-            let from = bb.trailing_zeros() as usize;
-            bb &= bb - 1;
-
-            let mut att = magics::knight_attacks_from(from) & !friendly;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                let capture = (self.all_pieces & (1u64 << to)) != 0;
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
-
-        let king = if white { Piece::WK } else { Piece::BK };
-        let king_bb = self.piece_bb[king.index()];
-
-        let Some(from) = Self::first_sq(king_bb) else {
-            return;
-        };
-
-        let mut att = magics::king_attacks_from(from as usize) & !friendly;
-        while att != 0 {
-            let to = att.trailing_zeros() as usize;
-            att &= att - 1;
-            let capture = (self.all_pieces & (1u64 << to)) != 0;
-            out.push(Move {
-                from: from as u8,
-                to: to as u8,
-                capture,
-                en_passant: false,
-                double_push: false,
-                castle: false,
-                promotion: None,
-            });
-        }
-
-        if self.is_square_attacked(from, self.turn.other()) {
-            return;
-        }
-
-        for castling in &CASTLINGS[self.turn as usize] {
-            if self.can_castle(castling) {
-                out.push(Move {
-                    from: castling.king_from,
-                    to: castling.king_to,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-        }
-    }
-
-    #[inline]
-    fn gen_sliders(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let friendly = self.pieces_of(self.turn);
-        let enemy = self.pieces_of(self.turn.other());
-        let occ = self.all_pieces;
-        let b_piece = if white { Piece::WB } else { Piece::BB };
-
-        let mut bb = self.piece_bb[b_piece.index()];
-        while bb != 0 {
-            let from = bb.trailing_zeros() as usize;
-            bb &= bb - 1;
-
-            let mut att = magics::get_bishop_attacks(from, occ) & !friendly;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                let capture = (enemy & (1u64 << to)) != 0;
-
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
-
-        let r_piece = if white { Piece::WR } else { Piece::BR };
-
-        let mut rb = self.piece_bb[r_piece.index()];
-        while rb != 0 {
-            let from = rb.trailing_zeros() as usize;
-            rb &= rb - 1;
-            let mut att = magics::get_rook_attacks(from, occ) & !friendly;
-
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                let capture = (enemy & (1u64 << to)) != 0;
-
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
-
-        let q_piece = if white { Piece::WQ } else { Piece::BQ };
-
-        let mut qb = self.piece_bb[q_piece.index()];
-        while qb != 0 {
-            let from = qb.trailing_zeros() as usize;
-            qb &= qb - 1;
-
-            let mut att = (magics::get_rook_attacks(from, occ)
-                | magics::get_bishop_attacks(from, occ))
-                & !friendly;
-
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                let capture = (enemy & (1u64 << to)) != 0;
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
-    }
-
-    // ── Split generators for staged move generation ──────────────────
-
-    pub fn generate_captures(&self, out: &mut MoveList) {
-        out.clear();
-        self.gen_pawn_captures(out);
-        self.gen_leaper_captures(out);
-        self.gen_slider_captures(out);
-    }
-
-    pub fn generate_quiets(&self, out: &mut MoveList) {
-        out.clear();
-        self.gen_pawn_quiets(out);
-        self.gen_leaper_quiets(out);
-        self.gen_slider_quiets(out);
-    }
-
-    fn gen_pawn_captures(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let pawn = if white { Piece::WP } else { Piece::BP };
-        let pawns = self.piece_bb[pawn.index()];
-        let enemy = self.pieces_of(self.turn.other());
-        let dir: i32 = if white { 8 } else { -8 };
-        let promo_rank = if white { 6 } else { 1 };
-        let mut bb = pawns;
-
-        while bb != 0 {
-            let from = bb.trailing_zeros() as i32;
-            bb &= bb - 1;
-            let r = rank_of(from);
-            let f = file_of(from);
-
-            // Non-capture promotions (tactical, belong with captures)
-            if r == promo_rank {
-                let to = from + dir;
-                if in_board(to) && (self.all_pieces & (1u64 << to)) == 0 {
-                    for pk in [
-                        PieceKind::Queen,
-                        PieceKind::Rook,
-                        PieceKind::Bishop,
-                        PieceKind::Knight,
-                    ] {
-                        out.push(Move {
-                            from: from as u8,
-                            to: to as u8,
-                            capture: false,
-                            en_passant: false,
-                            double_push: false,
-                            castle: false,
-                            promotion: Some(pk),
-                        });
-                    }
-                }
-            }
-
-            // Diagonal captures + capture-promotions + en passant
-            for df in [-1, 1] {
-                let cap = from + dir + df;
-                if (df == -1 && f == 0) || (df == 1 && f == 7) {
-                    continue;
-                }
-                if !in_board(cap) {
-                    continue;
-                }
-
-                let cap_bb = 1u64 << cap;
-                if (enemy & cap_bb) != 0 {
-                    if r == promo_rank {
-                        for pk in [
-                            PieceKind::Queen,
-                            PieceKind::Rook,
-                            PieceKind::Bishop,
-                            PieceKind::Knight,
-                        ] {
-                            out.push(Move {
-                                from: from as u8,
-                                to: cap as u8,
-                                capture: true,
-                                en_passant: false,
-                                double_push: false,
-                                castle: false,
-                                promotion: Some(pk),
-                            });
-                        }
-                    } else {
-                        out.push(Move {
-                            from: from as u8,
-                            to: cap as u8,
-                            capture: true,
-                            en_passant: false,
-                            double_push: false,
-                            castle: false,
-                            promotion: None,
-                        });
-                    }
-                }
-
-                if self.en_passant_sq == cap {
-                    out.push(Move {
-                        from: from as u8,
-                        to: cap as u8,
-                        capture: true,
-                        en_passant: true,
-                        double_push: false,
-                        castle: false,
-                        promotion: None,
-                    });
-                }
-            }
-        }
-    }
-
-    fn gen_pawn_quiets(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let pawn = if white { Piece::WP } else { Piece::BP };
-        let pawns = self.piece_bb[pawn.index()];
-        let dir: i32 = if white { 8 } else { -8 };
-        let start_rank = if white { 1 } else { 6 };
-        let promo_rank = if white { 6 } else { 1 };
-        let mut bb = pawns;
-
-        while bb != 0 {
-            let from = bb.trailing_zeros() as i32;
-            bb &= bb - 1;
-            let r = rank_of(from);
-
-            // Skip promo-rank pawns (handled by gen_pawn_captures)
-            if r == promo_rank {
+            if kinds == MoveKinds::Quiet {
                 continue;
             }
-
-            let to = from + dir;
-            if in_board(to) && (self.all_pieces & (1u64 << to)) == 0 {
-                out.push(Move::quiet(from as u8, to as u8));
-                if r == start_rank {
-                    let to2 = from + 2 * dir;
-                    if (self.all_pieces & (1u64 << to2)) == 0 {
-                        out.push(Move {
-                            from: from as u8,
-                            to: to2 as u8,
-                            capture: false,
-                            en_passant: false,
-                            double_push: true,
-                            castle: false,
-                            promotion: None,
-                        });
+            for df in [-1, 1] {
+                let cap = from + dir + df;
+                if (df == -1 && file_of(from) == 0)
+                    || (df == 1 && file_of(from) == 7)
+                    || !in_board(cap)
+                {
+                    continue;
+                }
+                if (enemy & (1u64 << cap)) != 0 {
+                    if promoting {
+                        for kind in PROMOTION_KINDS {
+                            out.push(Move::promotion_capture(from as u8, cap as u8, kind));
+                        }
+                    } else {
+                        out.push(Move::capture(from as u8, cap as u8));
                     }
+                }
+                if self.en_passant_sq == cap {
+                    out.push(Move::en_passant(from as u8, cap as u8));
                 }
             }
         }
     }
 
-    fn gen_leaper_captures(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
+    /// Adds `kinds` of the side to move's knight, king, bishop, rook and
+    /// queen moves, in that order, castling after the king's own moves.
+    fn gen_piece_moves(&self, kinds: MoveKinds, out: &mut MoveList) {
         let enemy = self.pieces_of(self.turn.other());
+        let occ = self.all_pieces;
+        let targets = match kinds {
+            MoveKinds::All => !self.pieces_of(self.turn),
+            MoveKinds::Tactical => enemy,
+            MoveKinds::Quiet => !occ,
+        };
+        let to = PieceTargets { targets, enemy };
 
-        // Knights
-        let kn = if white { Piece::WN } else { Piece::BN };
-        let mut bb = self.piece_bb[kn.index()];
-        while bb != 0 {
-            let from = bb.trailing_zeros() as usize;
-            bb &= bb - 1;
-            let mut att = magics::knight_attacks_from(from) & enemy;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture: true,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
+        self.push_piece_moves(out, PieceKind::Knight, to, magics::knight_attacks_from);
+        self.push_piece_moves(out, PieceKind::King, to, magics::king_attacks_from);
+        if kinds != MoveKinds::Tactical {
+            self.gen_castling(out);
+        }
+        self.push_piece_moves(out, PieceKind::Bishop, to, |from| {
+            magics::get_bishop_attacks(from, occ)
+        });
+        self.push_piece_moves(out, PieceKind::Rook, to, |from| {
+            magics::get_rook_attacks(from, occ)
+        });
+        self.push_piece_moves(out, PieceKind::Queen, to, |from| {
+            magics::get_rook_attacks(from, occ) | magics::get_bishop_attacks(from, occ)
+        });
+    }
+
+    /// Adds a move for each square in `to.targets` that `attacks` reaches
+    /// from each of the side to move's pieces of `kind`.
+    #[inline(always)]
+    fn push_piece_moves(
+        &self,
+        out: &mut MoveList,
+        kind: PieceKind,
+        to: PieceTargets,
+        attacks: impl Fn(usize) -> Bitboard,
+    ) {
+        let mut pieces = self.pieces(kind, self.turn);
+        while pieces != 0 {
+            let from = pieces.trailing_zeros() as usize;
+            pieces &= pieces - 1;
+            let mut moves = attacks(from) & to.targets;
+            while moves != 0 {
+                let target = moves.trailing_zeros() as u8;
+                moves &= moves - 1;
+                out.push(if (to.enemy & (1u64 << target)) != 0 {
+                    Move::capture(from as u8, target)
+                } else {
+                    Move::quiet(from as u8, target)
                 });
             }
         }
-
-        // King captures
-        let king = if white { Piece::WK } else { Piece::BK };
-        let king_bb = self.piece_bb[king.index()];
-        let Some(from) = Self::first_sq(king_bb) else {
-            return;
-        };
-        let mut att = magics::king_attacks_from(from as usize) & enemy;
-        while att != 0 {
-            let to = att.trailing_zeros() as usize;
-            att &= att - 1;
-            out.push(Move {
-                from: from as u8,
-                to: to as u8,
-                capture: true,
-                en_passant: false,
-                double_push: false,
-                castle: false,
-                promotion: None,
-            });
-        }
     }
 
-    fn gen_leaper_quiets(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let empty = !self.all_pieces;
-
-        // Knights
-        let kn = if white { Piece::WN } else { Piece::BN };
-        let mut bb = self.piece_bb[kn.index()];
-        while bb != 0 {
-            let from = bb.trailing_zeros() as usize;
-            bb &= bb - 1;
-            let mut att = magics::knight_attacks_from(from) & empty;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move::quiet(from as u8, to as u8));
-            }
-        }
-
-        // King quiets
-        let king = if white { Piece::WK } else { Piece::BK };
-        let king_bb = self.piece_bb[king.index()];
-        let Some(from) = Self::first_sq(king_bb) else {
-            return;
-        };
-        let mut att = magics::king_attacks_from(from as usize) & empty;
-        while att != 0 {
-            let to = att.trailing_zeros() as usize;
-            att &= att - 1;
-            out.push(Move::quiet(from as u8, to as u8));
-        }
-
-        // Castling
-        if self.is_square_attacked(from, self.turn.other()) {
+    /// Adds the castlings the side to move may make.
+    fn gen_castling(&self, out: &mut MoveList) {
+        let king = self.king_square(self.turn);
+        if king >= 64 || self.is_square_attacked(king as i32, self.turn.other()) {
             return;
         }
-
         for castling in &CASTLINGS[self.turn as usize] {
             if self.can_castle(castling) {
-                out.push(Move {
-                    from: castling.king_from,
-                    to: castling.king_to,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
+                out.push(Move::castling(castling.king_from, castling.king_to));
             }
         }
     }
 
-    fn gen_slider_captures(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let enemy = self.pieces_of(self.turn.other());
-        let occ = self.all_pieces;
-
-        // Bishops
-        let b_piece = if white { Piece::WB } else { Piece::BB };
-        let mut bb = self.piece_bb[b_piece.index()];
-        while bb != 0 {
-            let from = bb.trailing_zeros() as usize;
-            bb &= bb - 1;
-            let mut att = magics::get_bishop_attacks(from, occ) & enemy;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture: true,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
-
-        // Rooks
-        let r_piece = if white { Piece::WR } else { Piece::BR };
-        let mut rb = self.piece_bb[r_piece.index()];
-        while rb != 0 {
-            let from = rb.trailing_zeros() as usize;
-            rb &= rb - 1;
-            let mut att = magics::get_rook_attacks(from, occ) & enemy;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture: true,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
-
-        // Queens
-        let q_piece = if white { Piece::WQ } else { Piece::BQ };
-        let mut qb = self.piece_bb[q_piece.index()];
-        while qb != 0 {
-            let from = qb.trailing_zeros() as usize;
-            qb &= qb - 1;
-            let mut att = (magics::get_rook_attacks(from, occ)
-                | magics::get_bishop_attacks(from, occ))
-                & enemy;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move {
-                    from: from as u8,
-                    to: to as u8,
-                    capture: true,
-                    en_passant: false,
-                    double_push: false,
-                    castle: false,
-                    promotion: None,
-                });
-            }
-        }
+    /// Generates captures, en passant and promotions: the moves the move
+    /// picker scores as tactical.
+    pub fn generate_captures(&self, out: &mut MoveList) {
+        out.clear();
+        self.gen_pawn_moves(MoveKinds::Tactical, out);
+        self.gen_piece_moves(MoveKinds::Tactical, out);
     }
 
-    fn gen_slider_quiets(&self, out: &mut MoveList) {
-        let white = self.turn == Color::White;
-        let occ = self.all_pieces;
-        let empty = !occ;
-
-        // Bishops
-        let b_piece = if white { Piece::WB } else { Piece::BB };
-        let mut bb = self.piece_bb[b_piece.index()];
-        while bb != 0 {
-            let from = bb.trailing_zeros() as usize;
-            bb &= bb - 1;
-            let mut att = magics::get_bishop_attacks(from, occ) & empty;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move::quiet(from as u8, to as u8));
-            }
-        }
-
-        // Rooks
-        let r_piece = if white { Piece::WR } else { Piece::BR };
-        let mut rb = self.piece_bb[r_piece.index()];
-        while rb != 0 {
-            let from = rb.trailing_zeros() as usize;
-            rb &= rb - 1;
-            let mut att = magics::get_rook_attacks(from, occ) & empty;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move::quiet(from as u8, to as u8));
-            }
-        }
-
-        // Queens
-        let q_piece = if white { Piece::WQ } else { Piece::BQ };
-        let mut qb = self.piece_bb[q_piece.index()];
-        while qb != 0 {
-            let from = qb.trailing_zeros() as usize;
-            qb &= qb - 1;
-            let mut att = (magics::get_rook_attacks(from, occ)
-                | magics::get_bishop_attacks(from, occ))
-                & empty;
-            while att != 0 {
-                let to = att.trailing_zeros() as usize;
-                att &= att - 1;
-                out.push(Move::quiet(from as u8, to as u8));
-            }
-        }
+    /// Generates the moves `generate_captures` leaves out.
+    pub fn generate_quiets(&self, out: &mut MoveList) {
+        out.clear();
+        self.gen_pawn_moves(MoveKinds::Quiet, out);
+        self.gen_piece_moves(MoveKinds::Quiet, out);
     }
 
     /// Check if a move is pseudo-legal in the current position.

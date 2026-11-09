@@ -209,7 +209,7 @@ impl Move {
     }
 
     #[inline(always)]
-    pub fn quiet(from: u8, to: u8) -> Self {
+    pub const fn quiet(from: u8, to: u8) -> Self {
         Self {
             from,
             to,
@@ -220,7 +220,69 @@ impl Move {
             promotion: None,
         }
     }
+
+    /// A capture of the piece on `to`.
+    #[inline(always)]
+    pub const fn capture(from: u8, to: u8) -> Self {
+        Self {
+            capture: true,
+            ..Self::quiet(from, to)
+        }
+    }
+
+    /// A pawn's two-square advance.
+    #[inline(always)]
+    pub const fn double_push(from: u8, to: u8) -> Self {
+        Self {
+            double_push: true,
+            ..Self::quiet(from, to)
+        }
+    }
+
+    /// A pawn's advance to the last rank, promoting to `kind`.
+    #[inline(always)]
+    pub const fn promotion(from: u8, to: u8, kind: PieceKind) -> Self {
+        Self {
+            promotion: Some(kind),
+            ..Self::quiet(from, to)
+        }
+    }
+
+    /// A pawn's capture onto the last rank, promoting to `kind`.
+    #[inline(always)]
+    pub const fn promotion_capture(from: u8, to: u8, kind: PieceKind) -> Self {
+        Self {
+            promotion: Some(kind),
+            ..Self::capture(from, to)
+        }
+    }
+
+    /// A pawn's en-passant capture onto `to`.
+    #[inline(always)]
+    pub const fn en_passant(from: u8, to: u8) -> Self {
+        Self {
+            en_passant: true,
+            ..Self::capture(from, to)
+        }
+    }
+
+    /// The king's castling move.
+    #[inline(always)]
+    pub const fn castling(from: u8, to: u8) -> Self {
+        Self {
+            castle: true,
+            ..Self::quiet(from, to)
+        }
+    }
 }
+
+/// The pieces a pawn promotes to, in the order the generators list them.
+pub const PROMOTION_KINDS: [PieceKind; 4] = [
+    PieceKind::Queen,
+    PieceKind::Rook,
+    PieceKind::Bishop,
+    PieceKind::Knight,
+];
 
 impl From<Move> for u16 {
     #[inline(always)]
