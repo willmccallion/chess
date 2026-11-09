@@ -1,7 +1,7 @@
 //! Helpers shared by the unit tests.
 
 use crate::board::Board;
-use crate::types::{MoveList, START_FEN};
+use crate::types::MoveList;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -11,7 +11,7 @@ pub fn random_game_positions(seed: u64, games: usize, plies: usize) -> Vec<Board
     let mut rng = StdRng::seed_from_u64(seed);
     let mut positions = Vec::new();
     for _ in 0..games {
-        let mut board = Board::from_fen(START_FEN).unwrap();
+        let mut board = Board::start();
         for _ in 0..plies {
             let mut legal = MoveList::new();
             board.generate_legal_moves(&mut legal);

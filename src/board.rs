@@ -115,6 +115,32 @@ impl Board {
             .is_some_and(|king| self.is_square_attacked(king, self.turn.other()))
     }
 
+    /// The standard starting position.
+    pub fn start() -> Self {
+        const BACK_RANK: [PieceKind; 8] = [
+            PieceKind::Rook,
+            PieceKind::Knight,
+            PieceKind::Bishop,
+            PieceKind::Queen,
+            PieceKind::King,
+            PieceKind::Bishop,
+            PieceKind::Knight,
+            PieceKind::Rook,
+        ];
+        let mut board = Self::empty();
+        for (file, kind) in BACK_RANK.into_iter().enumerate() {
+            board.place_piece(Piece::from_kind(kind, Color::White), file);
+            board.place_piece(Piece::from_kind(PieceKind::Pawn, Color::White), 8 + file);
+            board.place_piece(Piece::from_kind(PieceKind::Pawn, Color::Black), 48 + file);
+            board.place_piece(Piece::from_kind(kind, Color::Black), 56 + file);
+        }
+        board.castle = WK_CASTLE | WQ_CASTLE | BK_CASTLE | BQ_CASTLE;
+        board.rebuild_derived();
+        board.recompute_zobrist();
+        board.history.push(board.zobrist);
+        board
+    }
+
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
         let mut b = fen::parse_fen(fen_str)?;
         b.eval_state.reset();
@@ -904,6 +930,16 @@ mod tests {
     use crate::test_support::random_game_positions;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
+
+    #[test]
+    fn the_start_position_is_the_one_its_fen_describes() {
+        let parsed = Board::from_fen(START_FEN).unwrap();
+        let start = Board::start();
+
+        assert_eq!(start.to_fen(), START_FEN);
+        assert_eq!(start.zobrist, parsed.zobrist);
+        assert_eq!(start.history, parsed.history);
+    }
 
     #[test]
     fn played_games_keep_the_same_legal_moves_as_a_board_read_from_their_fen() {

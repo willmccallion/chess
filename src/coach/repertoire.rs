@@ -2,7 +2,7 @@
 
 use crate::board::Board;
 use crate::notation::parse_san_line;
-use crate::types::{Color, Move, START_FEN};
+use crate::types::{Color, Move};
 
 /// One move of a line with what it is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,9 +63,7 @@ pub struct Chapter {
 
 /// The starting position, without evaluation state so it is cheap to copy.
 pub fn start_board() -> Board {
-    Board::from_fen(START_FEN)
-        .unwrap_or_else(|_| Board::empty())
-        .without_eval_state()
+    Board::start().without_eval_state()
 }
 
 pub const CHAPTERS: &[Chapter] = &[

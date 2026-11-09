@@ -119,7 +119,7 @@ pub fn eval_after_search(board: &Board, score: Option<Score>) -> Eval {
 
 impl CoachGame {
     pub fn new(settings: GameSettings, data: &CoachData) -> Self {
-        let start = Board::from_fen(START_FEN).unwrap_or_else(|_| Board::empty());
+        let start = Board::start();
         let config = PlayConfig {
             start,
             mode: Mode::Game,

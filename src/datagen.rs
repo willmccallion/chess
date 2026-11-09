@@ -9,7 +9,7 @@ use crate::search::{
 };
 use crate::search_params::SearchParams;
 use crate::tt::SharedTransTable;
-use crate::types::{Color, Move, MoveList, START_FEN};
+use crate::types::{Color, Move, MoveList};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::OpenOptions;
@@ -203,7 +203,7 @@ impl Adjudicator {
 }
 
 fn random_opening(rng: &mut StdRng, plies: usize) -> Option<Board> {
-    let mut board = Board::from_fen(START_FEN).ok()?;
+    let mut board = Board::start();
     for _ in 0..plies {
         let mut moves = MoveList::new();
         board.generate_legal_moves(&mut moves);

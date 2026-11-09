@@ -7,7 +7,7 @@ use crate::search::{NodeLimit, SearchControl, SearchLimits, SearchThreads, searc
 use crate::search_params::SearchParams;
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
-use crate::types::{Color, Move, MoveList, START_FEN};
+use crate::types::{Color, Move, MoveList};
 use crate::uci_io::{format_uci, parse_uci_move};
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
@@ -202,7 +202,7 @@ fn parse_position(rest: &str) -> Result<Board, String> {
             Board::from_fen(&parts[1..fen_end].join(" "))
                 .map_err(|e| format!("invalid FEN: {e}"))?
         }
-        Some(&"startpos") => Board::from_fen(START_FEN)?,
+        Some(&"startpos") => Board::start(),
         _ => return Err("expected `startpos` or `fen`".to_string()),
     };
 
@@ -465,7 +465,7 @@ fn print_eval(board: &mut Board) {
 /// Answers UCI commands from stdin until `quit` or the end of input, or until
 /// the engine is left with no evaluator.
 pub fn run_uci(eval: EvalOptions) -> Result<(), String> {
-    let mut session = Session::new(eval)?;
+    let mut session = Session::new(eval);
     let served = session.serve(io::stdin().lock());
     session.stop_search();
     served
@@ -483,16 +483,16 @@ struct Session {
 }
 
 impl Session {
-    fn new(eval: EvalOptions) -> Result<Self, String> {
+    fn new(eval: EvalOptions) -> Self {
         let options = Options::new(eval);
-        Ok(Self {
-            board: Board::from_fen(START_FEN)?,
+        Self {
+            board: Board::start(),
             tt: SharedTransTable::new(options.hash_mb),
             active: None,
             threads: Some(SearchThreads::new(options.threads)),
             coach_searcher: None,
             options,
-        })
+        }
     }
 
     fn serve(&mut self, input: impl BufRead) -> Result<(), String> {
@@ -677,7 +677,7 @@ mod tests {
     }
 
     fn listed_search_moves(go_args: &str) -> Option<Vec<String>> {
-        let board = Board::from_fen(START_FEN).unwrap();
+        let board = Board::start();
         search_moves(&GoCommand::parse(go_args), &board)
             .map(|ms| ms.as_slice().iter().map(|&m| format_uci(m)).collect())
     }
@@ -734,7 +734,7 @@ mod tests {
     fn a_position_stops_at_an_illegal_move_and_keeps_the_moves_before_it() {
         let board = parse_position("startpos moves e2e4 e7e9 d2d4").unwrap();
 
-        let mut expected = Board::from_fen(START_FEN).unwrap();
+        let mut expected = Board::start();
         let e4 = parse_uci_move(&expected, "e2e4").unwrap();
         expected.make_move(e4);
         assert_eq!(board.to_fen(), expected.to_fen());
