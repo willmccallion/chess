@@ -7,10 +7,9 @@ mod network;
 pub use accumulator::{AccumulatorStack, active_features};
 pub use network::{EVAL_SCALE, HIDDEN, INPUTS, NetLoadError, Network, QA, QB};
 
-use super::{Evaluator, IncrementalState, PositionView};
+use super::{Evaluator, IncrementalState, NetCache, PositionView};
 use crate::types::{Color, Move};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
 /// Network path baked in at build time from `CHESS_NNUE_OWN`, if it was set.
 pub fn default_net_path() -> PathBuf {
@@ -22,29 +21,24 @@ struct Loaded {
     path: PathBuf,
 }
 
-/// Every network this process has read. One is kept once read, so switching
-/// back to it reads nothing, and an evaluation that still uses it while the
-/// evaluator is switched never sees it freed.
-static LOADED: Mutex<Vec<&'static Loaded>> = Mutex::new(Vec::new());
+static LOADED: NetCache<Loaded> = NetCache::new();
 
 /// The network in `path`, read from it unless this process already has.
 pub fn load(path: &Path) -> Result<&'static Network, String> {
-    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(&known) = loaded.iter().find(|known| known.path == path) {
-        return Ok(&known.net);
-    }
-    if path.as_os_str().is_empty() {
-        return Err(
-            "no network file: pass --own-net, set the OwnEvalFile option, or build with CHESS_NNUE_OWN set"
-                .to_string(),
-        );
-    }
-    let net = Network::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let known: &'static Loaded = Box::leak(Box::new(Loaded {
-        net,
-        path: path.to_path_buf(),
-    }));
-    loaded.push(known);
+    let read = || {
+        if path.as_os_str().is_empty() {
+            return Err(
+                "no network file: pass --own-net, set the OwnEvalFile option, or build with CHESS_NNUE_OWN set"
+                    .to_string(),
+            );
+        }
+        let net = Network::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(Loaded {
+            net,
+            path: path.to_path_buf(),
+        })
+    };
+    let known = LOADED.get_or_read(|known| known.path == path, read)?;
     Ok(&known.net)
 }
 

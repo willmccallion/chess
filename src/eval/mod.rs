@@ -12,7 +12,7 @@ use bootstrap::{Bootstrap, NoState};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Mutex, PoisonError, RwLock};
 
 /// Most piece-square changes one move makes: castling moves two pieces.
 pub const MAX_PIECE_CHANGES: usize = 5;
@@ -96,6 +96,37 @@ pub trait IncrementalState {
 }
 
 /// A static evaluation function.
+/// Every network of one kind this process has read. One is kept once read,
+/// so switching back to it reads nothing, and an evaluation that still uses
+/// it while the evaluator is switched never sees it freed.
+pub(crate) struct NetCache<N: 'static> {
+    loaded: Mutex<Vec<&'static N>>,
+}
+
+impl<N> NetCache<N> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            loaded: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The network `is_wanted` picks if one was read before, else the one
+    /// `read` returns, which is kept.
+    pub(crate) fn get_or_read<E>(
+        &self,
+        is_wanted: impl Fn(&N) -> bool,
+        read: impl FnOnce() -> Result<N, E>,
+    ) -> Result<&'static N, E> {
+        let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(&known) = loaded.iter().find(|known| is_wanted(known)) {
+            return Ok(known);
+        }
+        let known: &'static N = Box::leak(Box::new(read()?));
+        loaded.push(known);
+        Ok(known)
+    }
+}
+
 pub trait Evaluator {
     type State: IncrementalState + Clone;
 

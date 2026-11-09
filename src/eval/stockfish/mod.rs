@@ -9,7 +9,7 @@ pub mod simd;
 pub mod threat_delta;
 pub mod trace;
 
-use super::{Evaluator, IncrementalState, PositionView};
+use super::{Evaluator, IncrementalState, NetCache, PositionView};
 use crate::board::Board;
 use crate::types::{Color, Move, Piece, PieceKind};
 use accumulator::AccumulatorStack;
@@ -17,7 +17,6 @@ use arch::OUTPUT_SCALE;
 use net_file::{BigNetwork, NetKind, NetLoadError, Network, load_big_network, load_small_network};
 use network::{NetOutput, PerspectiveSums, bucket_for, transform};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
 /// Network path baked in at build time from the dev shell's `CHESS_NNUE_BIG`/`CHESS_NNUE_SMALL`.
 pub fn default_net_path(kind: NetKind) -> Option<&'static str> {
@@ -56,10 +55,7 @@ pub struct Networks {
     paths: NetPaths,
 }
 
-/// Every set of networks this process has read. A set is kept once read, so
-/// switching back to it reads nothing, and an evaluation that still uses it
-/// while the evaluator is switched never sees it freed.
-static LOADED: Mutex<Vec<&'static Networks>> = Mutex::new(Vec::new());
+static LOADED: NetCache<Networks> = NetCache::new();
 
 fn load_error(path: &Path, error: NetLoadError) -> String {
     format!("{}: {error}", path.display())
@@ -67,19 +63,16 @@ fn load_error(path: &Path, error: NetLoadError) -> String {
 
 /// The networks in `paths`, read from them unless this process already has.
 pub fn load(paths: &NetPaths) -> Result<&'static Networks, String> {
-    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(&nets) = loaded.iter().find(|nets| nets.paths == *paths) {
-        return Ok(nets);
-    }
-    let big = load_big_network(&paths.big).map_err(|e| load_error(&paths.big, e))?;
-    let small = load_small_network(&paths.small).map_err(|e| load_error(&paths.small, e))?;
-    let nets: &'static Networks = Box::leak(Box::new(Networks {
-        big,
-        small,
-        paths: paths.clone(),
-    }));
-    loaded.push(nets);
-    Ok(nets)
+    let read = || {
+        let big = load_big_network(&paths.big).map_err(|e| load_error(&paths.big, e))?;
+        let small = load_small_network(&paths.small).map_err(|e| load_error(&paths.small, e))?;
+        Ok(Networks {
+            big,
+            small,
+            paths: paths.clone(),
+        })
+    };
+    LOADED.get_or_read(|nets| nets.paths == *paths, read)
 }
 
 fn run_net(net: &Network, sums: &PerspectiveSums, side_to_move: Color, bucket: usize) -> NetOutput {
