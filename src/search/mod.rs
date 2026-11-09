@@ -1944,36 +1944,50 @@ enum ThreadRole<'a> {
     Helper,
 }
 
+/// What every thread of one `go` searches: the position, the shared table
+/// and the limits.
+#[derive(Clone, Copy)]
+struct SearchJob<'a> {
+    board: &'a Board,
+    tt: &'a SharedTransTable,
+    limits: &'a SearchLimits,
+}
+
+impl<'a> Search<'a> {
+    fn new(job: SearchJob<'a>, thread_data: &'a mut ThreadData, time: TimeManager) -> Self {
+        let params = job.limits.params;
+        Self {
+            board: job.board.clone(),
+            tt: job.tt,
+            thread_data,
+            time,
+            killers: [[None; 2]; MAX_PLY],
+            stack: [StackEntry::default(); MAX_PLY + 1],
+            ply: 0,
+            seldepth: 0,
+            root_best: None,
+            root_move_nodes: Vec::new(),
+            allowed_root_moves: job.limits.root_moves.as_ref().map(MoveList::as_slice),
+            params,
+            lmr: LmrTables::new(&params),
+        }
+    }
+}
+
 /// Iterative deepening on one thread.
 fn iterative_deepening(
-    board: &Board,
-    tt: &SharedTransTable,
+    job: SearchJob,
     thread_data: &mut ThreadData,
-    limits: &SearchLimits,
     control: Arc<SearchControl>,
     role: ThreadRole,
 ) -> ThreadOutcome {
     let is_main_thread = matches!(role, ThreadRole::Main(_));
-    let params = limits.params;
-    let mut search = Search {
-        board: board.clone(),
-        tt,
-        thread_data,
-        time: TimeManager::new(control, is_main_thread, limits.nodes),
-        killers: [[None; 2]; MAX_PLY],
-        stack: [StackEntry::default(); MAX_PLY + 1],
-        ply: 0,
-        seldepth: 0,
-        root_best: None,
-        root_move_nodes: Vec::new(),
-        allowed_root_moves: limits.root_moves.as_ref().map(MoveList::as_slice),
-        params,
-        lmr: LmrTables::new(&params),
-    };
+    let time = TimeManager::new(control, is_main_thread, job.limits.nodes);
+    let mut search = Search::new(job, thread_data, time);
 
     let mut score = SearchScore::ZERO;
     let mut completed_score = None;
-    for depth in (1..=limits.max_depth.plies()).map(Depth::new) {
+    for depth in (1..=job.limits.max_depth.plies()).map(Depth::new) {
         search.seldepth = 0;
         let Some(iteration_score) = aspiration_search(&mut search, depth, score) else {
             break;
@@ -2120,66 +2134,13 @@ pub fn search_reporting(
         return answer;
     }
 
-    let (main_td, helper_tds) = threads.data.split_at_mut(1);
-    let (main, nodes) = thread::scope(|scope| {
-        let helpers: Vec<_> = helper_tds
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, thread_data)| {
-                let helper_control = Arc::clone(control);
-                thread::Builder::new()
-                    .name(format!("search-helper-{}", i + 1))
-                    .stack_size(SEARCH_THREAD_STACK)
-                    .spawn_scoped(scope, move || {
-                        iterative_deepening(
-                            board,
-                            tt,
-                            thread_data,
-                            limits,
-                            helper_control,
-                            ThreadRole::Helper,
-                        )
-                        .nodes
-                    })
-                    .ok()
-            })
-            .collect();
-
-        let main_control = Arc::clone(control);
-        let main_td = &mut main_td[0];
-        let main = thread::Builder::new()
-            .name("search-main".into())
-            .stack_size(SEARCH_THREAD_STACK)
-            .spawn_scoped(scope, move || {
-                let result = iterative_deepening(
-                    board,
-                    tt,
-                    main_td,
-                    limits,
-                    Arc::clone(&main_control),
-                    ThreadRole::Main(reporter),
-                );
-                if limits.wait_for_stop {
-                    wait_until_released(&main_control);
-                }
-                main_control.stop();
-                result
-            });
-
-        let failed = || ThreadOutcome {
-            best_move: None,
-            nodes: 0,
-            score: None,
-        };
-        let main = if let Ok(handle) = main {
-            handle.join().unwrap_or_else(|_| failed())
-        } else {
-            control.stop();
-            failed()
-        };
+    let job = SearchJob { board, tt, limits };
+    let (main_data, helper_data) = threads.data.split_at_mut(1);
+    let (main, helper_nodes) = thread::scope(|scope| {
+        let helpers = spawn_helpers(scope, job, helper_data, control);
+        let main = run_main_thread(scope, job, &mut main_data[0], control, reporter);
         let helper_nodes: u64 = helpers.into_iter().map(|h| h.join().unwrap_or(0)).sum();
-        let nodes = main.nodes + helper_nodes;
-        (main, nodes)
+        (main, helper_nodes)
     });
 
     let best_move = main.best_move.or(Some(root_moves[0]));
@@ -2187,8 +2148,68 @@ pub fn search_reporting(
     SearchResult {
         best_move,
         ponder_move,
-        nodes,
+        nodes: main.nodes + helper_nodes,
         score: main.score.map(Score::from_search),
+    }
+}
+
+/// Starts a helper search for each of `helper_data`; each handle gives the
+/// helper's node count.
+fn spawn_helpers<'scope, 'env>(
+    scope: &'scope thread::Scope<'scope, 'env>,
+    job: SearchJob<'env>,
+    helper_data: &'env mut [Box<ThreadData>],
+    control: &Arc<SearchControl>,
+) -> Vec<thread::ScopedJoinHandle<'scope, u64>> {
+    helper_data
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, thread_data)| {
+            let control = Arc::clone(control);
+            thread::Builder::new()
+                .name(format!("search-helper-{}", i + 1))
+                .stack_size(SEARCH_THREAD_STACK)
+                .spawn_scoped(scope, move || {
+                    iterative_deepening(job, thread_data, control, ThreadRole::Helper).nodes
+                })
+                .ok()
+        })
+        .collect()
+}
+
+/// Runs the main search on its own thread and waits for it: it reports each
+/// iteration, waits for `stop` when the search must, and then stops the
+/// helpers.
+fn run_main_thread<'scope, 'env>(
+    scope: &'scope thread::Scope<'scope, 'env>,
+    job: SearchJob<'env>,
+    thread_data: &'env mut ThreadData,
+    control: &Arc<SearchControl>,
+    reporter: InfoReporter<'env>,
+) -> ThreadOutcome {
+    let main_control = Arc::clone(control);
+    let spawned = thread::Builder::new()
+        .name("search-main".into())
+        .stack_size(SEARCH_THREAD_STACK)
+        .spawn_scoped(scope, move || {
+            let role = ThreadRole::Main(reporter);
+            let outcome = iterative_deepening(job, thread_data, Arc::clone(&main_control), role);
+            if job.limits.wait_for_stop {
+                wait_until_released(&main_control);
+            }
+            main_control.stop();
+            outcome
+        });
+    let failed = ThreadOutcome {
+        best_move: None,
+        nodes: 0,
+        score: None,
+    };
+    if let Ok(handle) = spawned {
+        handle.join().unwrap_or(failed)
+    } else {
+        control.stop();
+        failed
     }
 }
 
