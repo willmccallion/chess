@@ -235,9 +235,24 @@ pub(crate) fn spawn_and_init_pinned(
 }
 
 fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
+    println!();
+    println!("{SUMMARY_RULE}");
+    println!("  TOURNAMENT RESULTS");
+    println!("{SUMMARY_RULE}");
+    println!();
+    print_score_lines(s, elapsed);
+    print_head_to_head(s, e1_name, e2_name);
+    print_colour_breakdown(s, e1_name);
+    print_terminations(s);
+    print_game_lengths(s);
+    println!("{SUMMARY_RULE}");
+}
+
+const SUMMARY_RULE: &str = "=================================================================";
+
+/// The score with its Elo estimate, then the game, pair, SPRT and speed counts.
+fn print_score_lines(s: &Score, elapsed: f64) {
     let total = s.completed();
-    let e1_score = s.e1.wins as f64 + s.e1.draws as f64 * 0.5;
-    let e2_score = s.e1.losses as f64 + s.e1.draws as f64 * 0.5;
     let elo = format_elo(s.e1.wins, s.e1.losses, s.e1.draws);
     let err = match s.penta.elo() {
         Some((_, pair_error)) => Some(pair_error),
@@ -248,27 +263,15 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
     } else {
         0.0
     };
-    let avg_len = if total > 0 {
-        s.total_plies as f64 / total as f64
-    } else {
-        0.0
-    };
-
-    // Width for engine name columns
-    let w = e1_name.len().max(e2_name.len()).max(6);
-
-    println!();
-    println!("=================================================================");
-    println!("  TOURNAMENT RESULTS");
-    println!("=================================================================");
-    println!();
-
-    // Score line
     let elo_str = match err {
         Some(e) => format!("{} +/- {:.0} Elo", elo, e),
         None => format!("{} Elo", elo),
     };
-    println!("  Score: {:.1} - {:.1}  [{elo_str}]", e1_score, e2_score);
+    println!(
+        "  Score: {:.1} - {:.1}  [{elo_str}]",
+        s.e1.points(),
+        s.e1.opponent().points()
+    );
     println!("  Games: {}    Draw rate: {:.1}%", total, draw_rate);
     if s.penta.pairs() > 0 {
         let [ll, ld, even, wd, ww] = s.penta.counts();
@@ -295,96 +298,66 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         println!("  Time:  {:.1}s ({:.1} games/sec)", elapsed, gps);
     }
     println!();
+}
 
-    // Head-to-head table
-    println!(
-        "  +-{0:-<w$}-+------+------+------+-------+-------+",
-        "",
-        w = w
-    );
+fn print_head_to_head(s: &Score, e1_name: &str, e2_name: &str) {
+    let w = e1_name.len().max(e2_name.len()).max(6);
+    let border = format!("  +-{0:-<w$}-+------+------+------+-------+-------+", "");
+    println!("{border}");
     println!(
         "  | {0:<w$} | {1:>4} | {2:>4} | {3:>4} | {4:>5} | {5:>5} |",
-        "Engine",
-        "W",
-        "L",
-        "D",
-        "Score",
-        "Pts",
-        w = w
+        "Engine", "W", "L", "D", "Score", "Pts",
     );
-    println!(
-        "  +-{0:-<w$}-+------+------+------+-------+-------+",
-        "",
-        w = w
-    );
-    println!(
-        "  | {name:<w$} | {wins:>4} | {losses:>4} | {draws:>4} | {pct} | {pts:>5.1} |",
-        name = e1_name,
-        wins = s.e1.wins,
-        losses = s.e1.losses,
-        draws = s.e1.draws,
-        pct = format_pct(s.e1.wins * 2 + s.e1.draws, total * 2),
-        pts = e1_score,
-        w = w,
-    );
-    println!(
-        "  | {name:<w$} | {wins:>4} | {losses:>4} | {draws:>4} | {pct} | {pts:>5.1} |",
-        name = e2_name,
-        wins = s.e1.losses,
-        losses = s.e1.wins,
-        draws = s.e1.draws,
-        pct = format_pct(s.e1.losses * 2 + s.e1.draws, total * 2),
-        pts = e2_score,
-        w = w,
-    );
-    println!(
-        "  +-{0:-<w$}-+------+------+------+-------+-------+",
-        "",
-        w = w
-    );
+    println!("{border}");
+    print_head_to_head_row(e1_name, s.e1, w);
+    print_head_to_head_row(e2_name, s.e1.opponent(), w);
+    println!("{border}");
     println!();
+}
 
-    // White/Black breakdown
-    let e1_as_white = s.e1_as_white.wins + s.e1_as_white.losses + s.e1_as_white.draws;
-    let e1_as_black = s.e1_as_black.wins + s.e1_as_black.losses + s.e1_as_black.draws;
+fn print_head_to_head_row(name: &str, wdl: Wdl, w: usize) {
+    println!(
+        "  | {name:<w$} | {wins:>4} | {losses:>4} | {draws:>4} | {pct} | {pts:>5.1} |",
+        wins = wdl.wins,
+        losses = wdl.losses,
+        draws = wdl.draws,
+        pct = format_pct(wdl.wins * 2 + wdl.draws, wdl.games() * 2),
+        pts = wdl.points(),
+    );
+}
 
+/// Engine 1's results as white and as black.
+fn print_colour_breakdown(s: &Score, e1_name: &str) {
+    let border = "  +-----------+------+------+------+-------+";
     println!("  White/Black Breakdown (from {}'s perspective):", e1_name);
-    println!("  +-----------+------+------+------+-------+");
+    println!("{border}");
     println!(
         "  | Color     | {0:>4} | {1:>4} | {2:>4} | {3:>5} |",
         "W", "L", "D", "Score"
     );
-    println!("  +-----------+------+------+------+-------+");
-    if e1_as_white > 0 {
-        println!(
-            "  | As white  | {:>4} | {:>4} | {:>4} | {} |",
-            s.e1_as_white.wins,
-            s.e1_as_white.losses,
-            s.e1_as_white.draws,
-            format_pct(
-                s.e1_as_white.wins * 2 + s.e1_as_white.draws,
-                e1_as_white * 2
-            ),
-        );
-    }
-    if e1_as_black > 0 {
-        println!(
-            "  | As black  | {:>4} | {:>4} | {:>4} | {} |",
-            s.e1_as_black.wins,
-            s.e1_as_black.losses,
-            s.e1_as_black.draws,
-            format_pct(
-                s.e1_as_black.wins * 2 + s.e1_as_black.draws,
-                e1_as_black * 2
-            ),
-        );
-    }
-    println!("  +-----------+------+------+------+-------+");
+    println!("{border}");
+    print_colour_row("As white", s.e1_as_white);
+    print_colour_row("As black", s.e1_as_black);
+    println!("{border}");
     println!();
+}
 
-    // Termination stats
-    println!("  Terminations:");
-    let reasons = [
+fn print_colour_row(label: &str, wdl: Wdl) {
+    if wdl.games() == 0 {
+        return;
+    }
+    println!(
+        "  | {label:<9} | {:>4} | {:>4} | {:>4} | {} |",
+        wdl.wins,
+        wdl.losses,
+        wdl.draws,
+        format_pct(wdl.wins * 2 + wdl.draws, wdl.games() * 2),
+    );
+}
+
+/// How many games ended each way, in a fixed order.
+fn print_terminations(s: &Score) {
+    const ENDINGS: [(&str, GameEndReason); 9] = [
         ("Checkmate", GameEndReason::Checkmate),
         ("Stalemate", GameEndReason::Stalemate),
         ("Repetition", GameEndReason::Repetition),
@@ -395,20 +368,28 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         ("Illegal move", GameEndReason::IllegalMove),
         ("Engine crash", GameEndReason::EngineCrash),
     ];
-    for (name, reason) in reasons {
+    println!("  Terminations:");
+    for (name, reason) in ENDINGS {
         let count = s.terminations.get(&reason).copied().unwrap_or(0);
         if count > 0 {
             println!(
                 "    {:<21} {:>4}  ({})",
                 name,
                 count,
-                format_pct(count, total),
+                format_pct(count, s.completed()),
             );
         }
     }
     println!();
+}
 
-    // Game length stats
+fn print_game_lengths(s: &Score) {
+    let total = s.completed();
+    let avg_len = if total > 0 {
+        s.total_plies as f64 / total as f64
+    } else {
+        0.0
+    };
     println!("  Game Length:");
     println!(
         "    Average:  {:.0} plies ({:.0} moves)",
@@ -424,7 +405,6 @@ fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
         s.longest_game / 2
     );
     println!();
-    println!("=================================================================");
 }
 
 fn format_clock(clock: GameClock) -> String {
