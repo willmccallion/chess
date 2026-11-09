@@ -13,6 +13,7 @@ use chess::tui;
 use chess::types::{Color, START_FEN};
 use chess::uci;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::num::NonZeroUsize;
 
 #[derive(Parser)]
 #[command(
@@ -352,6 +353,11 @@ fn require_networks(cli: &Cli) {
     }
 }
 
+/// The threads this process may run at once, or one if that is unknown.
+fn available_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, NonZeroUsize::get)
+}
+
 fn main() {
     let mut cli = Cli::parse();
     match cli.cmd.take().unwrap_or(Cmd::Uci) {
@@ -392,7 +398,7 @@ fn main() {
             let config = chess::datagen::DatagenConfig {
                 output: out,
                 positions,
-                threads: threads.unwrap_or_else(num_cpus::get).max(1),
+                threads: threads.unwrap_or_else(available_threads).max(1),
                 nodes: chess::search::NodeLimit {
                     soft: soft_nodes.max(1),
                     hard: hard_nodes
