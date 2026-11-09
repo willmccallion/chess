@@ -393,7 +393,8 @@ fn format_clock(clock: GameClock) -> String {
     format!("{}ms + {}ms/move", clock.base_ms, clock.increment_ms)
 }
 
-pub fn run_tournament(mut config: TournamentConfig) {
+/// Plays the tournament and prints its results, or says why it cannot start.
+pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
     if config.rounds % 2 == 1 {
         config.rounds += 1;
         println!(
@@ -402,13 +403,13 @@ pub fn run_tournament(mut config: TournamentConfig) {
         );
     }
 
-    if !std::path::Path::new(&config.engine1_path).exists() {
-        eprintln!("Error: engine1 path '{}' not found", config.engine1_path);
-        std::process::exit(1);
-    }
-    if !std::path::Path::new(&config.engine2_path).exists() {
-        eprintln!("Error: engine2 path '{}' not found", config.engine2_path);
-        std::process::exit(1);
+    for (engine, path) in [
+        ("engine1", &config.engine1_path),
+        ("engine2", &config.engine2_path),
+    ] {
+        if !std::path::Path::new(path).exists() {
+            return Err(format!("{engine} path '{path}' not found"));
+        }
     }
 
     let e1_name = config.e1_name.as_str();
@@ -670,6 +671,7 @@ pub fn run_tournament(mut config: TournamentConfig) {
     let e2_name = config.e2_name.as_str();
 
     print_summary(&s, e1_name, e2_name, elapsed);
+    Ok(())
 }
 
 #[cfg(test)]

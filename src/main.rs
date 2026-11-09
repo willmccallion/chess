@@ -450,7 +450,8 @@ impl ChallengeArgs {
                 .unwrap_or_else(|e| exit_with_error(&e)),
             openings,
             sprt,
-        });
+        })
+        .unwrap_or_else(|e| exit_with_error(&e));
     }
 }
 
