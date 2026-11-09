@@ -340,7 +340,7 @@ fn start_search(
     let worker_control = Arc::clone(&control);
 
     let handle = thread::spawn(move || {
-        let result = search(&board, &tt, limits, &mut threads, &worker_control);
+        let result = search(&board, &tt, &limits, &mut threads, &worker_control);
         send_bestmove(result.best_move, result.ponder_move);
         threads
     });

@@ -45,7 +45,7 @@ fn fixed_depth_search_reporting(
     search_reporting(
         board,
         &tt,
-        limits,
+        &limits,
         &mut SearchThreads::new(threads),
         &control,
         report,
@@ -169,7 +169,7 @@ fn a_search_restricted_to_one_root_move_plays_it() {
     let result = search_reporting(
         &start,
         &SharedTransTable::new(16),
-        limits,
+        &limits,
         &mut SearchThreads::new(1),
         &SearchControl::new(None),
         &|_| {},

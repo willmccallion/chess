@@ -73,7 +73,7 @@ pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
         tt.clear();
         let control = SearchControl::new(None);
         let mut threads = SearchThreads::new(1);
-        nodes += search(&board, &tt, limits, &mut threads, &control).nodes;
+        nodes += search(&board, &tt, &limits, &mut threads, &control).nodes;
     }
 
     Ok(BenchResult {

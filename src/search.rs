@@ -150,7 +150,7 @@ pub struct NodeLimit {
     pub hard: u64,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct SearchLimits {
     pub max_depth: usize,
     pub params: SearchParams,
@@ -427,7 +427,7 @@ struct Search<'a> {
     /// Nodes searched under each root move during this `go`.
     root_move_nodes: Vec<(Move, u64)>,
     /// The root moves `go searchmoves` allows, or `None` for all of them.
-    allowed_root_moves: Option<MoveList>,
+    allowed_root_moves: Option<&'a [Move]>,
     params: SearchParams,
     lmr: LmrTables,
 }
@@ -554,7 +554,7 @@ impl Search<'_> {
 
     fn is_allowed_root_move(&self, m: Move) -> bool {
         self.allowed_root_moves
-            .is_none_or(|allowed| allowed.as_slice().contains(&m))
+            .is_none_or(|allowed| allowed.contains(&m))
     }
 
     fn record_root_move_nodes(&mut self, m: Move, nodes: u64) {
@@ -1820,7 +1820,7 @@ fn iterative_deepening(
     board: &Board,
     tt: &SharedTransTable,
     thread_data: &mut ThreadData,
-    limits: SearchLimits,
+    limits: &SearchLimits,
     control: Arc<SearchControl>,
     reporter: Option<InfoReporter>,
 ) -> ThreadOutcome {
@@ -1837,7 +1837,7 @@ fn iterative_deepening(
         seldepth: 0,
         root_best: None,
         root_move_nodes: Vec::new(),
-        allowed_root_moves: limits.root_moves,
+        allowed_root_moves: limits.root_moves.as_ref().map(MoveList::as_slice),
         params,
         lmr: LmrTables::new(&params),
     };
@@ -1926,7 +1926,7 @@ fn wait_until_released(control: &SearchControl) {
 pub fn search(
     board: &Board,
     tt: &SharedTransTable,
-    limits: SearchLimits,
+    limits: &SearchLimits,
     threads: &mut SearchThreads,
     control: &Arc<SearchControl>,
 ) -> SearchResult {
@@ -1937,14 +1937,21 @@ pub fn search(
 pub fn search_reporting(
     board: &Board,
     tt: &SharedTransTable,
-    limits: SearchLimits,
+    limits: &SearchLimits,
     threads: &mut SearchThreads,
     control: &Arc<SearchControl>,
     reporter: InfoReporter,
 ) -> SearchResult {
     tt.tick_age();
 
-    let root_moves = limits.root_moves.unwrap_or_else(|| legal_moves(board));
+    let legal;
+    let root_moves = match &limits.root_moves {
+        Some(listed) => listed.as_slice(),
+        None => {
+            legal = legal_moves(board);
+            legal.as_slice()
+        }
+    };
     if root_moves.is_empty() {
         if limits.wait_for_stop {
             wait_until_released(control);
@@ -1958,7 +1965,7 @@ pub fn search_reporting(
     }
     if root_moves.len() == 1 && control.is_timed() && !limits.wait_for_stop {
         return SearchResult {
-            best_move: Some(root_moves.get(0)),
+            best_move: Some(root_moves[0]),
             ponder_move: None,
             nodes: 0,
             score: None,
@@ -2021,7 +2028,7 @@ pub fn search_reporting(
         (main, nodes)
     });
 
-    let best_move = main.best_move.or(Some(root_moves.get(0)));
+    let best_move = main.best_move.or(Some(root_moves[0]));
     let ponder_move = best_move.and_then(|m| ponder_move_after(board, m, tt));
     SearchResult {
         best_move,

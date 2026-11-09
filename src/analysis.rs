@@ -87,7 +87,7 @@ impl Searcher {
             }
             report(info);
         };
-        let result = search_reporting(board, &self.tt, limits, threads, control, &reporter);
+        let result = search_reporting(board, &self.tt, &limits, threads, control, &reporter);
         let pv = last_pv.into_inner().unwrap_or_default();
         SearchOutcome {
             best_move: result.best_move,

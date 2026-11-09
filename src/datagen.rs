@@ -229,7 +229,7 @@ fn think(
         root_moves: None,
     };
     let control = SearchControl::new(None);
-    let result = search_reporting(board, tt, limits, threads, &control, &|_| {});
+    let result = search_reporting(board, tt, &limits, threads, &control, &|_| {});
     Some((result.best_move?, result.score?))
 }
 
