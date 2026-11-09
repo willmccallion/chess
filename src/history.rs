@@ -1,5 +1,6 @@
 //! Move-ordering statistics updated from search results.
 
+use crate::search::Depth;
 use crate::search_params::SearchParams;
 use crate::types::{Color, Move, Piece, PieceKind, Square};
 
@@ -17,9 +18,10 @@ pub struct Histories {
 }
 
 /// History bonus for a move that caused (or failed to cause) a cutoff at `depth`.
-pub fn stat_bonus(depth: i32, params: &SearchParams) -> i32 {
-    let bonus = params.history_bonus_quadratic * depth * depth
-        + params.history_bonus_linear * depth
+pub fn stat_bonus(depth: Depth, params: &SearchParams) -> i32 {
+    let plies = depth.plies();
+    let bonus = params.history_bonus_quadratic * plies * plies
+        + params.history_bonus_linear * plies
         + params.history_bonus_constant;
     bonus.clamp(0, params.history_bonus_max)
 }
@@ -163,8 +165,15 @@ impl CorrectionHistory {
 
     /// Moves the stored correction toward `error` (search score minus corrected eval),
     /// trusting deeper searches more, up to `max_weight` (out of 256).
-    pub fn update(&mut self, color: Color, pawn_key: u64, error: i32, depth: i32, max_weight: i32) {
-        let weight = (depth + 1).min(max_weight);
+    pub fn update(
+        &mut self,
+        color: Color,
+        pawn_key: u64,
+        error: i32,
+        depth: Depth,
+        max_weight: i32,
+    ) {
+        let weight = (depth.plies() + 1).min(max_weight);
         let limit = CORRECTION_LIMIT * CORRECTION_GRAIN;
         let entry = &mut self.entries[Self::index(color, pawn_key)];
         let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
@@ -188,14 +197,14 @@ mod tests {
     fn correction_moves_toward_observed_error_and_stays_bounded() {
         let mut correction = CorrectionHistory::new();
         for _ in 0..200 {
-            correction.update(Color::White, 99, 80, 10, 16);
+            correction.update(Color::White, 99, 80, Depth::new(10), 16);
         }
         let learned = correction.correction(Color::White, 99);
         assert!((70..=80).contains(&learned), "{learned}");
         assert_eq!(correction.correction(Color::Black, 99), 0);
 
         for _ in 0..200 {
-            correction.update(Color::White, 99, 10_000, 20, 16);
+            correction.update(Color::White, 99, 10_000, Depth::new(20), 16);
         }
         let saturated = correction.correction(Color::White, 99);
         assert!(
@@ -242,8 +251,11 @@ mod tests {
     #[test]
     fn bonus_grows_with_depth_and_is_capped() {
         let params = SearchParams::default();
-        assert!(stat_bonus(2, &params) > stat_bonus(1, &params));
-        assert_eq!(stat_bonus(50, &params), params.history_bonus_max);
+        assert!(stat_bonus(Depth::new(2), &params) > stat_bonus(Depth::ONE, &params));
+        assert_eq!(
+            stat_bonus(Depth::new(50), &params),
+            params.history_bonus_max
+        );
     }
 
     #[test]

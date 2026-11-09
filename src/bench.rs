@@ -1,7 +1,7 @@
 //! Fixed-depth search over a set of positions; the node total is a search signature.
 
 use crate::board::Board;
-use crate::search::{SearchControl, SearchLimits, SearchThreads, search};
+use crate::search::{Depth, SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
 use crate::tt::SharedTransTable;
 use std::time::Instant;
@@ -56,7 +56,7 @@ impl BenchResult {
 }
 
 /// Searches every bench position to `depth` from a cleared TT and fresh search state.
-pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
+pub fn run(depth: Depth, hash_mb: usize) -> Result<BenchResult, String> {
     let tt = SharedTransTable::new(hash_mb);
     let limits = SearchLimits {
         params: SearchParams::default(),
@@ -90,8 +90,8 @@ mod tests {
     fn bench_node_count_is_deterministic() {
         crate::eval::EvalOptions::built_in().load().unwrap();
 
-        let first = run(5, BENCH_HASH_MB).unwrap();
-        let second = run(5, BENCH_HASH_MB).unwrap();
+        let first = run(Depth::new(5), BENCH_HASH_MB).unwrap();
+        let second = run(Depth::new(5), BENCH_HASH_MB).unwrap();
 
         assert!(first.nodes > 0);
         assert_eq!(first.nodes, second.nodes);

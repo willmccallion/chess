@@ -3,6 +3,7 @@
 //! Each slot stores `key ^ data` next to `data`; a torn write from a racing thread
 //! fails the key check on the next probe instead of returning a corrupt entry.
 
+use crate::search::Depth;
 use crate::types::{Move, ZKey};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -50,8 +51,8 @@ const HASHFULL_SAMPLE_CLUSTERS: usize = 1000;
 /// What a search learned about a position, to be written into the table.
 #[derive(Copy, Clone, Debug)]
 pub struct TTWrite {
-    /// The plies the search went below this node; kept within 0 to 255.
-    pub depth: i16,
+    /// How deep the search went below this node; kept within 0 to 255 plies.
+    pub depth: Depth,
     pub score: i32,
     pub eval: Option<i32>,
     pub bound: Bound,
@@ -78,7 +79,7 @@ impl TTEntry {
         let packed_score = u64::from(score as i16 as u16);
         let packed_eval = u64::from(eval.map_or(NO_EVAL, |e| e as i16) as u16);
         let packed_move = u64::from(best_move.map_or(0u16, u16::from));
-        let packed_depth = u64::from(u8::try_from(depth.max(0)).unwrap_or(u8::MAX));
+        let packed_depth = u64::from(u8::try_from(depth.plies().max(0)).unwrap_or(u8::MAX));
         let data = (packed_score << SCORE_SHIFT)
             | (packed_eval << EVAL_SHIFT)
             | (packed_move << MOVE_SHIFT)
@@ -101,8 +102,8 @@ impl TTEntry {
     }
 
     #[inline(always)]
-    pub fn depth(&self) -> i16 {
-        i16::from(((self.data >> DEPTH_SHIFT) & DEPTH_MASK) as u8)
+    pub fn depth(&self) -> Depth {
+        Depth::new(i32::from(((self.data >> DEPTH_SHIFT) & DEPTH_MASK) as u8))
     }
 
     #[inline(always)]
@@ -272,7 +273,7 @@ impl SharedTransTable {
             let entry = TTEntry {
                 data: slot.load().1,
             };
-            i32::from(entry.depth()) * 2 - age_distance(age, entry.age())
+            entry.depth().plies() * 2 - age_distance(age, entry.age())
         };
         let mut victim = &slots[0];
         let mut worst_quality = replacement_quality(victim);
@@ -334,7 +335,7 @@ mod tests {
         tt.store(
             0xDEAD_BEEF_1234_5678,
             TTWrite {
-                depth: 17,
+                depth: Depth::new(17),
                 score: -1234,
                 eval: Some(56),
                 bound: Bound::Lower,
@@ -344,7 +345,7 @@ mod tests {
         );
         let entry = tt.probe(0xDEAD_BEEF_1234_5678).unwrap();
 
-        assert_eq!(entry.depth(), 17);
+        assert_eq!(entry.depth(), Depth::new(17));
         assert_eq!(entry.score(), -1234);
         assert_eq!(entry.eval(), Some(56));
         assert_eq!(entry.bound(), Bound::Lower);
@@ -360,7 +361,7 @@ mod tests {
         tt.store(
             5,
             TTWrite {
-                depth: 6,
+                depth: Depth::new(6),
                 score: 10,
                 eval: None,
                 bound: Bound::Lower,
@@ -371,7 +372,7 @@ mod tests {
         tt.store(
             5,
             TTWrite {
-                depth: 7,
+                depth: Depth::new(7),
                 score: -3,
                 eval: None,
                 bound: Bound::Upper,
@@ -391,7 +392,7 @@ mod tests {
         tt.store(
             42,
             TTWrite {
-                depth: -2,
+                depth: Depth::new(-2),
                 score: 0,
                 eval: None,
                 bound: Bound::Lower,
@@ -400,7 +401,7 @@ mod tests {
             },
         );
 
-        assert_eq!(tt.probe(42).map(|entry| entry.depth()), Some(0));
+        assert_eq!(tt.probe(42).map(|entry| entry.depth()), Some(Depth::ZERO));
     }
 
     #[test]
@@ -409,7 +410,7 @@ mod tests {
         tt.store(
             42,
             TTWrite {
-                depth: 3,
+                depth: Depth::new(3),
                 score: 0,
                 eval: None,
                 bound: Bound::Upper,
@@ -428,7 +429,7 @@ mod tests {
         tt.store(
             7,
             TTWrite {
-                depth: 1,
+                depth: Depth::new(1),
                 score: 10,
                 eval: None,
                 bound: Bound::Exact,
@@ -447,7 +448,7 @@ mod tests {
         tt.store(
             99,
             TTWrite {
-                depth: 10,
+                depth: Depth::new(10),
                 score: 1,
                 eval: None,
                 bound: Bound::Exact,
@@ -459,7 +460,7 @@ mod tests {
         tt.store(
             99,
             TTWrite {
-                depth: 4,
+                depth: Depth::new(4),
                 score: 2,
                 eval: None,
                 bound: Bound::Exact,
@@ -467,7 +468,7 @@ mod tests {
                 is_pv: false,
             },
         );
-        assert_eq!(tt.probe(99).unwrap().depth(), 10);
+        assert_eq!(tt.probe(99).unwrap().depth(), Depth::new(10));
     }
 
     #[test]
@@ -479,7 +480,7 @@ mod tests {
             tt.store(
                 key,
                 TTWrite {
-                    depth: *depth,
+                    depth: Depth::new(*depth),
                     score: 0,
                     eval: None,
                     bound: Bound::Exact,
@@ -491,7 +492,7 @@ mod tests {
         tt.store(
             keys[4],
             TTWrite {
-                depth: 5,
+                depth: Depth::new(5),
                 score: 0,
                 eval: None,
                 bound: Bound::Exact,

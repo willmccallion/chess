@@ -7,7 +7,7 @@
 use crate::board::Board;
 use crate::game_runner::{GameResult, position_outcome};
 use crate::search::{
-    NodeLimit, Score, SearchControl, SearchLimits, SearchThreads, search_reporting,
+    Depth, NodeLimit, Score, SearchControl, SearchLimits, SearchThreads, search_reporting,
 };
 use crate::search_params::SearchParams;
 use crate::tt::SharedTransTable;
@@ -22,7 +22,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const MAX_DEPTH: usize = 64;
+const MAX_DEPTH: Depth = Depth::new(64);
 /// Openings the search already scores beyond this are too lopsided to learn from.
 const MAX_OPENING_SCORE_CP: i32 = 500;
 /// Positions scored beyond this are not kept; mate scores never are.

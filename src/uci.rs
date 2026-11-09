@@ -3,7 +3,7 @@ use crate::board::Board;
 use crate::coach::bot::{Level, choose_move, pick_weighted};
 use crate::eval::{self, EvalOptions};
 use crate::opening_book::{get_book_move, legal_book_moves};
-use crate::search::{NodeLimit, SearchControl, SearchLimits, SearchThreads, search};
+use crate::search::{Depth, NodeLimit, SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
 use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
@@ -19,7 +19,7 @@ const DEFAULT_THREADS: usize = 1;
 const MAX_THREADS: usize = 128;
 const DEFAULT_MOVE_OVERHEAD_MS: i64 = 10;
 const MAX_MOVE_OVERHEAD_MS: i64 = 5000;
-const MAX_DEPTH: usize = 127;
+const MAX_DEPTH: Depth = Depth::new(127);
 /// Hash for the coach bot's small per-move searches.
 const COACH_HASH_MB: usize = 16;
 
@@ -343,9 +343,9 @@ fn start_search(
     mut threads: SearchThreads,
     go: &GoCommand,
 ) -> ActiveSearch {
-    let max_depth = go
-        .depth
-        .map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
+    let max_depth = go.depth.map_or(MAX_DEPTH, |d| {
+        Depth::new(d.clamp(1, i64::from(MAX_DEPTH.plies())) as i32)
+    });
     let budget = time_budget(go, board.turn(), options.move_overhead_ms);
 
     let (control, ponder_budget) = if go.ponder {

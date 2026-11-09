@@ -10,6 +10,7 @@ use chess::eval;
 use chess::game_runner::{GameClock, StartPosition};
 use chess::openings;
 use chess::perft::{divide, perft};
+use chess::search::Depth;
 use chess::search_params::PARAM_SPECS;
 use chess::sprt::SprtConfig;
 use chess::spsa;
@@ -334,8 +335,8 @@ impl EvalTraceArgs {
 
 #[derive(Args)]
 struct BenchArgs {
-    #[arg(default_value_t = 13)]
-    depth: usize,
+    #[arg(default_value_t = 13, value_parser = clap::value_parser!(i32).range(1..))]
+    depth: i32,
     /// Transposition table size in MB
     #[arg(long, default_value_t = bench::BENCH_HASH_MB)]
     hash: usize,
@@ -345,7 +346,7 @@ impl BenchArgs {
     fn run(self, cli: &Cli) {
         let Self { depth, hash } = self;
         require_networks(cli);
-        match bench::run(depth, hash) {
+        match bench::run(Depth::new(depth), hash) {
             Ok(result) => {
                 println!("===========================");
                 println!("Total time (ms) : {}", result.elapsed_ms);

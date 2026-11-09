@@ -4,7 +4,7 @@ use chess::analysis::{SearchLimit, Searcher};
 use chess::board::Board;
 use chess::eval::EvalOptions;
 use chess::search::{
-    IterationInfo, Score, SearchControl, SearchLimits, SearchResult, SearchThreads,
+    Depth, IterationInfo, Score, SearchControl, SearchLimits, SearchResult, SearchThreads,
     search_reporting,
 };
 use chess::search_params::SearchParams;
@@ -23,19 +23,19 @@ fn board(fen: &str) -> Board {
     Board::from_fen(fen).expect("valid FEN")
 }
 
-fn fixed_depth_search(board: &Board, depth: usize, threads: usize) -> SearchResult {
+fn fixed_depth_search(board: &Board, depth: i32, threads: usize) -> SearchResult {
     fixed_depth_search_reporting(board, depth, threads, &|_| {})
 }
 
 fn fixed_depth_search_reporting(
     board: &Board,
-    depth: usize,
+    depth: i32,
     threads: usize,
     report: &(dyn Fn(&IterationInfo) + Sync),
 ) -> SearchResult {
     let tt = SharedTransTable::new(16);
     let limits = SearchLimits {
-        max_depth: depth,
+        max_depth: Depth::new(depth),
         params: SearchParams::default(),
         wait_for_stop: false,
         nodes: None,
@@ -159,7 +159,7 @@ fn a_search_restricted_to_one_root_move_plays_it() {
     let mut only = MoveList::new();
     only.push(parse_uci_move(&start, "a2a3").expect("legal"));
     let limits = SearchLimits {
-        max_depth: 6,
+        max_depth: Depth::new(6),
         params: SearchParams::default(),
         wait_for_stop: false,
         nodes: None,

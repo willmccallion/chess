@@ -1,5 +1,7 @@
 //! Search parameters that can be changed at runtime, for SPSA tuning.
 
+use crate::search::Depth;
+
 /// A tunable parameter: its UCI option name, default, range and SPSA perturbation size.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ParamSpec {
@@ -11,16 +13,42 @@ pub struct ParamSpec {
     pub step: i32,
 }
 
+/// A parameter's value, which tuning sees as a plain integer.
+pub trait ParamValue: Copy {
+    fn from_raw(raw: i32) -> Self;
+    fn raw(self) -> i32;
+}
+
+impl ParamValue for i32 {
+    fn from_raw(raw: i32) -> Self {
+        raw
+    }
+
+    fn raw(self) -> i32 {
+        self
+    }
+}
+
+impl ParamValue for Depth {
+    fn from_raw(raw: i32) -> Self {
+        Self::new(raw)
+    }
+
+    fn raw(self) -> i32 {
+        self.plies()
+    }
+}
+
 macro_rules! search_params {
-    ($($field:ident: $name:literal = $default:literal, $min:literal..=$max:literal, step $step:literal;)*) => {
+    ($($field:ident($name:literal): $ty:ty = $default:literal, $min:literal..=$max:literal, step $step:literal;)*) => {
         #[derive(Copy, Clone, Debug, PartialEq, Eq)]
         pub struct SearchParams {
-            $(pub $field: i32,)*
+            $(pub $field: $ty,)*
         }
 
         impl Default for SearchParams {
             fn default() -> Self {
-                Self { $($field: $default,)* }
+                Self { $($field: ParamValue::from_raw($default),)* }
             }
         }
 
@@ -29,18 +57,21 @@ macro_rules! search_params {
         ];
 
         impl SearchParams {
-            const fn slot_mut(&mut self, name: &str) -> Option<&mut i32> {
+            /// Sets the parameter called `name` (case-insensitive) to `raw`
+            /// unclamped; false if there is none.
+            fn set_raw(&mut self, name: &str, raw: i32) -> bool {
                 $(if name.eq_ignore_ascii_case($name) {
-                    return Some(&mut self.$field);
+                    self.$field = ParamValue::from_raw(raw);
+                    return true;
                 })*
-                None
+                false
             }
 
             /// The value of the parameter called `name` (case-insensitive).
             #[cfg(test)]
-            pub const fn get(&self, name: &str) -> Option<i32> {
+            pub fn get(&self, name: &str) -> Option<i32> {
                 $(if name.eq_ignore_ascii_case($name) {
-                    return Some(self.$field);
+                    return Some(self.$field.raw());
                 })*
                 None
             }
@@ -49,55 +80,55 @@ macro_rules! search_params {
 }
 
 search_params! {
-    rfp_margin: "RfpMargin" = 77, 20..=200, step 8;
-    rfp_max_depth: "RfpMaxDepth" = 7, 4..=12, step 1;
-    razor_margin: "RazorMargin" = 399, 100..=800, step 40;
-    razor_depth_sq_margin: "RazorDepthSqMargin" = 247, 50..=500, step 25;
-    nmp_base_reduction: "NmpBaseReduction" = 4, 2..=6, step 1;
-    nmp_depth_divisor: "NmpDepthDivisor" = 2, 2..=6, step 1;
-    nmp_eval_divisor: "NmpEvalDivisor" = 204, 80..=400, step 20;
-    futility_base: "FutilityBase" = 97, 30..=250, step 10;
-    futility_per_depth: "FutilityPerDepth" = 99, 30..=250, step 10;
-    lmp_base: "LmpBase" = 5, 1..=8, step 1;
-    see_quiet_margin: "SeeQuietMargin" = 51, 10..=150, step 5;
-    see_capture_margin: "SeeCaptureMargin" = 90, 20..=200, step 8;
-    history_pruning_margin: "HistoryPruningMargin" = 2071, 512..=6000, step 200;
-    delta_margin: "DeltaMargin" = 208, 50..=500, step 20;
-    probcut_margin: "ProbcutMargin" = 193, 80..=400, step 15;
-    aspiration_delta: "AspirationDelta" = 22, 8..=60, step 3;
-    singular_beta_per_depth_x16: "SingularBetaPerDepth" = 33, 8..=64, step 3;
-    double_extension_margin: "DoubleExtensionMargin" = 20, 0..=60, step 3;
-    lmr_quiet_base_x100: "LmrQuietBase" = 79, 0..=200, step 8;
-    lmr_quiet_divisor_x100: "LmrQuietDivisor" = 239, 150..=400, step 15;
-    lmr_capture_base_x100: "LmrCaptureBase" = 1, -100..=150, step 8;
-    lmr_capture_divisor_x100: "LmrCaptureDivisor" = 302, 150..=500, step 20;
-    lmr_history_divisor: "LmrHistoryDivisor" = 8233, 2048..=20000, step 600;
-    deeper_margin: "DeeperMargin" = 69, 20..=150, step 6;
-    shallower_margin: "ShallowerMargin" = 9, 0..=30, step 2;
-    nmp_min_depth: "NmpMinDepth" = 2, 1..=6, step 1;
-    nmp_eval_max: "NmpEvalMax" = 3, 1..=6, step 1;
-    iir_min_depth: "IirMinDepth" = 3, 2..=8, step 1;
-    move_pruning_max_depth: "MovePruningMaxDepth" = 8, 4..=12, step 1;
-    history_pruning_max_depth: "HistoryPruningMaxDepth" = 4, 1..=8, step 1;
-    probcut_min_depth: "ProbcutMinDepth" = 5, 3..=8, step 1;
-    probcut_reduction: "ProbcutReduction" = 4, 2..=6, step 1;
-    singular_min_depth: "SingularMinDepth" = 8, 4..=12, step 1;
-    singular_tt_depth_margin: "SingularTtDepthMargin" = 4, 1..=6, step 1;
-    lmr_min_depth: "LmrMinDepth" = 2, 2..=5, step 1;
-    lmr_non_pv_x1024: "LmrNonPv" = 991, 0..=2048, step 64;
-    lmr_cut_node_x1024: "LmrCutNode" = 1017, 0..=2048, step 64;
-    lmr_not_improving_x1024: "LmrNotImproving" = 1020, 0..=2048, step 64;
-    lmr_killer_or_counter_x1024: "LmrKillerOrCounter" = 1008, 0..=2048, step 64;
-    lmr_gives_check_x1024: "LmrGivesCheck" = 1058, 0..=2048, step 64;
-    history_bonus_quadratic: "HistoryBonusQuadratic" = 15, 4..=40, step 2;
-    history_bonus_linear: "HistoryBonusLinear" = 31, 0..=96, step 4;
-    history_bonus_constant: "HistoryBonusConstant" = 15, -64..=96, step 6;
-    history_bonus_max: "HistoryBonusMax" = 1454, 500..=3000, step 100;
-    correction_max_weight: "CorrectionMaxWeight" = 16, 4..=48, step 2;
-    lmr_tt_capture_x1024: "LmrTtCapture" = 1025, 0..=2048, step 64;
-    lmr_child_cutoffs_x1024: "LmrChildCutoffs" = 993, 0..=2048, step 64;
-    child_cutoff_threshold: "ChildCutoffThreshold" = 4, 1..=8, step 1;
-    lmr_tt_pv_x1024: "LmrTtPv" = 1009, 0..=2048, step 64;
+    rfp_margin("RfpMargin"): i32 = 77, 20..=200, step 8;
+    rfp_max_depth("RfpMaxDepth"): Depth = 7, 4..=12, step 1;
+    razor_margin("RazorMargin"): i32 = 399, 100..=800, step 40;
+    razor_depth_sq_margin("RazorDepthSqMargin"): i32 = 247, 50..=500, step 25;
+    nmp_base_reduction("NmpBaseReduction"): Depth = 4, 2..=6, step 1;
+    nmp_depth_divisor("NmpDepthDivisor"): i32 = 2, 2..=6, step 1;
+    nmp_eval_divisor("NmpEvalDivisor"): i32 = 204, 80..=400, step 20;
+    futility_base("FutilityBase"): i32 = 97, 30..=250, step 10;
+    futility_per_depth("FutilityPerDepth"): i32 = 99, 30..=250, step 10;
+    lmp_base("LmpBase"): i32 = 5, 1..=8, step 1;
+    see_quiet_margin("SeeQuietMargin"): i32 = 51, 10..=150, step 5;
+    see_capture_margin("SeeCaptureMargin"): i32 = 90, 20..=200, step 8;
+    history_pruning_margin("HistoryPruningMargin"): i32 = 2071, 512..=6000, step 200;
+    delta_margin("DeltaMargin"): i32 = 208, 50..=500, step 20;
+    probcut_margin("ProbcutMargin"): i32 = 193, 80..=400, step 15;
+    aspiration_delta("AspirationDelta"): i32 = 22, 8..=60, step 3;
+    singular_beta_per_depth_x16("SingularBetaPerDepth"): i32 = 33, 8..=64, step 3;
+    double_extension_margin("DoubleExtensionMargin"): i32 = 20, 0..=60, step 3;
+    lmr_quiet_base_x100("LmrQuietBase"): i32 = 79, 0..=200, step 8;
+    lmr_quiet_divisor_x100("LmrQuietDivisor"): i32 = 239, 150..=400, step 15;
+    lmr_capture_base_x100("LmrCaptureBase"): i32 = 1, -100..=150, step 8;
+    lmr_capture_divisor_x100("LmrCaptureDivisor"): i32 = 302, 150..=500, step 20;
+    lmr_history_divisor("LmrHistoryDivisor"): i32 = 8233, 2048..=20000, step 600;
+    deeper_margin("DeeperMargin"): i32 = 69, 20..=150, step 6;
+    shallower_margin("ShallowerMargin"): i32 = 9, 0..=30, step 2;
+    nmp_min_depth("NmpMinDepth"): Depth = 2, 1..=6, step 1;
+    nmp_eval_max("NmpEvalMax"): Depth = 3, 1..=6, step 1;
+    iir_min_depth("IirMinDepth"): Depth = 3, 2..=8, step 1;
+    move_pruning_max_depth("MovePruningMaxDepth"): Depth = 8, 4..=12, step 1;
+    history_pruning_max_depth("HistoryPruningMaxDepth"): Depth = 4, 1..=8, step 1;
+    probcut_min_depth("ProbcutMinDepth"): Depth = 5, 3..=8, step 1;
+    probcut_reduction("ProbcutReduction"): Depth = 4, 2..=6, step 1;
+    singular_min_depth("SingularMinDepth"): Depth = 8, 4..=12, step 1;
+    singular_tt_depth_margin("SingularTtDepthMargin"): Depth = 4, 1..=6, step 1;
+    lmr_min_depth("LmrMinDepth"): Depth = 2, 2..=5, step 1;
+    lmr_non_pv_x1024("LmrNonPv"): i32 = 991, 0..=2048, step 64;
+    lmr_cut_node_x1024("LmrCutNode"): i32 = 1017, 0..=2048, step 64;
+    lmr_not_improving_x1024("LmrNotImproving"): i32 = 1020, 0..=2048, step 64;
+    lmr_killer_or_counter_x1024("LmrKillerOrCounter"): i32 = 1008, 0..=2048, step 64;
+    lmr_gives_check_x1024("LmrGivesCheck"): i32 = 1058, 0..=2048, step 64;
+    history_bonus_quadratic("HistoryBonusQuadratic"): i32 = 15, 4..=40, step 2;
+    history_bonus_linear("HistoryBonusLinear"): i32 = 31, 0..=96, step 4;
+    history_bonus_constant("HistoryBonusConstant"): i32 = 15, -64..=96, step 6;
+    history_bonus_max("HistoryBonusMax"): i32 = 1454, 500..=3000, step 100;
+    correction_max_weight("CorrectionMaxWeight"): i32 = 16, 4..=48, step 2;
+    lmr_tt_capture_x1024("LmrTtCapture"): i32 = 1025, 0..=2048, step 64;
+    lmr_child_cutoffs_x1024("LmrChildCutoffs"): i32 = 993, 0..=2048, step 64;
+    child_cutoff_threshold("ChildCutoffThreshold"): i32 = 4, 1..=8, step 1;
+    lmr_tt_pv_x1024("LmrTtPv"): i32 = 1009, 0..=2048, step 64;
 }
 
 impl ParamSpec {
@@ -121,16 +152,7 @@ impl ParamSpec {
 impl SearchParams {
     /// Sets the parameter called `name`, clamped to its range; false if there is none.
     pub fn set(&mut self, name: &str, value: i32) -> bool {
-        let Some(spec) = ParamSpec::find(name) else {
-            return false;
-        };
-        match self.slot_mut(name) {
-            Some(slot) => {
-                *slot = spec.clamp(value);
-                true
-            }
-            None => false,
-        }
+        ParamSpec::find(name).is_some_and(|spec| self.set_raw(name, spec.clamp(value)))
     }
 }
 

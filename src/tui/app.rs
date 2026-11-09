@@ -2,7 +2,7 @@ use super::input::{MoveInput, PendingPromotion};
 use crate::board::Board;
 use crate::game_runner::{GameClock, GameEndReason, GameResult, position_outcome, win_for};
 use crate::notation::{line_in_san, parse_typed_move};
-use crate::search::{IterationInfo, Score};
+use crate::search::{Depth, IterationInfo, Score};
 use crate::time::{TimeBudget, TimeControl};
 use crate::types::{Color, Move, MoveList, PieceKind, Square};
 use std::time::Instant;
@@ -84,7 +84,7 @@ pub struct GameEnd {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineLine {
     pub source: TaskKind,
-    pub depth: usize,
+    pub depth: Depth,
     pub seldepth: usize,
     pub nodes: u64,
     pub nps: u64,
@@ -790,7 +790,7 @@ mod tests {
         app.typed = Some("e4".into());
         app.submit_typed(now);
         let info = IterationInfo {
-            depth: 5,
+            depth: Depth::new(5),
             seldepth: 7,
             score: Score::Centipawns(20),
             hashfull_permill: 0,
@@ -833,7 +833,7 @@ mod tests {
         let root =
             Board::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1").unwrap();
         let info = IterationInfo {
-            depth: 1,
+            depth: Depth::ONE,
             seldepth: 1,
             score: Score::MateIn(3),
             hashfull_permill: 0,

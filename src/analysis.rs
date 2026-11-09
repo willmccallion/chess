@@ -3,7 +3,8 @@
 use crate::board::Board;
 use crate::game_runner::{GameEndReason, position_outcome};
 use crate::search::{
-    IterationInfo, NodeLimit, Score, SearchControl, SearchLimits, SearchThreads, search_reporting,
+    Depth, IterationInfo, NodeLimit, Score, SearchControl, SearchLimits, SearchThreads,
+    search_reporting,
 };
 use crate::search_params::SearchParams;
 use crate::time::TimeBudget;
@@ -11,7 +12,7 @@ use crate::tt::SharedTransTable;
 use crate::types::{Move, MoveList};
 use std::sync::Arc;
 
-const MAX_DEPTH: usize = 64;
+const MAX_DEPTH: Depth = Depth::new(64);
 /// A node-limited search stops mid-iteration at this multiple of its node count.
 const HARD_NODE_FACTOR: u64 = 4;
 

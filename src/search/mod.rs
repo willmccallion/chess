@@ -15,6 +15,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod depth;
+pub use depth::Depth;
+
 pub const MATE_SCORE: i32 = 30_000;
 const MATE_THRESHOLD: i32 = MATE_SCORE - 512;
 /// Past every score a search can return, mates included: the widest window.
@@ -22,8 +25,12 @@ const SCORE_BOUND: i32 = MATE_SCORE + 1;
 const MAX_PLY: usize = 128;
 const DRAW_SCORE: i32 = 0;
 
-const ASPIRATION_MIN_DEPTH: usize = 4;
+const ASPIRATION_MIN_DEPTH: Depth = Depth::new(4);
 const MAX_DOUBLE_EXTENSIONS: u8 = 6;
+/// A singular move searched two plies deeper.
+const DOUBLE_EXTENSION: Depth = Depth::new(2);
+/// How much shallower than the node a TT entry may be and still rule out `ProbCut`.
+const PROBCUT_TT_DEPTH_MARGIN: Depth = Depth::new(3);
 
 const MAX_TRIED_MOVES: usize = 64;
 
@@ -152,7 +159,7 @@ pub struct NodeLimit {
 
 #[derive(Clone)]
 pub struct SearchLimits {
-    pub max_depth: usize,
+    pub max_depth: Depth,
     pub params: SearchParams,
     /// `go infinite` / `go ponder`: never return before `stop` (or `ponderhit` sets a budget).
     pub wait_for_stop: bool,
@@ -250,8 +257,8 @@ impl LmrTables {
     }
 
     /// Base reduction for the `moves_searched`-th move at `depth`.
-    fn base_reduction(&self, depth: i32, moves_searched: i32, is_quiet: bool) -> i32 {
-        let d = (depth.max(0) as usize).min(LMR_TABLE_SIZE - 1);
+    fn base_reduction(&self, depth: Depth, moves_searched: i32, is_quiet: bool) -> i32 {
+        let d = (depth.plies().max(0) as usize).min(LMR_TABLE_SIZE - 1);
         let m = (moves_searched.max(0) as usize).min(LMR_TABLE_SIZE - 1);
         if is_quiet {
             self.quiet[d][m]
@@ -325,7 +332,7 @@ impl TimeManager {
     }
 
     /// Decides after a completed iteration whether another one is worth starting.
-    fn should_stop_iterating(&mut self, depth: usize, iteration: &IterationSummary) -> bool {
+    fn should_stop_iterating(&mut self, depth: Depth, iteration: &IterationSummary) -> bool {
         let best_move = iteration.best_move;
         if best_move == self.previous_best_move {
             self.best_move_stability += 1;
@@ -347,7 +354,7 @@ impl TimeManager {
 
         let stability_scale = if self.best_move_stability == 0 {
             1.3
-        } else if depth > 8 && self.best_move_stability >= 4 {
+        } else if depth > Depth::new(8) && self.best_move_stability >= 4 {
             0.7
         } else {
             1.0
@@ -702,11 +709,9 @@ impl Search<'_> {
 
     /// The TT's score for this node when `entry` is deep enough and its bound
     /// settles the window, crediting the TT move when that score fails high.
-    fn tt_cutoff(&mut self, entry: TTEntry, depth: i32, alpha: i32, beta: i32) -> Option<i32> {
+    fn tt_cutoff(&mut self, entry: TTEntry, depth: Depth, alpha: i32, beta: i32) -> Option<i32> {
         let tt_score = score_from_tt(entry.score(), self.ply);
-        if i32::from(entry.depth()) < depth
-            || !tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta)
-        {
+        if entry.depth() < depth || !tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
             return None;
         }
         if tt_score >= beta
@@ -739,7 +744,7 @@ impl Search<'_> {
     }
 
     /// Credits a quiet TT move whose stored score still fails high.
-    fn reward_tt_cutoff_move(&mut self, m: Move, depth: i32) {
+    fn reward_tt_cutoff_move(&mut self, m: Move, depth: Depth) {
         if !m.is_quiet() || !self.board.is_pseudo_legal(m) {
             return;
         }
@@ -755,7 +760,7 @@ impl Search<'_> {
     }
 
     /// The opponent's last move refuted everything here, so it was a good quiet move.
-    fn reward_prior_quiet_move(&mut self, depth: i32) {
+    fn reward_prior_quiet_move(&mut self, depth: Depth) {
         let Some(parent_ply) = self.ply.checked_sub(1) else {
             return;
         };
@@ -791,7 +796,7 @@ impl Search<'_> {
     }
 
     /// Rewards the move that caused a beta cutoff and penalizes the moves tried before it.
-    fn update_cutoff_stats(&mut self, best: Move, depth: i32, tried: &TriedMoves) {
+    fn update_cutoff_stats(&mut self, best: Move, depth: Depth, tried: &TriedMoves) {
         let bonus = stat_bonus(depth, &self.params);
         let continuations = self.continuation_keys();
         let color = self.board.turn();
@@ -867,7 +872,7 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
             search.tt.store(
                 key,
                 TTWrite {
-                    depth: 0,
+                    depth: Depth::ZERO,
                     score: score_to_tt(stand_pat, search.ply),
                     eval: Some(node_eval.raw),
                     bound: Bound::Lower,
@@ -914,7 +919,7 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
     search.tt.store(
         key,
         TTWrite {
-            depth: 0,
+            depth: Depth::ZERO,
             score: score_to_tt(best_score, search.ply),
             eval: Some(node_eval.raw),
             bound,
@@ -974,7 +979,7 @@ fn quiesce_evasions(
 /// non-PV node with a static evaluation.
 #[derive(Clone, Copy)]
 struct NodePruning {
-    depth: i32,
+    depth: Depth,
     eval: i32,
     alpha: i32,
     beta: i32,
@@ -988,7 +993,7 @@ struct NodePruning {
 /// evaluation is far enough outside the window.
 fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
     let razor_margin =
-        search.params.razor_margin + search.params.razor_depth_sq_margin * n.depth * n.depth;
+        search.params.razor_margin + search.params.razor_depth_sq_margin * n.depth.plies().pow(2);
     if n.eval < n.alpha - razor_margin {
         let q_score = quiesce(search, n.alpha, n.beta)?;
         if q_score < n.alpha {
@@ -996,7 +1001,7 @@ fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborte
         }
     }
     if n.depth <= search.params.rfp_max_depth
-        && n.eval - search.params.rfp_margin * (n.depth - i32::from(n.improving)) >= n.beta
+        && n.eval - search.params.rfp_margin * (n.depth.plies() - i32::from(n.improving)) >= n.beta
     {
         return Ok(Some(n.eval));
     }
@@ -1017,7 +1022,8 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, 
     }
     let r = search.params.nmp_base_reduction
         + n.depth / search.params.nmp_depth_divisor
-        + ((n.eval - n.beta) / search.params.nmp_eval_divisor).min(search.params.nmp_eval_max);
+        + Depth::new((n.eval - n.beta) / search.params.nmp_eval_divisor)
+            .min(search.params.nmp_eval_max);
     let undo = search.make_null_move();
     let null_score = negamax(search, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
     search.unmake_null_move(undo);
@@ -1039,7 +1045,7 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, 
 /// What `ProbCut` weighs about a non-PV node not in check.
 #[derive(Clone, Copy)]
 struct ProbCutNode {
-    depth: i32,
+    depth: Depth,
     beta: i32,
     static_eval: i32,
     node: NodeKind,
@@ -1061,7 +1067,7 @@ fn probcut(
     }
     let probcut_beta = n.beta + search.params.probcut_margin;
     let tt_rules_out_probcut = n.tt_entry.is_some_and(|entry| {
-        i32::from(entry.depth()) >= n.depth - 3
+        entry.depth() >= n.depth - PROBCUT_TT_DEPTH_MARGIN
             && score_from_tt(entry.score(), search.ply) < probcut_beta
     });
     if tt_rules_out_probcut {
@@ -1087,7 +1093,7 @@ fn probcut(
             search.tt.store(
                 search.board.zobrist(),
                 TTWrite {
-                    depth: (probe_depth + 1) as i16,
+                    depth: probe_depth + Depth::ONE,
                     score: score_to_tt(score, search.ply),
                     eval: None,
                     bound: Bound::Lower,
@@ -1106,7 +1112,7 @@ fn probcut(
 fn probe_capture(
     search: &mut Search,
     probcut_beta: i32,
-    probe_depth: i32,
+    probe_depth: Depth,
     node: NodeKind,
 ) -> Result<i32, Aborted> {
     let q_score = -quiesce(search, -probcut_beta, -probcut_beta + 1)?;
@@ -1123,8 +1129,8 @@ fn probe_capture(
 }
 
 enum Singularity {
-    /// Search the move this many plies deeper (negative: shallower).
-    Extend(i32),
+    /// Search the move this much deeper (negative: shallower).
+    Extend(Depth),
     /// Even without the TT move the node fails high; return this score.
     MultiCut(i32),
 }
@@ -1134,25 +1140,25 @@ fn singular_extension(
     search: &mut Search,
     tt_move: Move,
     tt_entry: Option<crate::tt::TTEntry>,
-    depth: i32,
+    depth: Depth,
     beta: i32,
     is_pv: bool,
     node: NodeKind,
 ) -> Result<Singularity, Aborted> {
     let Some(entry) = tt_entry else {
-        return Ok(Singularity::Extend(0));
+        return Ok(Singularity::Extend(Depth::ZERO));
     };
     let tt_score = score_from_tt(entry.score(), search.ply);
     let reliable = depth >= search.params.singular_min_depth
-        && i32::from(entry.depth()) >= depth - search.params.singular_tt_depth_margin
+        && entry.depth() >= depth - search.params.singular_tt_depth_margin
         && entry.bound() != Bound::Upper
         && tt_score.abs() < MATE_THRESHOLD;
     if !reliable {
-        return Ok(Singularity::Extend(0));
+        return Ok(Singularity::Extend(Depth::ZERO));
     }
 
-    let singular_beta = tt_score - search.params.singular_beta_per_depth_x16 * depth / 16;
-    let singular_depth = (depth - 1) / 2;
+    let singular_beta = tt_score - search.params.singular_beta_per_depth_x16 * depth.plies() / 16;
+    let singular_depth = (depth - Depth::ONE) / 2;
     search.stack[search.ply].excluded_move = Some(tt_move);
     let singular_score = negamax(
         search,
@@ -1171,13 +1177,13 @@ fn singular_extension(
         let double = !is_pv
             && singular_score < singular_beta - search.params.double_extension_margin
             && search.stack[search.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
-        Singularity::Extend(if double { 2 } else { 1 })
+        Singularity::Extend(if double { DOUBLE_EXTENSION } else { Depth::ONE })
     } else if singular_beta >= beta {
         Singularity::MultiCut(singular_beta)
     } else if tt_score >= beta {
-        Singularity::Extend(-1)
+        Singularity::Extend(Depth::new(-1))
     } else {
-        Singularity::Extend(0)
+        Singularity::Extend(Depth::ZERO)
     })
 }
 
@@ -1192,7 +1198,7 @@ enum Pruning {
 /// What the move-pruning rules weigh about a move and its node.
 #[derive(Clone, Copy)]
 struct PruningCandidate {
-    depth: i32,
+    depth: Depth,
     eval: i32,
     alpha: i32,
     is_quiet: bool,
@@ -1207,7 +1213,8 @@ impl Search<'_> {
         let params = &self.params;
         let shallow = c.depth <= params.move_pruning_max_depth;
         if !c.is_quiet {
-            let losing = shallow && !see_ge(&self.board, m, -params.see_capture_margin * c.depth);
+            let losing =
+                shallow && !see_ge(&self.board, m, -params.see_capture_margin * c.depth.plies());
             return if losing {
                 Pruning::Skip
             } else {
@@ -1218,15 +1225,23 @@ impl Search<'_> {
             return Pruning::SkipQuiets;
         }
         if c.depth <= params.history_pruning_max_depth
-            && c.quiet_history < -params.history_pruning_margin * c.depth
+            && c.quiet_history < -params.history_pruning_margin * c.depth.plies()
         {
             return Pruning::Skip;
         }
-        if shallow && c.eval + params.futility_base + params.futility_per_depth * c.depth <= c.alpha
+        if shallow
+            && c.eval + params.futility_base + params.futility_per_depth * c.depth.plies()
+                <= c.alpha
         {
             return Pruning::SkipQuiets;
         }
-        if shallow && !see_ge(&self.board, m, -params.see_quiet_margin * c.depth * c.depth) {
+        if shallow
+            && !see_ge(
+                &self.board,
+                m,
+                -params.see_quiet_margin * c.depth.plies().pow(2),
+            )
+        {
             return Pruning::Skip;
         }
         Pruning::Search
@@ -1269,7 +1284,7 @@ impl TriedMoves {
 /// What searching a node's moves found.
 #[derive(Clone, Copy)]
 struct NodeOutcome {
-    depth: i32,
+    depth: Depth,
     best_score: i32,
     best_move: Option<Move>,
     bound: Bound,
@@ -1300,10 +1315,10 @@ fn search_late_move(
     let reduction = search.late_move_reduction(node_ply, m);
     let reduced_depth = m.new_depth - reduction;
     let mut score = -negamax(search, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut)?;
-    if score > alpha && reduction > 0 {
-        let deeper = score > best_score + search.params.deeper_margin + 2 * m.new_depth;
+    if score > alpha && reduction > Depth::ZERO {
+        let deeper = score > best_score + search.params.deeper_margin + 2 * m.new_depth.plies();
         let shallower = score < best_score + search.params.shallower_margin;
-        let research_depth = m.new_depth + i32::from(deeper) - i32::from(shallower);
+        let research_depth = m.new_depth + Depth::new(i32::from(deeper) - i32::from(shallower));
         if research_depth > reduced_depth {
             score = -negamax(
                 search,
@@ -1327,9 +1342,9 @@ fn search_late_move(
     reason = "independent facts about the move"
 )]
 struct LateMove {
-    depth: i32,
+    depth: Depth,
     /// The depth the move is searched to before any reduction.
-    new_depth: i32,
+    new_depth: Depth,
     moves_searched: i32,
     quiet_history: i32,
     is_quiet: bool,
@@ -1345,10 +1360,10 @@ struct LateMove {
 impl Search<'_> {
     /// How many plies to reduce a late move by, with the move made on the
     /// board and `node_ply` the ply of the node it was played from.
-    fn late_move_reduction(&self, node_ply: usize, m: LateMove) -> i32 {
+    fn late_move_reduction(&self, node_ply: usize, m: LateMove) -> Depth {
         let params = &self.params;
         if m.depth < params.lmr_min_depth || m.in_check || (m.is_pv && !m.is_quiet) {
-            return 0;
+            return Depth::ZERO;
         }
         let gives_check = self.board.in_check();
         let mut reduction_1024 = 1024
@@ -1389,7 +1404,7 @@ impl Search<'_> {
             0
         };
         let r = reduction_1024 / 1024 - m.quiet_history / params.lmr_history_divisor;
-        r.clamp(0, (m.new_depth - 1).max(0))
+        Depth::new(r.clamp(0, (m.new_depth.plies() - 1).max(0)))
     }
 }
 
@@ -1430,7 +1445,7 @@ fn negamax(
     search: &mut Search,
     alpha: i32,
     beta: i32,
-    depth: i32,
+    depth: Depth,
     kind: NodeKind,
 ) -> Result<i32, Aborted> {
     let node = match enter_node(search, alpha, beta, depth, kind)? {
@@ -1450,7 +1465,7 @@ fn negamax(
 )]
 struct Node {
     kind: NodeKind,
-    depth: i32,
+    depth: Depth,
     /// The window's lower bound before any move raised it.
     alpha: i32,
     beta: i32,
@@ -1477,7 +1492,7 @@ fn enter_node(
     search: &mut Search,
     mut alpha: i32,
     mut beta: i32,
-    mut depth: i32,
+    mut depth: Depth,
     kind: NodeKind,
 ) -> Result<ControlFlow<i32, Node>, Aborted> {
     search.seldepth = search.seldepth.max(search.ply);
@@ -1520,9 +1535,9 @@ fn enter_node(
     let legality = search.board.legality_info();
     let in_check = legality.in_check();
     if in_check {
-        depth += 1;
+        depth += Depth::ONE;
     }
-    if depth <= 0 {
+    if depth <= Depth::ZERO {
         return quiesce(search, alpha, beta).map(ControlFlow::Break);
     }
 
@@ -1567,7 +1582,7 @@ fn enter_node(
     }
 
     if depth >= search.params.iir_min_depth && tt_move.is_none() && excluded_move.is_none() {
-        depth -= 1;
+        depth -= Depth::ONE;
     }
 
     Ok(ControlFlow::Continue(Node {
@@ -1651,7 +1666,7 @@ fn search_moves(search: &mut Search, node: &Node) -> Result<ControlFlow<i32, Mov
     let mut picker = MovePicker::new(node.tt_move, killers[0], killers[1], counter_move);
     let continuations = search.continuation_keys();
     let lmp_limit =
-        (search.params.lmp_base + node.depth * node.depth) / (2 - i32::from(node.improving));
+        (search.params.lmp_base + node.depth.plies().pow(2)) / (2 - i32::from(node.improving));
     let mut state = MoveLoop {
         alpha: node.alpha,
         best_score: -SCORE_BOUND,
@@ -1756,7 +1771,7 @@ fn search_move(
             Singularity::MultiCut(score) => return Ok(MoveSearch::MultiCut(score)),
         }
     } else {
-        0
+        Depth::ZERO
     };
     let node_ply = search.ply;
     let nodes_before = search.time.nodes;
@@ -1764,8 +1779,8 @@ fn search_move(
         return Ok(MoveSearch::Illegal);
     };
     state.moves_searched += 1;
-    let new_depth = node.depth - 1 + extension;
-    if extension >= 2 {
+    let new_depth = node.depth - Depth::ONE + extension;
+    if extension >= DOUBLE_EXTENSION {
         search.stack[node_ply].double_extensions += 1;
     }
 
@@ -1802,7 +1817,7 @@ fn search_move(
     };
 
     search.unmake_move(c.m, undo);
-    if extension >= 2 {
+    if extension >= DOUBLE_EXTENSION {
         search.stack[node_ply].double_extensions -= 1;
     }
     if node.is_root {
@@ -1848,7 +1863,7 @@ fn finish_node(search: &mut Search, node: &Node, searched: &MoveLoop) -> i32 {
     search.tt.store(
         node.key,
         TTWrite {
-            depth: node.depth as i16,
+            depth: node.depth,
             score: score_to_tt(searched.best_score, search.ply),
             eval: node.eval.map(|e| e.raw),
             bound,
@@ -1896,7 +1911,7 @@ impl Score {
 /// What the main thread reports after each completed iteration.
 #[derive(Clone, Debug)]
 pub struct IterationInfo {
-    pub depth: usize,
+    pub depth: Depth,
     pub seldepth: usize,
     /// From the point of view of the side to move at the root.
     pub score: Score,
@@ -1936,7 +1951,7 @@ pub fn print_uci_info(info: &IterationInfo) {
     );
 }
 
-fn iteration_info(search: &Search, depth: usize, best_move: Move, score: i32) -> IterationInfo {
+fn iteration_info(search: &Search, depth: Depth, best_move: Move, score: i32) -> IterationInfo {
     let elapsed_ms = search.time.control.elapsed_ms();
     let nodes = search.time.nodes_of_all_threads();
     let nps = (nodes * 1000).checked_div(elapsed_ms).unwrap_or(0);
@@ -1946,7 +1961,7 @@ fn iteration_info(search: &Search, depth: usize, best_move: Move, score: i32) ->
         .chain(get_pv_from_tt(
             after_best,
             search.tt,
-            depth.saturating_sub(1),
+            usize::try_from(depth.plies() - 1).unwrap_or(0),
         ))
         .collect();
     IterationInfo {
@@ -2004,7 +2019,7 @@ fn iterative_deepening(
 
     let mut score = 0;
     let mut completed_score = None;
-    for depth in 1..=limits.max_depth {
+    for depth in (1..=limits.max_depth.plies()).map(Depth::new) {
         search.seldepth = 0;
         let Some(iteration_score) = aspiration_search(&mut search, depth, score) else {
             break;
@@ -2020,7 +2035,11 @@ fn iterative_deepening(
         let summary = IterationSummary {
             best_move,
             best_move_node_share: best_move.map_or(0.0, |m| search.root_move_node_share(m)),
-            score_drop: if depth > 1 { previous_score - score } else { 0 },
+            score_drop: if depth > Depth::ONE {
+                previous_score - score
+            } else {
+                0
+            },
         };
         if search.time.should_stop_iterating(depth, &summary) {
             break;
@@ -2040,7 +2059,7 @@ fn iterative_deepening(
 /// Searches the root to `depth` in a window around `previous`, the score of
 /// the last depth, widening it after each fail until the score lands inside.
 /// A fail high also searches a ply shallower. `None` if the search aborts.
-fn aspiration_search(search: &mut Search, depth: usize, previous: i32) -> Option<i32> {
+fn aspiration_search(search: &mut Search, depth: Depth, previous: i32) -> Option<i32> {
     let mut delta = search.params.aspiration_delta;
     let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
         (
@@ -2052,7 +2071,7 @@ fn aspiration_search(search: &mut Search, depth: usize, previous: i32) -> Option
     };
     let mut fail_highs = 0;
     loop {
-        let search_depth = (depth as i32 - fail_highs).max(1);
+        let search_depth = (depth - Depth::new(fail_highs)).max(Depth::ONE);
         let iteration = negamax(search, alpha, beta, search_depth, NodeKind::All);
         let (Ok(score), false) = (iteration, search.time.check_hard_limit()) else {
             return None;
@@ -2251,7 +2270,7 @@ mod time_tests {
         control.set_budget_from_now(BUDGET);
         let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = time.should_stop_iterating(10, &iteration(0.9, 0));
+        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.9, 0));
 
         assert!(!stop);
     }
@@ -2262,7 +2281,7 @@ mod time_tests {
         control.set_budget_from_now(BUDGET);
         let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = time.should_stop_iterating(10, &iteration(0.9, 0));
+        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.9, 0));
 
         assert!(
             !stop,
@@ -2277,7 +2296,7 @@ mod time_tests {
         control.start -= Duration::from_millis(3 * BUDGET.soft_ms);
         let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = time.should_stop_iterating(10, &iteration(0.0, SCORE_DROP_CAP));
+        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.0, SCORE_DROP_CAP));
 
         assert!(
             stop,
