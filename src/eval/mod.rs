@@ -7,7 +7,7 @@ pub mod own;
 pub mod stockfish;
 
 use crate::board::Board;
-use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody, castling_rook_squares};
+use crate::types::{Bitboard, Color, Move, Piece, StackVec, castling_rook_squares};
 use bootstrap::{Bootstrap, NoState};
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -28,16 +28,24 @@ pub struct PositionView<'b> {
     pub halfmove_clock: i32,
 }
 
+/// A piece put on (`add`) or taken off a square, as the accumulators apply it.
+#[derive(Copy, Clone, Debug)]
+pub struct PieceChange {
+    pub piece: Piece,
+    pub sq: usize,
+    pub add: bool,
+}
+
 /// Piece-square changes of `m` in `position` (before the move), in removal-then-add order.
 pub fn record_piece_changes(
     position: PositionView,
     m: Move,
-    out: &mut StackVec<UpdateBody, MAX_PIECE_CHANGES>,
+    out: &mut StackVec<PieceChange, MAX_PIECE_CHANGES>,
 ) {
     let from = m.from.index();
     let to = m.to.index();
     let moving = position.piece_on[from];
-    out.push(UpdateBody {
+    out.push(PieceChange {
         piece: moving,
         sq: from,
         add: false,
@@ -46,7 +54,7 @@ pub fn record_piece_changes(
         let cap_sq = m.captured_square(position.turn);
         let captured = position.piece_on[cap_sq];
         if !captured.is_empty() {
-            out.push(UpdateBody {
+            out.push(PieceChange {
                 piece: captured,
                 sq: cap_sq,
                 add: false,
@@ -56,7 +64,7 @@ pub fn record_piece_changes(
     let placed = m
         .promotion()
         .map_or(moving, |kind| Piece::from_kind(kind, position.turn));
-    out.push(UpdateBody {
+    out.push(PieceChange {
         piece: placed,
         sq: to,
         add: true,
@@ -64,12 +72,12 @@ pub fn record_piece_changes(
     if m.is_castle() {
         let (rook_from, rook_to) = castling_rook_squares(from, to);
         let rook = position.piece_on[rook_from];
-        out.push(UpdateBody {
+        out.push(PieceChange {
             piece: rook,
             sq: rook_from,
             add: false,
         });
-        out.push(UpdateBody {
+        out.push(PieceChange {
             piece: rook,
             sq: rook_to,
             add: true,

@@ -7,8 +7,8 @@ use super::net_file::{FeatureTransformer, ThreatWeights};
 use super::network::{PerspectiveSums, SumsView};
 use super::simd::{update_rows, update_rows_from};
 use super::threat_delta::{MAX_THREAT_DELTAS, ThreatDeltas};
-use crate::eval::{MAX_PIECE_CHANGES, PositionView};
-use crate::types::{Bitboard, Color, Piece, StackVec, UpdateBody};
+use crate::eval::{MAX_PIECE_CHANGES, PieceChange, PositionView};
+use crate::types::{Bitboard, Color, Piece, StackVec};
 
 pub const BIG_HALF: usize = 1024;
 pub const SMALL_HALF: usize = 128;
@@ -240,7 +240,7 @@ impl PsqNet {
 /// What one move changed, and the sums of the position after it once computed.
 #[derive(Clone)]
 struct Ply {
-    psq_updates: StackVec<UpdateBody, MAX_PIECE_CHANGES>,
+    psq_updates: StackVec<PieceChange, MAX_PIECE_CHANGES>,
     /// Side whose king moved; its piece-square sums must be refreshed.
     king_mover: Option<Color>,
     /// Per perspective: its king changed board half, so its threat sums must be rebuilt.
@@ -278,7 +278,7 @@ impl Ply {
 
 /// Where `Board::make_move` records a move's changes.
 pub struct PlyRecord<'a> {
-    pub psq_updates: &'a mut StackVec<UpdateBody, MAX_PIECE_CHANGES>,
+    pub psq_updates: &'a mut StackVec<PieceChange, MAX_PIECE_CHANGES>,
     pub threats: &'a mut ThreatDeltas,
     king_mover: &'a mut Option<Color>,
     threat_refresh: &'a mut [bool; 2],
@@ -496,7 +496,7 @@ impl AccumulatorStack {
 }
 
 fn psq_changes(
-    updates: &StackVec<UpdateBody, MAX_PIECE_CHANGES>,
+    updates: &StackVec<PieceChange, MAX_PIECE_CHANGES>,
     perspective: Color,
     king_sq: usize,
     changes: &mut FeatureChanges<MAX_PIECE_CHANGES>,

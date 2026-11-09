@@ -114,13 +114,6 @@ pub fn squares(mut bb: Bitboard) -> impl Iterator<Item = Square> {
 
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-#[derive(Copy, Clone, Debug)]
-pub struct UpdateBody {
-    pub piece: Piece,
-    pub sq: usize,
-    pub add: bool,
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Color {
     White = 0,

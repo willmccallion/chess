@@ -2,8 +2,8 @@
 //! changes each move records.
 
 use super::network::{Column, Network};
-use crate::eval::{MAX_PIECE_CHANGES, PositionView, record_piece_changes};
-use crate::types::{Color, Move, Piece, PieceKind, StackVec, UpdateBody};
+use crate::eval::{MAX_PIECE_CHANGES, PieceChange, PositionView, record_piece_changes};
+use crate::types::{Color, Move, Piece, PieceKind, StackVec};
 
 /// Bullet's `Chess768` index of `owner`'s `kind` on `square`, seen from `perspective`:
 /// the perspective's own pieces first, ranks flipped for Black.
@@ -52,7 +52,7 @@ fn refreshed(net: &Network, position: PositionView) -> Pair {
     })
 }
 
-fn updated(net: &Network, parent: &Pair, changes: &[UpdateBody]) -> Pair {
+fn updated(net: &Network, parent: &Pair, changes: &[PieceChange]) -> Pair {
     let mut pair = *parent;
     for perspective in [Color::White, Color::Black] {
         let column = &mut pair[perspective as usize];
@@ -73,7 +73,7 @@ fn updated(net: &Network, parent: &Pair, changes: &[UpdateBody]) -> Pair {
 #[derive(Clone)]
 struct Ply {
     /// What the move into this position changed.
-    changes: StackVec<UpdateBody, MAX_PIECE_CHANGES>,
+    changes: StackVec<PieceChange, MAX_PIECE_CHANGES>,
     accumulators: Pair,
     computed: bool,
 }
