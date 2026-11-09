@@ -276,24 +276,48 @@ fn worker(
 }
 
 /// Runs the tuning session and returns the final estimate.
+/// Every parameter's default, with those `start` names set to its values
+/// (the last, where it names one twice).
+fn starting_theta(start: &[(String, f64)]) -> Vec<f64> {
+    PARAM_SPECS
+        .iter()
+        .map(|spec| {
+            start
+                .iter()
+                .rev()
+                .find(|(name, _)| spec.name.eq_ignore_ascii_case(name))
+                .map_or_else(|| f64::from(spec.default), |&(_, value)| value)
+        })
+        .collect()
+}
+
+/// Plays game pairs on every worker the config lists until the planned
+/// pairs are done, reporting the workers that stop early.
+fn run_workers(config: &Arc<SpsaConfig>, estimate: &Arc<Mutex<Estimate>>, started: Instant) {
+    let handles: Vec<_> = config
+        .workers
+        .iter()
+        .flat_map(|group| std::iter::repeat_n(group.cpus.clone(), group.count))
+        .map(|cpus| {
+            let (config, estimate) = (Arc::clone(config), Arc::clone(estimate));
+            thread::spawn(move || worker(&config, cpus.as_deref(), &estimate, started))
+        })
+        .collect();
+    for handle in handles {
+        match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("worker stopped: {e}"),
+            Err(_) => eprintln!("worker panicked"),
+        }
+    }
+}
+
 pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
     if config.openings.is_empty() {
         return Err("no openings".to_string());
     }
-    let mut theta: Vec<f64> = PARAM_SPECS
-        .iter()
-        .map(|spec| f64::from(spec.default))
-        .collect();
-    for (name, value) in &config.start {
-        if let Some(index) = PARAM_SPECS
-            .iter()
-            .position(|spec| spec.name.eq_ignore_ascii_case(name))
-        {
-            theta[index] = *value;
-        }
-    }
     let estimate = Mutex::new(Estimate {
-        theta,
+        theta: starting_theta(&config.start),
         issued: 0,
         completed: 0,
         rng: StdRng::seed_from_u64(config.seed),
@@ -316,22 +340,7 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
         total_workers,
         config.output.display()
     );
-    let handles: Vec<_> = config
-        .workers
-        .iter()
-        .flat_map(|group| std::iter::repeat_n(group.cpus.clone(), group.count))
-        .map(|cpus| {
-            let (config, estimate) = (Arc::clone(&config), Arc::clone(&estimate));
-            thread::spawn(move || worker(&config, cpus.as_deref(), &estimate, started))
-        })
-        .collect();
-    for handle in handles {
-        match handle.join() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => eprintln!("worker stopped: {e}"),
-            Err(_) => eprintln!("worker panicked"),
-        }
-    }
+    run_workers(&config, &estimate, started);
 
     let state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
     report(&state, &config, started);
@@ -342,6 +351,23 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
 mod tests {
     use super::*;
     use crate::time::Millis;
+
+    #[test]
+    fn a_resumed_estimate_sets_the_parameters_it_names_and_keeps_the_rest() {
+        let first = &PARAM_SPECS[0];
+        let second = &PARAM_SPECS[1];
+        let start = vec![
+            (first.name.to_lowercase(), 1.5),
+            ("NoSuchParam".to_string(), 9.0),
+            (first.name.to_string(), 2.5),
+        ];
+
+        let theta = starting_theta(&start);
+
+        assert_eq!(theta.len(), PARAM_SPECS.len());
+        assert_eq!(theta[0], 2.5);
+        assert_eq!(theta[1], f64::from(second.default));
+    }
 
     #[test]
     fn worker_groups_parse_cpu_lists_and_counts() {
