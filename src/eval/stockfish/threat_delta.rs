@@ -5,7 +5,7 @@
 //! the position. Each step reports the threats of and against the piece, plus the slider
 //! rays it opens (removal) or closes (placement).
 
-use crate::eval::PositionView;
+use crate::eval::{Change, PositionView};
 use crate::magics;
 use crate::types::{Bitboard, Color, Move, Piece, PieceKind, StackVec, castling_rook_squares};
 
@@ -16,7 +16,7 @@ pub struct ThreatDelta {
     pub from: u8,
     pub attacked: Piece,
     pub to: u8,
-    pub add: bool,
+    pub action: Change,
 }
 
 /// Bound on deltas per move; overflowing means the accumulator must be refreshed instead.
@@ -146,15 +146,15 @@ impl<'b> Replay<'b> {
         (behind != 0).then(|| behind.trailing_zeros() as usize)
     }
 
-    /// Reports every relation involving the piece on `sq`; `present` says whether the
-    /// relations appear (after placing it) or disappear (before removing it).
-    fn report_piece(&self, sq: usize, present: bool, out: &mut ThreatDeltas) {
+    /// Reports every relation involving the piece on `sq`: as added after
+    /// placing it, or as removed before removing it.
+    fn report_piece(&self, sq: usize, change: Change, out: &mut ThreatDeltas) {
         let piece = self.piece_at(sq);
         let mut targets = attacks_of(piece, sq, self.occupied) & self.occupied;
         while targets != 0 {
             let to = targets.trailing_zeros() as usize;
             targets &= targets - 1;
-            out.push(delta(piece, sq, self.piece_at(to), to, present));
+            out.push(delta(piece, sq, self.piece_at(to), to, change));
         }
 
         let mut attackers = self.attackers_of(sq);
@@ -162,7 +162,7 @@ impl<'b> Replay<'b> {
             let from = attackers.trailing_zeros() as usize;
             attackers &= attackers - 1;
             let attacker = self.piece_at(from);
-            out.push(delta(attacker, from, piece, sq, present));
+            out.push(delta(attacker, from, piece, sq, change));
             if is_slider(attacker)
                 && let Some(behind) = self.piece_behind(from, sq)
             {
@@ -171,30 +171,36 @@ impl<'b> Replay<'b> {
                     from,
                     self.piece_at(behind),
                     behind,
-                    !present,
+                    change.opposite(),
                 ));
             }
         }
     }
 
     fn remove(&mut self, sq: usize, out: &mut ThreatDeltas) {
-        self.report_piece(sq, false, out);
+        self.report_piece(sq, Change::Remove, out);
         self.set(sq, Piece::Empty);
     }
 
     fn put(&mut self, sq: usize, piece: Piece, out: &mut ThreatDeltas) {
         self.set(sq, piece);
-        self.report_piece(sq, true, out);
+        self.report_piece(sq, Change::Add, out);
     }
 }
 
-const fn delta(attacker: Piece, from: usize, attacked: Piece, to: usize, add: bool) -> ThreatDelta {
+const fn delta(
+    attacker: Piece,
+    from: usize,
+    attacked: Piece,
+    to: usize,
+    action: Change,
+) -> ThreatDelta {
     ThreatDelta {
         attacker,
         from: from as u8,
         attacked,
         to: to as u8,
-        add,
+        action,
     }
 }
 
@@ -241,7 +247,7 @@ fn cancel_opposites(deltas: &mut ThreatDeltas) {
         let d = list[i];
         let opposite = (i + 1..len).find(|&j| {
             let o = list[j];
-            o.add != d.add
+            o.action != d.action
                 && o.from == d.from
                 && o.to == d.to
                 && o.attacker == d.attacker
@@ -292,7 +298,7 @@ mod tests {
         let mut result = before.to_vec();
         for d in deltas.list.as_slice() {
             let relation = (d.attacker, d.from, d.attacked, d.to);
-            if d.add {
+            if d.action == Change::Add {
                 result.push(relation);
             } else {
                 let position = result

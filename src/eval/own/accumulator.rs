@@ -2,7 +2,7 @@
 //! changes each move records.
 
 use super::network::{Column, Network};
-use crate::eval::{MAX_PIECE_CHANGES, PieceChange, PositionView, record_piece_changes};
+use crate::eval::{Change, MAX_PIECE_CHANGES, PieceChange, PositionView, record_piece_changes};
 use crate::types::{Color, Move, Piece, PieceKind, StackVec};
 
 /// Bullet's `Chess768` index of `owner`'s `kind` on `square`, seen from `perspective`:
@@ -60,10 +60,9 @@ fn updated(net: &Network, parent: &Pair, changes: &[PieceChange]) -> Pair {
             let Some(feature) = piece_feature(perspective, change.piece, change.sq) else {
                 continue;
             };
-            if change.add {
-                column.add(net.feature(feature));
-            } else {
-                column.sub(net.feature(feature));
+            match change.action {
+                Change::Add => column.add(net.feature(feature)),
+                Change::Remove => column.sub(net.feature(feature)),
             }
         }
     }

@@ -28,12 +28,30 @@ pub struct PositionView<'b> {
     pub halfmove_clock: i32,
 }
 
-/// A piece put on (`add`) or taken off a square, as the accumulators apply it.
+/// Whether an input feature comes into the position or leaves it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Change {
+    Add,
+    Remove,
+}
+
+impl Change {
+    /// The change that undoes this one.
+    #[must_use]
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::Add => Self::Remove,
+            Self::Remove => Self::Add,
+        }
+    }
+}
+
+/// A piece put on or taken off a square, as the accumulators apply it.
 #[derive(Copy, Clone, Debug)]
 pub struct PieceChange {
     pub piece: Piece,
     pub sq: usize,
-    pub add: bool,
+    pub action: Change,
 }
 
 /// Piece-square changes of `m` in `position` (before the move), in removal-then-add order.
@@ -48,7 +66,7 @@ pub fn record_piece_changes(
     out.push(PieceChange {
         piece: moving,
         sq: from,
-        add: false,
+        action: Change::Remove,
     });
     if m.is_capture() {
         let cap_sq = m.captured_square(position.turn);
@@ -57,7 +75,7 @@ pub fn record_piece_changes(
             out.push(PieceChange {
                 piece: captured,
                 sq: cap_sq,
-                add: false,
+                action: Change::Remove,
             });
         }
     }
@@ -67,7 +85,7 @@ pub fn record_piece_changes(
     out.push(PieceChange {
         piece: placed,
         sq: to,
-        add: true,
+        action: Change::Add,
     });
     if m.is_castle() {
         let (rook_from, rook_to) = castling_rook_squares(from, to);
@@ -75,12 +93,12 @@ pub fn record_piece_changes(
         out.push(PieceChange {
             piece: rook,
             sq: rook_from,
-            add: false,
+            action: Change::Remove,
         });
         out.push(PieceChange {
             piece: rook,
             sq: rook_to,
-            add: true,
+            action: Change::Add,
         });
     }
 }

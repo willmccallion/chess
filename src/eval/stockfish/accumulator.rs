@@ -7,7 +7,7 @@ use super::net_file::{FeatureTransformer, ThreatWeights};
 use super::network::{PerspectiveSums, SumsView};
 use super::simd::{update_rows, update_rows_from};
 use super::threat_delta::{MAX_THREAT_DELTAS, ThreatDeltas};
-use crate::eval::{MAX_PIECE_CHANGES, PieceChange, PositionView};
+use crate::eval::{Change, MAX_PIECE_CHANGES, PieceChange, PositionView};
 use crate::types::{Bitboard, Color, Piece, StackVec};
 
 pub const BIG_HALF: usize = 1024;
@@ -111,11 +111,10 @@ impl<const N: usize> FeatureChanges<N> {
         self.subs.clear();
     }
 
-    const fn push(&mut self, feature: usize, add: bool) {
-        if add {
-            self.adds.push(feature);
-        } else {
-            self.subs.push(feature);
+    const fn push(&mut self, feature: usize, change: Change) {
+        match change {
+            Change::Add => self.adds.push(feature),
+            Change::Remove => self.subs.push(feature),
         }
     }
 }
@@ -170,11 +169,15 @@ impl<const N: usize> RefreshCache<N> {
             let Some(piece) = PIECES_BY_INDEX[index].and_then(SfPiece::new) else {
                 continue;
             };
-            for (mut squares, add) in [(current & !*cached, true), (*cached & !current, false)] {
+            let differences = [
+                (current & !*cached, Change::Add),
+                (*cached & !current, Change::Remove),
+            ];
+            for (mut squares, change) in differences {
                 while squares != 0 {
                     let sq = squares.trailing_zeros() as usize;
                     squares &= squares - 1;
-                    changes.push(psq_index(perspective, sq, piece, king_sq), add);
+                    changes.push(psq_index(perspective, sq, piece, king_sq), change);
                 }
             }
             *cached = current;
@@ -506,7 +509,7 @@ fn psq_changes(
         if let Some(piece) = SfPiece::new(update.piece) {
             changes.push(
                 psq_index(perspective, update.sq, piece, king_sq),
-                update.add,
+                update.action,
             );
         }
     }
@@ -528,7 +531,7 @@ fn threat_changes(
         let from = usize::from(delta.from);
         let to = usize::from(delta.to);
         if let Some(feature) = threat_index(perspective, attacker, from, to, attacked, king_sq) {
-            changes.push(feature, delta.add);
+            changes.push(feature, delta.action);
         }
     }
 }
