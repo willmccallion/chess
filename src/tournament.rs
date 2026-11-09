@@ -176,10 +176,6 @@ fn format_pct(n: usize, total: usize) -> String {
     }
 }
 
-fn spawn_and_init(path: &str, options: &[(String, String)]) -> Result<UciEngine, String> {
-    spawn_and_init_pinned(path, options, None)
-}
-
 /// Starts and configures an engine, restricted to the CPU list `cpus` if given.
 pub(crate) fn spawn_and_init_pinned(
     path: &str,
@@ -465,14 +461,16 @@ pub fn run_tournament(mut config: TournamentConfig) {
         let config = Arc::clone(&config);
 
         let handle = thread::spawn(move || {
-            let mut e1 = match spawn_and_init(&config.engine1_path, &config.e1_options) {
+            let mut e1 = match spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
+            {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("Failed to start engine1: {}", e);
                     return;
                 }
             };
-            let mut e2 = match spawn_and_init(&config.engine2_path, &config.e2_options) {
+            let mut e2 = match spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
+            {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("Failed to start engine2: {}", e);
@@ -634,10 +632,14 @@ pub fn run_tournament(mut config: TournamentConfig) {
 
                 // If an engine crashed, try to respawn it
                 if outcome.reason == GameEndReason::EngineCrash {
-                    if let Ok(new_e1) = spawn_and_init(&config.engine1_path, &config.e1_options) {
+                    if let Ok(new_e1) =
+                        spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
+                    {
                         e1 = new_e1;
                     }
-                    if let Ok(new_e2) = spawn_and_init(&config.engine2_path, &config.e2_options) {
+                    if let Ok(new_e2) =
+                        spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
+                    {
                         e2 = new_e2;
                     }
                 }
