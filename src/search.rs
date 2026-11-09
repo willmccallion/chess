@@ -6,7 +6,7 @@ use crate::movepicker::{MovePicker, OrderingContext};
 use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
-use crate::tt::{Bound, SharedTransTable, TTWrite};
+use crate::tt::{Bound, SharedTransTable, TTEntry, TTWrite};
 use crate::types::{MAX_MOVES, Move, MoveList, Piece, StackVec, Undo};
 use crate::uci_io::format_uci;
 use std::sync::Arc;
@@ -491,24 +491,27 @@ fn tt_cutoff_allowed(bound: Bound, score: i32, alpha: i32, beta: i32) -> bool {
     }
 }
 
-/// Whether a TT score is a tighter estimate of the position than the static eval.
+/// Whether `score`, a search result with `bound`, lies past `eval` on the
+/// side the bound looks: anywhere when exact, above for a lower bound,
+/// below for an upper one.
 #[inline(always)]
-fn tt_score_refines_eval(bound: Bound, tt_score: i32, eval: i32) -> bool {
+fn bound_beyond(bound: Bound, score: i32, eval: i32) -> bool {
     match bound {
         Bound::Exact => true,
-        Bound::Lower => tt_score > eval,
-        Bound::Upper => tt_score < eval,
+        Bound::Lower => score > eval,
+        Bound::Upper => score < eval,
     }
 }
 
-/// Whether a search result says something about the eval's error: a fail-high above
-/// the eval, a fail-low below it, or an exact score.
+/// `eval`, or the TT entry's score where its bound places the position's
+/// value past `eval`.
 #[inline(always)]
-fn search_disagrees_with_eval(bound: Bound, best_score: i32, static_eval: i32) -> bool {
-    match bound {
-        Bound::Exact => true,
-        Bound::Lower => best_score > static_eval,
-        Bound::Upper => best_score < static_eval,
+fn refined_eval(entry: Option<TTEntry>, eval: i32, ply: usize) -> i32 {
+    match entry {
+        Some(entry) if bound_beyond(entry.bound(), score_from_tt(entry.score(), ply), eval) => {
+            score_from_tt(entry.score(), ply)
+        }
+        _ => eval,
     }
 }
 
@@ -774,18 +777,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
 
     let raw_eval = s.static_eval(tt_entry.and_then(|e| e.eval()));
     let corrected_eval = s.corrected_eval(raw_eval);
-    let stand_pat = match tt_entry {
-        Some(entry)
-            if tt_score_refines_eval(
-                entry.bound(),
-                score_from_tt(entry.score(), s.ply),
-                corrected_eval,
-            ) =>
-        {
-            score_from_tt(entry.score(), s.ply)
-        }
-        _ => corrected_eval,
-    };
+    let stand_pat = refined_eval(tt_entry, corrected_eval, s.ply);
     if stand_pat >= beta {
         if tt_entry.is_none() {
             s.tt.store(
@@ -1095,14 +1087,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     };
     let corrected_eval = raw_eval.map(|raw| s.corrected_eval(raw));
     s.stack[s.ply].static_eval = corrected_eval;
-    let eval = match (corrected_eval, tt_entry) {
-        (Some(raw), Some(entry))
-            if tt_score_refines_eval(entry.bound(), score_from_tt(entry.score(), s.ply), raw) =>
-        {
-            Some(score_from_tt(entry.score(), s.ply))
-        }
-        _ => corrected_eval,
-    };
+    let eval = corrected_eval.map(|corrected| refined_eval(tt_entry, corrected, s.ply));
 
     let improving = s.is_improving(corrected_eval);
 
@@ -1394,7 +1379,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
     if let Some(static_eval) = corrected_eval
         && best_move.is_none_or(|m| !m.is_capture())
         && best_score.abs() < MATE_THRESHOLD
-        && search_disagrees_with_eval(bound, best_score, static_eval)
+        && bound_beyond(bound, best_score, static_eval)
     {
         let pawn_key = s.board.pawn_key();
         s.td.correction.update(
