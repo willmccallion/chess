@@ -6,7 +6,7 @@
 //! (the schedule and step sizes follow OpenBench).
 
 use crate::game_runner::{
-    GameClock, GameConfig, GameEndReason, GameResult, StartPosition, play_game,
+    EngineResult, GameClock, GameConfig, GameEndReason, GameResult, StartPosition, Wdl, play_game,
 };
 use crate::search_params::{PARAM_SPECS, ParamSpec};
 use crate::tournament::spawn_and_init_pinned;
@@ -107,7 +107,8 @@ struct Estimate {
     issued: usize,
     completed: usize,
     rng: StdRng,
-    score: (i64, i64, i64),
+    /// The plus engine's results against the minus engine.
+    score: Wdl,
 }
 
 /// One pair's assignment: the perturbed values and the direction of the perturbation.
@@ -192,14 +193,6 @@ fn set_params(engine: &mut UciEngine, values: &[i32]) -> Result<(), String> {
 }
 
 /// Points of the engine playing `color_is_white`, as +1 / 0 / -1.
-fn signed_points(result: GameResult, plays_white: bool) -> i32 {
-    match (result, plays_white) {
-        (GameResult::Draw, _) => 0,
-        (GameResult::WhiteWin, true) | (GameResult::BlackWin, false) => 1,
-        _ => -1,
-    }
-}
-
 /// Plays the pair; `None` if an engine crashed, so the pair says nothing about the values.
 fn play_pair(
     plus: &mut UciEngine,
@@ -224,21 +217,18 @@ fn play_pair(
     if first.reason == GameEndReason::EngineCrash || second.reason == GameEndReason::EngineCrash {
         return Ok(None);
     }
-    let result = signed_points(first.result, true) + signed_points(second.result, false);
+    let result = EngineResult::of(first.result, true).signed()
+        + EngineResult::of(second.result, false).signed();
     Ok(Some((result, [first.result, second.result])))
-}
-
-fn tally(score: &mut (i64, i64, i64), result: GameResult, plus_is_white: bool) {
-    match signed_points(result, plus_is_white) {
-        1 => score.0 += 1,
-        -1 => score.1 += 1,
-        _ => score.2 += 1,
-    }
 }
 
 fn report(estimate: &Estimate, config: &SpsaConfig, started: Instant) {
     let elapsed = started.elapsed().as_secs_f64();
-    let (wins, losses, draws) = estimate.score;
+    let Wdl {
+        wins,
+        losses,
+        draws,
+    } = estimate.score;
     println!(
         "pairs {}/{}  plus-vs-minus W/L/D {wins}/{losses}/{draws}  {:.1} pairs/min",
         estimate.completed,
@@ -272,8 +262,8 @@ fn worker(
             Some((result, games)) => {
                 let mut state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
                 state.apply(&job, result, config.pairs);
-                tally(&mut state.score, games[0], true);
-                tally(&mut state.score, games[1], false);
+                state.score.add(EngineResult::of(games[0], true));
+                state.score.add(EngineResult::of(games[1], false));
                 if state.completed % REPORT_EVERY == 0 {
                     report(&state, config, started);
                 }
@@ -309,7 +299,7 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
         issued: 0,
         completed: 0,
         rng: StdRng::seed_from_u64(config.seed),
-        score: (0, 0, 0),
+        score: Wdl::default(),
     });
     let config = Arc::new(config);
     let estimate = Arc::new(estimate);
@@ -421,7 +411,7 @@ mod tests {
             issued: 0,
             completed: 0,
             rng: StdRng::seed_from_u64(3),
-            score: (0, 0, 0),
+            score: Wdl::default(),
         };
         let before = estimate.theta.clone();
 

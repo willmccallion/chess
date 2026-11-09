@@ -1,5 +1,6 @@
 use crate::game_runner::{
-    GameClock, GameConfig, GameEndReason, GameOutcome, GameResult, StartPosition, play_game,
+    EngineResult, GameClock, GameConfig, GameEndReason, GameOutcome, GameResult, StartPosition,
+    Wdl, play_game,
 };
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::types::START_FEN;
@@ -62,68 +63,6 @@ impl TournamentConfig {
         }
         let pair_idx = game_idx / 2;
         &self.openings[pair_idx % self.openings.len()]
-    }
-}
-
-/// How a game went for one engine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EngineResult {
-    Win,
-    Loss,
-    Draw,
-}
-
-impl EngineResult {
-    /// The result for the engine that played white when `is_white`, else black.
-    const fn of(result: GameResult, is_white: bool) -> Self {
-        match (result, is_white) {
-            (GameResult::Draw, _) => Self::Draw,
-            (GameResult::WhiteWin, true) | (GameResult::BlackWin, false) => Self::Win,
-            (GameResult::WhiteWin, false) | (GameResult::BlackWin, true) => Self::Loss,
-        }
-    }
-
-    const fn points(self) -> f64 {
-        match self {
-            Self::Win => 1.0,
-            Self::Draw => 0.5,
-            Self::Loss => 0.0,
-        }
-    }
-}
-
-/// Wins, losses and draws from one engine's side.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Wdl {
-    wins: usize,
-    losses: usize,
-    draws: usize,
-}
-
-impl Wdl {
-    fn add(&mut self, result: EngineResult) {
-        match result {
-            EngineResult::Win => self.wins += 1,
-            EngineResult::Loss => self.losses += 1,
-            EngineResult::Draw => self.draws += 1,
-        }
-    }
-
-    const fn games(self) -> usize {
-        self.wins + self.losses + self.draws
-    }
-
-    fn points(self) -> f64 {
-        self.wins as f64 + self.draws as f64 * 0.5
-    }
-
-    /// The same games from the opponent's side.
-    const fn opponent(self) -> Self {
-        Self {
-            wins: self.losses,
-            losses: self.wins,
-            draws: self.draws,
-        }
     }
 }
 

@@ -24,6 +24,77 @@ pub enum GameEndReason {
     FlagFall,
 }
 
+/// How a game went for one engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EngineResult {
+    Win,
+    Loss,
+    Draw,
+}
+
+impl EngineResult {
+    /// The result for the engine that played white when `is_white`, else black.
+    pub(crate) const fn of(result: GameResult, is_white: bool) -> Self {
+        match (result, is_white) {
+            (GameResult::Draw, _) => Self::Draw,
+            (GameResult::WhiteWin, true) | (GameResult::BlackWin, false) => Self::Win,
+            (GameResult::WhiteWin, false) | (GameResult::BlackWin, true) => Self::Loss,
+        }
+    }
+
+    pub(crate) const fn points(self) -> f64 {
+        match self {
+            Self::Win => 1.0,
+            Self::Draw => 0.5,
+            Self::Loss => 0.0,
+        }
+    }
+
+    /// +1 for a win, 0 for a draw and -1 for a loss.
+    pub(crate) const fn signed(self) -> i32 {
+        match self {
+            Self::Win => 1,
+            Self::Draw => 0,
+            Self::Loss => -1,
+        }
+    }
+}
+
+/// Wins, losses and draws from one engine's side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Wdl {
+    pub(crate) wins: usize,
+    pub(crate) losses: usize,
+    pub(crate) draws: usize,
+}
+
+impl Wdl {
+    pub(crate) fn add(&mut self, result: EngineResult) {
+        match result {
+            EngineResult::Win => self.wins += 1,
+            EngineResult::Loss => self.losses += 1,
+            EngineResult::Draw => self.draws += 1,
+        }
+    }
+
+    pub(crate) const fn games(self) -> usize {
+        self.wins + self.losses + self.draws
+    }
+
+    pub(crate) fn points(self) -> f64 {
+        self.wins as f64 + self.draws as f64 * 0.5
+    }
+
+    /// The same games from the opponent's side.
+    pub(crate) const fn opponent(self) -> Self {
+        Self {
+            wins: self.losses,
+            losses: self.wins,
+            draws: self.draws,
+        }
+    }
+}
+
 pub struct GameOutcome {
     pub result: GameResult,
     pub reason: GameEndReason,
