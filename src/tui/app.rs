@@ -407,11 +407,7 @@ impl App {
 
     /// Records a search report for the position `root` it was produced in.
     pub fn record_engine_info(&mut self, source: TaskKind, root: &Board, info: &IterationInfo) {
-        let score = match (info.score, root.turn()) {
-            (score, Color::White) => score,
-            (Score::Centipawns(cp), Color::Black) => Score::Centipawns(-cp),
-            (Score::MateIn(moves), Color::Black) => Score::MateIn(-moves),
-        };
+        let score = info.score.for_white(root.turn());
         self.engine_line = Some(EngineLine {
             source,
             depth: info.depth,

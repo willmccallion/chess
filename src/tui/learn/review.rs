@@ -13,11 +13,10 @@ use crate::board::Board;
 use crate::coach::explain::{LineStory, line_story, positional_differences};
 use crate::coach::habits::HabitNote;
 use crate::coach::judgement::{Eval, MoveClass};
-use crate::coach::review::{AnalysedPosition, MoveReview, summarise};
+use crate::coach::review::{AnalysedPosition, MoveReview, SideSummary, summarise};
 use crate::coach::store::{GameId, GameRecord};
 use crate::game_runner::position_outcome;
 use crate::notation::{numbered, san_of};
-use crate::search::Score;
 use crate::time::{Millis, TimeBudget};
 use crate::types::{Color, Move};
 use ratatui::Frame;
@@ -148,66 +147,105 @@ impl ReviewScreen {
     fn summary_lines(&self) -> Vec<Line<'static>> {
         let you = summarise(&self.reviews, self.record.human);
         let coach = summarise(&self.reviews, self.record.human.other());
-        let accuracy = |a: Option<f64>| a.map_or_else(|| "–".to_string(), |a| format!("{a:.0}%"));
-        let outcome = super::games_list::outcome_word(self.record.outcome());
         let mut lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!("{outcome} "),
-                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "as {} against level {} by {}",
-                        color_name(self.record.human),
-                        self.record.level.number(),
-                        self.record.ending.describe()
-                    ),
-                    Style::new().fg(DIM),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Accuracy   ", Style::new().fg(DIM)),
-                Span::styled(
-                    format!("you {:<6}", accuracy(you.accuracy)),
-                    Style::new().fg(TEXT),
-                ),
-                Span::styled(
-                    format!("coach {}", accuracy(coach.accuracy)),
-                    Style::new().fg(DIM),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Your errors ", Style::new().fg(DIM)),
-                Span::styled(
-                    format!("?! {}  ", you.inaccuracies),
-                    Style::new().fg(class_color(MoveClass::Inaccuracy)),
-                ),
-                Span::styled(
-                    format!("? {}  ", you.mistakes),
-                    Style::new().fg(class_color(MoveClass::Mistake)),
-                ),
-                Span::styled(
-                    format!("?? {}", you.blunders),
-                    Style::new().fg(class_color(MoveClass::Blunder)),
-                ),
-            ]),
+            self.result_line(),
+            accuracy_line(&you, &coach),
+            error_count_line(&you),
+            self.analysis_line(),
         ];
-        if self.is_analysed() {
-            lines.push(Line::styled(self.graph(40), Style::new().fg(INFO)));
-        } else {
-            let done = self.analysis.len();
-            let total = self.total_positions();
-            lines.push(Line::from(vec![
-                Span::styled("Analysing  ", Style::new().fg(ACCENT)),
-                Span::styled(bar(done as f64 / total as f64, 20), Style::new().fg(ACCENT)),
-                Span::styled(format!(" {done}/{total}"), Style::new().fg(DIM)),
-            ]));
-        }
         if let Some(Err(e)) = &self.saved {
             lines.push(colored(e.clone(), BAD));
         }
         lines
+    }
+
+    /// How the game ended, and against which level.
+    fn result_line(&self) -> Line<'static> {
+        let outcome = super::games_list::outcome_word(self.record.outcome());
+        Line::from(vec![
+            Span::styled(
+                format!("{outcome} "),
+                Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "as {} against level {} by {}",
+                    color_name(self.record.human),
+                    self.record.level.number(),
+                    self.record.ending.describe()
+                ),
+                Style::new().fg(DIM),
+            ),
+        ])
+    }
+
+    /// The win-chance graph once the game is analysed, its progress until then.
+    fn analysis_line(&self) -> Line<'static> {
+        if self.is_analysed() {
+            return Line::styled(self.graph(40), Style::new().fg(INFO));
+        }
+        let done = self.analysis.len();
+        let total = self.total_positions();
+        Line::from(vec![
+            Span::styled("Analysing  ", Style::new().fg(ACCENT)),
+            Span::styled(bar(done as f64 / total as f64, 20), Style::new().fg(ACCENT)),
+            Span::styled(format!(" {done}/{total}"), Style::new().fg(DIM)),
+        ])
+    }
+
+    /// How much of the eval bar is White's at the position shown; even
+    /// before it is analysed.
+    fn white_share(&self) -> f64 {
+        let Some(analysed) = self.analysis.get(self.cursor) else {
+            return 0.5;
+        };
+        let turn = self.positions[self.cursor].turn();
+        match analysed.eval {
+            Eval::Checkmated if turn == Color::White => 0.0,
+            Eval::Checkmated => 1.0,
+            Eval::Score(score) => white_share(score.for_white(turn)),
+        }
+    }
+
+    /// The summary, the panel for the move shown and the moves, top to bottom.
+    fn draw_side(&self, frame: &mut Frame, side: Rect, data: &CoachData) {
+        let summary_height = SUMMARY_HEIGHT.min(side.height);
+        frame.render_widget(
+            Paragraph::new(self.summary_lines())
+                .wrap(Wrap { trim: false })
+                .block(panel("Game review")),
+            Rect::new(side.x, side.y, side.width, summary_height),
+        );
+        let rest = side.height.saturating_sub(summary_height);
+        let detail = self.detail_lines(data);
+        let detail_height = (detail.len() as u16 + 4)
+            .min(rest.saturating_sub(5).max(rest / 2))
+            .min(rest);
+        let title = match &self.explore {
+            Some(explore) => explore.branch.title(),
+            None if self.cursor == 0 => "Coach",
+            None => "This move",
+        };
+        frame.render_widget(
+            Paragraph::new(detail)
+                .wrap(Wrap { trim: false })
+                .block(panel(title)),
+            Rect::new(side.x, side.y + summary_height, side.width, detail_height),
+        );
+        let moves_height = rest.saturating_sub(detail_height);
+        if moves_height < 3 {
+            return;
+        }
+        let area = Rect::new(
+            side.x,
+            side.y + summary_height + detail_height,
+            side.width,
+            moves_height,
+        );
+        frame.render_widget(
+            Paragraph::new(self.move_list(usize::from(moves_height - 2))).block(panel("Moves")),
+            area,
+        );
     }
 
     /// White's winning chances across the game.
@@ -288,63 +326,44 @@ impl ReviewScreen {
     fn error_lines(&self, review: &MoveReview) -> Vec<Line<'static>> {
         let yours = review.mover == self.record.human;
         let mut lines = Vec::new();
-        let mover = review.mover;
-        if let Some(story) = self.story(Branch::WhatHappens, mover) {
-            lines.push(Line::raw(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "What happens next",
-                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("  (t to play it through)", Style::new().fg(DIM)),
-            ]));
-            lines.push(Line::styled(story.moves, Style::new().fg(TEXT)));
-            lines.push(colored(
-                format!("→ {}", story.outcome),
-                if yours { WARN } else { GOOD },
-            ));
+        if let Some(story) = self.story(Branch::WhatHappens, review.mover) {
+            let outcome_color = if yours { WARN } else { GOOD };
+            lines.extend(what_happens_lines(story, outcome_color));
         }
-        if let (Some(best), Some(story)) = (&review.best_san, self.story(Branch::Better, mover)) {
-            lines.push(Line::raw(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Better was ",
-                    Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    best.clone(),
-                    Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("  (b to play it through)", Style::new().fg(DIM)),
-            ]));
-            lines.push(Line::styled(story.moves, Style::new().fg(TEXT)));
-            lines.push(colored(format!("→ {}", story.outcome), GOOD));
+        if let (Some(best), Some(story)) =
+            (&review.best_san, self.story(Branch::Better, review.mover))
+        {
+            lines.extend(better_move_lines(best, story));
         }
-        let notes = review
-            .best
-            .map(|best| {
-                positional_differences(
-                    &self.positions[review.ply],
-                    review.played,
-                    best,
-                    review.phase,
-                )
-            })
-            .unwrap_or_default();
-        if !notes.is_empty() {
-            lines.push(Line::raw(""));
-            lines.push(heading("Compared with the better move"));
-            for note in notes {
-                lines.push(Line::from(vec![
-                    Span::styled("• ", Style::new().fg(INFO)),
-                    Span::styled(note, Style::new().fg(TEXT)),
-                ]));
-            }
-        }
+        lines.extend(self.comparison_lines(review));
         if yours && review.class.is_serious() && review.best.is_some() {
             lines.push(Line::raw(""));
             lines.push(colored("Saved as a puzzle for you to practise.", INFO));
         }
+        lines
+    }
+
+    /// How the move played differs in position from the better one.
+    fn comparison_lines(&self, review: &MoveReview) -> Vec<Line<'static>> {
+        let Some(best) = review.best else {
+            return Vec::new();
+        };
+        let notes = positional_differences(
+            &self.positions[review.ply],
+            review.played,
+            best,
+            review.phase,
+        );
+        if notes.is_empty() {
+            return Vec::new();
+        }
+        let mut lines = vec![Line::raw(""), heading("Compared with the better move")];
+        lines.extend(notes.into_iter().map(|note| {
+            Line::from(vec![
+                Span::styled("• ", Style::new().fg(INFO)),
+                Span::styled(note, Style::new().fg(TEXT)),
+            ])
+        }));
         lines
     }
 
@@ -579,6 +598,72 @@ fn empty_record(id: GameId) -> GameRecord {
     }
 }
 
+/// Each side's accuracy.
+fn accuracy_line(you: &SideSummary, coach: &SideSummary) -> Line<'static> {
+    let accuracy = |a: Option<f64>| a.map_or_else(|| "–".to_string(), |a| format!("{a:.0}%"));
+    Line::from(vec![
+        Span::styled("Accuracy   ", Style::new().fg(DIM)),
+        Span::styled(
+            format!("you {:<6}", accuracy(you.accuracy)),
+            Style::new().fg(TEXT),
+        ),
+        Span::styled(
+            format!("coach {}", accuracy(coach.accuracy)),
+            Style::new().fg(DIM),
+        ),
+    ])
+}
+
+/// How many of the player's moves were inaccuracies, mistakes and blunders.
+fn error_count_line(you: &SideSummary) -> Line<'static> {
+    let count = |text: String, class| Span::styled(text, Style::new().fg(class_color(class)));
+    Line::from(vec![
+        Span::styled("Your errors ", Style::new().fg(DIM)),
+        count(format!("?! {}  ", you.inaccuracies), MoveClass::Inaccuracy),
+        count(format!("? {}  ", you.mistakes), MoveClass::Mistake),
+        count(format!("?? {}", you.blunders), MoveClass::Blunder),
+    ])
+}
+
+/// The engine's line after the move, and where it leads.
+fn what_happens_lines(
+    story: LineStory,
+    outcome_color: ratatui::style::Color,
+) -> Vec<Line<'static>> {
+    vec![
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                "What happens next",
+                Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  (t to play it through)", Style::new().fg(DIM)),
+        ]),
+        Line::styled(story.moves, Style::new().fg(TEXT)),
+        colored(format!("→ {}", story.outcome), outcome_color),
+    ]
+}
+
+/// The better move `best`, its line and where that leads.
+fn better_move_lines(best: &str, story: LineStory) -> Vec<Line<'static>> {
+    vec![
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                "Better was ",
+                Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                best.to_string(),
+                Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  (b to play it through)", Style::new().fg(DIM)),
+        ]),
+        Line::styled(story.moves, Style::new().fg(TEXT)),
+        colored(format!("→ {}", story.outcome), GOOD),
+    ]
+}
+
 const fn color_name(color: Color) -> &'static str {
     match color {
         Color::White => "White",
@@ -589,69 +674,16 @@ const fn color_name(color: Color) -> &'static str {
 impl Screen for ReviewScreen {
     fn draw(&self, frame: &mut Frame, data: &CoachData, _now: Instant) {
         let layout = board_layout(frame.area(), true);
-        let scene = self.scene(data);
-        draw_board(frame, &layout, &scene);
+        draw_board(frame, &layout, &self.scene(data));
         if let Some(bar_area) = layout.eval_bar {
-            let shown = self.cursor;
-            let share = self.analysis.get(shown).map_or(0.5, |a| {
-                let turn = self.positions[shown].turn();
-                match a.eval {
-                    Eval::Checkmated => {
-                        if turn == Color::White {
-                            0.0
-                        } else {
-                            1.0
-                        }
-                    }
-                    Eval::Score(score) => {
-                        let white = match (score, turn) {
-                            (s, Color::White) => s,
-                            (Score::Centipawns(cp), Color::Black) => Score::Centipawns(-cp),
-                            (Score::MateIn(n), Color::Black) => Score::MateIn(-n),
-                        };
-                        white_share(white)
-                    }
-                }
-            });
-            draw_eval_bar(frame.buffer_mut(), share, self.flipped, bar_area);
-        }
-        let side = layout.side;
-        let summary_height = SUMMARY_HEIGHT.min(side.height);
-        frame.render_widget(
-            Paragraph::new(self.summary_lines())
-                .wrap(Wrap { trim: false })
-                .block(panel("Game review")),
-            Rect::new(side.x, side.y, side.width, summary_height),
-        );
-        let rest = side.height.saturating_sub(summary_height);
-        let detail = self.detail_lines(data);
-        let detail_height = (detail.len() as u16 + 4)
-            .min(rest.saturating_sub(5).max(rest / 2))
-            .min(rest);
-        let title = match &self.explore {
-            Some(explore) => explore.branch.title(),
-            None if self.cursor == 0 => "Coach",
-            None => "This move",
-        };
-        frame.render_widget(
-            Paragraph::new(detail)
-                .wrap(Wrap { trim: false })
-                .block(panel(title)),
-            Rect::new(side.x, side.y + summary_height, side.width, detail_height),
-        );
-        let moves_height = rest.saturating_sub(detail_height);
-        if moves_height >= 3 {
-            let area = Rect::new(
-                side.x,
-                side.y + summary_height + detail_height,
-                side.width,
-                moves_height,
-            );
-            frame.render_widget(
-                Paragraph::new(self.move_list(usize::from(moves_height - 2))).block(panel("Moves")),
-                area,
+            draw_eval_bar(
+                frame.buffer_mut(),
+                self.white_share(),
+                self.flipped,
+                bar_area,
             );
         }
+        self.draw_side(frame, layout.side, data);
         draw_status(
             frame,
             layout.status,
@@ -767,6 +799,7 @@ mod tests {
     use crate::coach::store::{Ending, Store};
     use crate::game_runner::GameResult;
     use crate::notation::parse_san_line;
+    use crate::search::Score;
     use crate::types::Centipawns;
     use crate::types::START_FEN;
 

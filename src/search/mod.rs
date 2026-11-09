@@ -7,7 +7,7 @@ use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable, TTEntry, TTWrite};
-use crate::types::{Centipawns, Move, MoveList, Piece, StackVec, Undo, ZKey};
+use crate::types::{Centipawns, Color, Move, MoveList, Piece, StackVec, Undo, ZKey};
 use crate::uci_io::format_uci;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -1843,6 +1843,16 @@ pub enum Score {
 }
 
 impl Score {
+    /// This score, for the side to move `side_to_move`, from White's point of view.
+    #[must_use]
+    pub const fn for_white(self, side_to_move: Color) -> Self {
+        match (self, side_to_move) {
+            (score, Color::White) => score,
+            (Self::Centipawns(cp), Color::Black) => Self::Centipawns(Centipawns::new(-cp.get())),
+            (Self::MateIn(moves), Color::Black) => Self::MateIn(-moves),
+        }
+    }
+
     fn from_search(score: SearchScore) -> Self {
         if score.abs() > SearchScore::MATE_THRESHOLD {
             let mate_in = (SearchScore::MATE.units() - score.abs().units() + 1) / 2;
@@ -2287,6 +2297,19 @@ mod time_tests {
 #[cfg(test)]
 mod score_report_tests {
     use super::*;
+
+    #[test]
+    fn a_score_flips_to_whites_view_only_when_black_is_to_move() {
+        let ahead = Score::Centipawns(Centipawns::new(40));
+        let mating = Score::MateIn(2);
+
+        assert_eq!(ahead.for_white(Color::White), ahead);
+        assert_eq!(
+            ahead.for_white(Color::Black),
+            Score::Centipawns(Centipawns::new(-40))
+        );
+        assert_eq!(mating.for_white(Color::Black), Score::MateIn(-2));
+    }
 
     #[test]
     fn a_search_score_is_reported_as_moves_to_mate_or_centipawns() {
