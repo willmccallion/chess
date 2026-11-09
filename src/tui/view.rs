@@ -508,24 +508,18 @@ fn players_panel(app: &App, now: Instant) -> Paragraph<'static> {
     let board = app.board();
     let player_line = |color: Color| {
         let to_move = board.turn == color && app.outcome().is_none();
-        let marker = if to_move { "▶ " } else { "  " };
         let side = if color == Color::White {
             "White"
         } else {
             "Black"
         };
         let mut spans = vec![
-            Span::styled(marker, Style::new().fg(ACCENT)),
+            turn_marker(to_move),
             Span::raw(format!("{side:<6} {:<7}", player_name(app, color))),
         ];
         if let Some(clocks) = app.clocks() {
-            let ms = clocks.remaining_ms(color, board.turn, now).max(0);
-            let style = if to_move {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-            };
-            spans.push(Span::styled(format_clock(ms), style));
+            let ms = clocks.remaining_ms(color, board.turn, now);
+            spans.push(clock_span(ms, to_move, Style::new()));
         }
         Line::from(spans)
     };
@@ -778,6 +772,22 @@ fn format_count(n: u64) -> String {
         1_000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
         _ => format!("{:.1}M", n as f64 / 1e6),
     }
+}
+
+/// The `▶` that marks the side to move, or blank space as wide.
+pub fn turn_marker(to_move: bool) -> Span<'static> {
+    Span::styled(if to_move { "▶ " } else { "  " }, Style::new().fg(ACCENT))
+}
+
+/// A clock showing `ms` (none below zero), highlighted while it runs and
+/// drawn in `idle` otherwise.
+pub fn clock_span(ms: i64, to_move: bool, idle: Style) -> Span<'static> {
+    let style = if to_move {
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        idle
+    };
+    Span::styled(format_clock(ms.max(0)), style)
 }
 
 pub fn format_clock(ms: i64) -> String {

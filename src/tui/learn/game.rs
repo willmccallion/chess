@@ -2,7 +2,7 @@
 
 use super::super::app::{App, Mode, PlayConfig, TimeSetting};
 use super::super::engine::SearchLimit;
-use super::super::view::{ACCENT, BoardScene, DIM, format_clock};
+use super::super::view::{ACCENT, BoardScene, DIM, clock_span, turn_marker};
 use super::common::{
     BAD, GOOD, MARK_BAD, TEXT, WARN, colored, dim, draw_board, draw_help, draw_status, heading,
     move_marks, panel, screen_layout,
@@ -303,7 +303,7 @@ impl CoachGame {
                 )
             };
             let mut spans = vec![
-                Span::styled(if to_move { "▶ " } else { "  " }, Style::new().fg(ACCENT)),
+                turn_marker(to_move),
                 Span::styled(
                     format!("{name:<15}"),
                     Style::new().fg(TEXT).add_modifier(Modifier::BOLD),
@@ -311,13 +311,8 @@ impl CoachGame {
                 Span::styled(format!("{rating:<7}"), Style::new().fg(DIM)),
             ];
             if let Some(clocks) = self.app.clocks() {
-                let ms = clocks.remaining_ms(color, board.turn, now).max(0);
-                let style = if to_move {
-                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new().fg(TEXT)
-                };
-                spans.push(Span::styled(format_clock(ms), style));
+                let ms = clocks.remaining_ms(color, board.turn, now);
+                spans.push(clock_span(ms, to_move, Style::new().fg(TEXT)));
             }
             lines.push(Line::from(spans));
         }
