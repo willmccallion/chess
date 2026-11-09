@@ -1447,6 +1447,10 @@ fn negamax(
 }
 
 /// What a node knows once nothing before its move loop has ended it.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the node"
+)]
 struct Node {
     kind: NodeKind,
     depth: i32,

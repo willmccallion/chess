@@ -628,6 +628,10 @@ impl MoveList {
     pub const fn swap(&mut self, a: usize, b: usize) {
         self.moves.as_mut_slice().swap(a, b);
     }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Move> {
+        self.as_slice().iter()
+    }
 }
 
 impl<'a> IntoIterator for &'a MoveList {
@@ -635,7 +639,7 @@ impl<'a> IntoIterator for &'a MoveList {
     type IntoIter = std::slice::Iter<'a, Move>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
+        self.iter()
     }
 }
 
