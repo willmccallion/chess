@@ -199,13 +199,11 @@ fn generate_attacks_source(out_dir: &Path) {
     let mut rook_attack_table = Vec::new();
     let mut bishop_attack_table = Vec::new();
 
-    println!("cargo:warning=Generating Rook magic bitboard tables...");
     for sq in 0..64 {
         let (_, mut table) = find_magic_for_sq(sq, true, &mut rng);
         rook_attack_table.append(&mut table);
     }
 
-    println!("cargo:warning=Generating Bishop magic bitboard tables...");
     for sq in 0..64 {
         let (_, mut table) = find_magic_for_sq(sq, false, &mut rng);
         bishop_attack_table.append(&mut table);
@@ -238,11 +236,6 @@ fn generate_attacks_source(out_dir: &Path) {
         }
     }
     writeln!(f, "];").unwrap();
-
-    println!(
-        "cargo:warning=Wrote all attack tables to {}",
-        dest_path.display()
-    );
 }
 
 fn generate_zobrist_keys(out_dir: &Path) {
