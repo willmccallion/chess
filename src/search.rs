@@ -687,6 +687,21 @@ impl Search<'_> {
         ControlFlow::Continue((alpha, beta))
     }
 
+    /// Whether `m` is a capture quiescence skips: one that loses material, or
+    /// one whose victim, with a margin, cannot lift `stand_pat` to `alpha`.
+    fn is_futile_capture(&self, m: Move, stand_pat: i32, alpha: i32) -> bool {
+        if !m.is_capture() {
+            return false;
+        }
+        let victim_falls_short = m.promotion().is_none()
+            && self.board.piece_on[m.to.index()]
+                .kind()
+                .is_some_and(|kind| {
+                    stand_pat + PIECE_VALUES[kind as usize] + self.params.delta_margin < alpha
+                });
+        victim_falls_short || !see_ge(&self.board, m, 0)
+    }
+
     /// The TT's score for this node when `entry` is deep enough and its bound
     /// settles the window, crediting the TT move when that score fails high.
     fn tt_cutoff(&mut self, entry: TTEntry, depth: i32, alpha: i32, beta: i32) -> Option<i32> {
@@ -866,18 +881,9 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     let mut best_move = None;
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&s.board) {
-        if m.is_capture() && m.promotion().is_none() {
-            let captured = s.board.piece_on[m.to.index()];
-            if let Some(kind) = captured.kind()
-                && stand_pat + PIECE_VALUES[kind as usize] + s.params.delta_margin < alpha
-            {
-                continue;
-            }
-        }
-        if m.is_capture() && !see_ge(&s.board, m, 0) {
+        if s.is_futile_capture(m, stand_pat, alpha) {
             continue;
         }
-
         let Some(undo) = s.make_move(m, &legality) else {
             continue;
         };
