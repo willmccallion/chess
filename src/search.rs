@@ -595,6 +595,12 @@ impl Search<'_> {
         }
     }
 
+    /// The move that last refuted the previous move, played where it was.
+    fn counter_move(&self) -> Option<Move> {
+        let (capture, piece, to) = counter_move_slot(&self.board, self.previous_move()?);
+        self.td.counter_moves[capture][piece][to]
+    }
+
     /// The static evaluations of a node not in check, given its TT entry.
     fn evaluate_node(&mut self, tt_entry: Option<TTEntry>) -> NodeEval {
         let raw = self.static_eval(tt_entry.and_then(|e| e.eval()));
@@ -1444,11 +1450,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
 
     let killer1 = s.killers[s.ply][0];
     let killer2 = s.killers[s.ply][1];
-    let previous_move = s.previous_move();
-    let counter_move = previous_move.and_then(|prev| {
-        let (capture, piece, to) = counter_move_slot(&s.board, prev);
-        s.td.counter_moves[capture][piece][to]
-    });
+    let counter_move = s.counter_move();
 
     let mut picker = MovePicker::new(tt_move, killer1, killer2, counter_move);
     let continuations = s.continuation_keys();
