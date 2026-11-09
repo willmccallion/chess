@@ -68,69 +68,15 @@ impl Entry {
     }
 
     fn describe(self, data: &CoachData) -> String {
-        let profile = &data.profile;
         match self {
-            Self::Play => {
-                let level = profile.suggested_level();
-                format!(
-                    "A game against the coach · level {} is your match",
-                    level.number()
-                )
-            }
-            Self::Puzzles => {
-                let own = data.own_puzzles.len();
-                if data.lichess.is_empty() && own == 0 {
-                    "Tactics from your mistakes (import more: see Progress)".to_string()
-                } else {
-                    format!(
-                        "Rating {} · {} solved · {} from your games",
-                        profile.puzzle_rating.0, profile.puzzles_solved, own
-                    )
-                }
-            }
-            Self::Openings => {
-                let now = now();
-                let statuses: Vec<LineStatus> = all_lines()
-                    .map(|l| line_status(l, &data.schedules, now))
-                    .collect();
-                let learned = statuses
-                    .iter()
-                    .filter(|s| **s == LineStatus::Learned)
-                    .count();
-                let due = statuses.iter().filter(|s| **s == LineStatus::Due).count();
-                let due_text = if due > 0 {
-                    format!(" · {due} due")
-                } else {
-                    String::new()
-                };
-                format!(
-                    "Queen's Gambit and more · {learned} of {} learned{due_text}",
-                    statuses.len()
-                )
-            }
-            Self::Endgames => {
-                let done = DRILLS
-                    .iter()
-                    .filter(|d| {
-                        data.schedule(&TrainingItem::Endgame(d.id.to_string()))
-                            .is_some_and(|s| s.level > 0)
-                    })
-                    .count();
-                format!(
-                    "Checkmates and key endings · {done} of {} done",
-                    DRILLS.len()
-                )
-            }
-            Self::Review => match data.games.last() {
-                Some(game) => format!(
-                    "{} game{} · last: {} against level {}",
-                    data.games.len(),
-                    plural(data.games.len()),
-                    games_list::outcome_word(game.record.outcome()),
-                    game.record.level.number()
-                ),
-                None => "Your games, move by move, once you've played one".to_string(),
-            },
+            Self::Play => format!(
+                "A game against the coach · level {} is your match",
+                data.profile.suggested_level().number()
+            ),
+            Self::Puzzles => puzzles_summary(data),
+            Self::Openings => openings_summary(data),
+            Self::Endgames => endgames_summary(data),
+            Self::Review => games_summary(data),
             Self::Progress => "Ratings, strengths, weaknesses and what to work on".to_string(),
         }
     }
@@ -145,6 +91,64 @@ impl Entry {
             Self::Progress => Nav::Push(Box::new(progress::Progress::default())),
         }
     }
+}
+
+fn puzzles_summary(data: &CoachData) -> String {
+    let own = data.own_puzzles.len();
+    if data.lichess.is_empty() && own == 0 {
+        return "Tactics from your mistakes (import more: see Progress)".to_string();
+    }
+    let profile = &data.profile;
+    format!(
+        "Rating {} · {} solved · {} from your games",
+        profile.puzzle_rating.0, profile.puzzles_solved, own
+    )
+}
+
+fn openings_summary(data: &CoachData) -> String {
+    let now = now();
+    let statuses: Vec<LineStatus> = all_lines()
+        .map(|l| line_status(l, &data.schedules, now))
+        .collect();
+    let count = |status: LineStatus| statuses.iter().filter(|&&s| s == status).count();
+    let due = count(LineStatus::Due);
+    let due_text = if due > 0 {
+        format!(" · {due} due")
+    } else {
+        String::new()
+    };
+    format!(
+        "Queen's Gambit and more · {} of {} learned{due_text}",
+        count(LineStatus::Learned),
+        statuses.len()
+    )
+}
+
+fn endgames_summary(data: &CoachData) -> String {
+    let done = DRILLS
+        .iter()
+        .filter(|d| {
+            data.schedule(&TrainingItem::Endgame(d.id.to_string()))
+                .is_some_and(|s| s.level > 0)
+        })
+        .count();
+    format!(
+        "Checkmates and key endings · {done} of {} done",
+        DRILLS.len()
+    )
+}
+
+fn games_summary(data: &CoachData) -> String {
+    let Some(game) = data.games.last() else {
+        return "Your games, move by move, once you've played one".to_string();
+    };
+    format!(
+        "{} game{} · last: {} against level {}",
+        data.games.len(),
+        plural(data.games.len()),
+        games_list::outcome_word(game.record.outcome()),
+        game.record.level.number()
+    )
 }
 
 fn task_text(task: Task) -> String {
