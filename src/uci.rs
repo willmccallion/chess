@@ -107,7 +107,15 @@ fn stop_search(active: &mut Option<ActiveGo>, threads: &mut Option<SearchThreads
     match active.take() {
         Some(ActiveGo::Searching(search)) => {
             search.control.stop();
-            *threads = search.handle.join().ok();
+            *threads = match search.handle.join() {
+                Ok(returned) => Some(returned),
+                Err(_) => {
+                    // It died before answering, so the GUI still waits for a move.
+                    send("info string ERROR: the search thread panicked");
+                    send_bestmove(None, None);
+                    None
+                }
+            };
         }
         Some(ActiveGo::Holding(m)) => send_bestmove(Some(m), None),
         None => {}
