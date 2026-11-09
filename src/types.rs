@@ -229,6 +229,25 @@ impl Piece {
 
 impl Piece {
     /// The piece a FEN placement letter names, if it names one.
+    /// The piece's FEN letter, upper case for white; `.` for an empty square.
+    pub const fn to_char(self) -> char {
+        match self {
+            Self::Empty => '.',
+            Self::WP => 'P',
+            Self::WN => 'N',
+            Self::WB => 'B',
+            Self::WR => 'R',
+            Self::WQ => 'Q',
+            Self::WK => 'K',
+            Self::BP => 'p',
+            Self::BN => 'n',
+            Self::BB => 'b',
+            Self::BR => 'r',
+            Self::BQ => 'q',
+            Self::BK => 'k',
+        }
+    }
+
     pub const fn from_fen_char(c: char) -> Option<Self> {
         Some(match c {
             'P' => Piece::WP,
@@ -250,22 +269,7 @@ impl Piece {
 
 impl fmt::Display for Piece {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let c = match self {
-            Piece::Empty => '.',
-            Piece::WP => 'P',
-            Piece::WN => 'N',
-            Piece::WB => 'B',
-            Piece::WR => 'R',
-            Piece::WQ => 'Q',
-            Piece::WK => 'K',
-            Piece::BP => 'p',
-            Piece::BN => 'n',
-            Piece::BB => 'b',
-            Piece::BR => 'r',
-            Piece::BQ => 'q',
-            Piece::BK => 'k',
-        };
-        write!(f, "{c}")
+        write!(f, "{}", self.to_char())
     }
 }
 

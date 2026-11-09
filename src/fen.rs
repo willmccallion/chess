@@ -136,7 +136,7 @@ pub fn to_fen(b: &Board) -> String {
                     s.push(char::from(b'0' + empty as u8));
                     empty = 0;
                 }
-                s.push(format!("{p}").chars().next().unwrap());
+                s.push(p.to_char());
             }
         }
 
