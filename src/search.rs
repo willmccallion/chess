@@ -1971,6 +1971,14 @@ fn legal_moves(board: &Board) -> MoveList {
     moves
 }
 
+/// What a search thread does besides searching.
+#[derive(Clone, Copy)]
+enum ThreadRole<'a> {
+    /// Keeps the clock and the node limit, and reports each finished iteration.
+    Main(InfoReporter<'a>),
+    Helper,
+}
+
 /// Iterative deepening on one thread.
 fn iterative_deepening(
     board: &Board,
@@ -1978,9 +1986,9 @@ fn iterative_deepening(
     thread_data: &mut ThreadData,
     limits: &SearchLimits,
     control: Arc<SearchControl>,
-    reporter: Option<InfoReporter>,
+    role: ThreadRole,
 ) -> ThreadOutcome {
-    let is_main_thread = reporter.is_some();
+    let is_main_thread = matches!(role, ThreadRole::Main(_));
     let params = limits.params;
     let mut search = Search {
         board: board.clone(),
@@ -2042,7 +2050,7 @@ fn iterative_deepening(
         completed_score = Some(score);
 
         let best_move = search.root_best.map(|(m, _)| m);
-        if let (Some(report), Some(m)) = (reporter, best_move) {
+        if let (ThreadRole::Main(report), Some(m)) = (role, best_move) {
             report(&iteration_info(&search, depth, m, score));
         }
         let summary = IterationSummary {
@@ -2138,8 +2146,15 @@ pub fn search_reporting(
                     .name(format!("search-helper-{}", i + 1))
                     .stack_size(SEARCH_THREAD_STACK)
                     .spawn_scoped(scope, move || {
-                        iterative_deepening(board, tt, thread_data, limits, helper_control, None)
-                            .nodes
+                        iterative_deepening(
+                            board,
+                            tt,
+                            thread_data,
+                            limits,
+                            helper_control,
+                            ThreadRole::Helper,
+                        )
+                        .nodes
                     })
                     .ok()
             })
@@ -2157,7 +2172,7 @@ pub fn search_reporting(
                     main_td,
                     limits,
                     Arc::clone(&main_control),
-                    Some(reporter),
+                    ThreadRole::Main(reporter),
                 );
                 if limits.wait_for_stop {
                     wait_until_released(&main_control);
