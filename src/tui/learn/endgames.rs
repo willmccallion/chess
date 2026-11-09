@@ -276,6 +276,17 @@ impl EndgameDrill {
     }
 
     fn side_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = self.lesson_lines();
+        lines.extend(self.progress_lines());
+        lines.extend(self.state_lines());
+        if let Some(message) = &self.message {
+            lines.push(colored(message.clone(), BAD));
+        }
+        lines
+    }
+
+    /// The drill's goal and lesson, and the tips asked for so far.
+    fn lesson_lines(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
             heading(self.drill.name),
             Line::styled(self.drill.goal.describe(), Style::new().fg(ACCENT)),
@@ -293,6 +304,12 @@ impl EndgameDrill {
             lines.push(dim("Stuck? Press t for a tip."));
         }
         lines.push(Line::raw(""));
+        lines
+    }
+
+    /// The last moves played and how many were yours.
+    fn progress_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
         let recent: Vec<&str> = self
             .history
             .iter()
@@ -309,39 +326,35 @@ impl EndgameDrill {
             .target_moves
             .map_or_else(String::new, |t| format!(" (aim for {t})"));
         lines.push(dim(format!("Your moves: {}{target}", self.your_moves)));
+        lines
+    }
+
+    /// Whose move it is, or how the drill ended and what to do next.
+    fn state_lines(&self) -> Vec<Line<'static>> {
+        let verdict = |color| {
+            Line::styled(
+                self.verdict.clone().unwrap_or_default(),
+                Style::new().fg(color).add_modifier(Modifier::BOLD),
+            )
+        };
         match self.state {
-            State::Playing => {
-                let text = if self.your_turn() {
-                    "Your move"
-                } else {
-                    "The engine is defending…"
-                };
-                lines.push(heading(text));
-            }
+            State::Playing => vec![heading(if self.your_turn() {
+                "Your move"
+            } else {
+                "The engine is defending…"
+            })],
             State::Won => {
-                lines.push(Line::styled(
-                    self.verdict.clone().unwrap_or_default(),
-                    Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
-                ));
+                let mut lines = vec![verdict(GOOD)];
                 if let Some(target) = self.drill.target_moves
                     && self.your_moves > target
                 {
                     lines.push(dim("Now try to do it in fewer moves."));
                 }
                 lines.push(dim("r: try again   Esc: back"));
+                lines
             }
-            State::Lost => {
-                lines.push(Line::styled(
-                    self.verdict.clone().unwrap_or_default(),
-                    Style::new().fg(BAD).add_modifier(Modifier::BOLD),
-                ));
-                lines.push(dim("r: try again   t: tip   Esc: back"));
-            }
+            State::Lost => vec![verdict(BAD), dim("r: try again   t: tip   Esc: back")],
         }
-        if let Some(message) = &self.message {
-            lines.push(colored(message.clone(), BAD));
-        }
-        lines
     }
 }
 
