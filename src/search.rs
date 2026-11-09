@@ -1158,6 +1158,40 @@ impl Search<'_> {
     }
 }
 
+/// A node's window and the best score its moves have reached so far.
+#[derive(Clone, Copy)]
+struct NodeBounds {
+    alpha: i32,
+    beta: i32,
+    best_score: i32,
+}
+
+/// Searches a move after the first, already made on the board: with a null
+/// window at reduced depth, again at full depth if it beats alpha, and with
+/// the full window if it then lands inside a PV node's window.
+fn search_late_move(s: &mut Search, node_ply: usize, m: LateMove, bounds: NodeBounds) -> i32 {
+    let NodeBounds {
+        alpha,
+        beta,
+        best_score,
+    } = bounds;
+    let reduction = s.late_move_reduction(node_ply, m);
+    let reduced_depth = m.new_depth - reduction;
+    let mut score = -negamax(s, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut);
+    if score > alpha && reduction > 0 {
+        let deeper = score > best_score + s.params.deeper_margin + 2 * m.new_depth;
+        let shallower = score < best_score + s.params.shallower_margin;
+        let research_depth = m.new_depth + i32::from(deeper) - i32::from(shallower);
+        if research_depth > reduced_depth {
+            score = -negamax(s, -alpha - 1, -alpha, research_depth, m.node.opposite());
+        }
+    }
+    if m.is_pv && score > alpha && score < beta {
+        score = -negamax(s, -beta, -alpha, m.new_depth, NodeKind::All);
+    }
+    score
+}
+
 /// What a late move's reduction weighs about the move and its node.
 #[derive(Clone, Copy)]
 struct LateMove {
@@ -1168,6 +1202,7 @@ struct LateMove {
     quiet_history: i32,
     is_quiet: bool,
     is_pv: bool,
+    in_check: bool,
     node: NodeKind,
     improving: bool,
     killer_or_counter: bool,
@@ -1179,8 +1214,11 @@ impl Search<'_> {
     /// How many plies to reduce a late move by, with the move made on the
     /// board and `node_ply` the ply of the node it was played from.
     fn late_move_reduction(&self, node_ply: usize, m: LateMove) -> i32 {
-        let gives_check = self.board.in_check();
         let p = &self.params;
+        if m.depth < p.lmr_min_depth || m.in_check || (m.is_pv && !m.is_quiet) {
+            return 0;
+        }
+        let gives_check = self.board.in_check();
         let mut r_1024 = 1024
             * self
                 .lmr
@@ -1450,42 +1488,26 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         let score = if moves_searched == 1 {
             -negamax(s, -beta, -alpha, new_depth, node.first_child(is_pv))
         } else {
-            let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv)
-            {
-                s.late_move_reduction(
-                    node_ply,
-                    LateMove {
-                        depth,
-                        new_depth,
-                        moves_searched,
-                        quiet_history,
-                        is_quiet,
-                        is_pv,
-                        node,
-                        improving,
-                        killer_or_counter: is_killer_or_counter,
-                        tt_capture,
-                        tt_pv,
-                    },
-                )
-            } else {
-                0
+            let late_move = LateMove {
+                depth,
+                new_depth,
+                moves_searched,
+                quiet_history,
+                is_quiet,
+                is_pv,
+                in_check,
+                node,
+                improving,
+                killer_or_counter: is_killer_or_counter,
+                tt_capture,
+                tt_pv,
             };
-            let reduced_depth = new_depth - reduction;
-
-            let mut search_score = -negamax(s, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut);
-            if search_score > alpha && reduction > 0 {
-                let deeper = search_score > best_score + s.params.deeper_margin + 2 * new_depth;
-                let shallower = search_score < best_score + s.params.shallower_margin;
-                let research_depth = new_depth + i32::from(deeper) - i32::from(shallower);
-                if research_depth > reduced_depth {
-                    search_score = -negamax(s, -alpha - 1, -alpha, research_depth, node.opposite());
-                }
-            }
-            if is_pv && search_score > alpha && search_score < beta {
-                search_score = -negamax(s, -beta, -alpha, new_depth, NodeKind::All);
-            }
-            search_score
+            let bounds = NodeBounds {
+                alpha,
+                beta,
+                best_score,
+            };
+            search_late_move(s, node_ply, late_move, bounds)
         };
 
         s.unmake_move(m, undo);
