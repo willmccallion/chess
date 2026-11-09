@@ -1820,3 +1820,77 @@ mod time_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod mate_score_tests {
+    use super::*;
+
+    #[test]
+    fn a_tt_score_reads_back_as_stored_at_the_same_ply() {
+        let scores = [
+            0,
+            250,
+            -250,
+            MATE_THRESHOLD,
+            -MATE_THRESHOLD,
+            MATE_THRESHOLD + 1,
+            -MATE_THRESHOLD - 1,
+            MATE_SCORE - 1,
+            -MATE_SCORE + 1,
+        ];
+        for score in scores {
+            for ply in [0, 7, 120] {
+                assert_eq!(
+                    score_from_tt(score_to_tt(score, ply), ply),
+                    score,
+                    "{score} at {ply}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_mate_keeps_its_distance_from_the_node_whatever_ply_reads_it() {
+        let mate_two_below_ply_3 = MATE_SCORE - (3 + 2);
+        let mated_two_below_ply_3 = -MATE_SCORE + (3 + 2);
+
+        let stored = [mate_two_below_ply_3, mated_two_below_ply_3].map(|s| score_to_tt(s, 3));
+        let read_at_ply_10 = stored.map(|s| score_from_tt(s, 10));
+
+        assert_eq!(
+            read_at_ply_10,
+            [MATE_SCORE - (10 + 2), -MATE_SCORE + (10 + 2)]
+        );
+    }
+
+    #[test]
+    fn scores_short_of_mate_pass_through_the_tt_unchanged() {
+        for score in [MATE_THRESHOLD, -MATE_THRESHOLD, 0] {
+            assert_eq!(score_to_tt(score, 50), score);
+            assert_eq!(score_from_tt(score, 50), score);
+        }
+    }
+
+    #[test]
+    fn a_search_score_is_reported_as_moves_to_mate_or_centipawns() {
+        let reported = [
+            MATE_SCORE - 1,
+            MATE_SCORE - 3,
+            -MATE_SCORE,
+            -MATE_SCORE + 2,
+            cp_to_search_units(300),
+        ]
+        .map(Score::from_search);
+
+        assert_eq!(
+            reported,
+            [
+                Score::MateIn(1),
+                Score::MateIn(2),
+                Score::MateIn(0),
+                Score::MateIn(-1),
+                Score::Centipawns(300),
+            ]
+        );
+    }
+}
