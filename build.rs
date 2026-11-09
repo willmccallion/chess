@@ -76,7 +76,16 @@ fn slider_attacks(sq: usize, blockers: Bitboard, is_rook: bool) -> Bitboard {
     attacks
 }
 
-fn find_magic_for_sq(sq: usize, is_rook: bool, rng: &mut Rng) -> (u64, Vec<u64>) {
+/// A square's magic: blockers masked by `mask` and multiplied by `magic`,
+/// shifted right by `shift`, index `table`.
+struct FoundMagic {
+    mask: Bitboard,
+    magic: u64,
+    shift: u32,
+    table: Vec<Bitboard>,
+}
+
+fn find_magic_for_sq(sq: usize, is_rook: bool, rng: &mut Rng) -> FoundMagic {
     let mask = slider_mask(sq, is_rook);
     let bits = mask.count_ones();
     let table_size = 1 << bits;
@@ -118,7 +127,12 @@ fn find_magic_for_sq(sq: usize, is_rook: bool, rng: &mut Rng) -> (u64, Vec<u64>)
                 let index = (occ.wrapping_mul(magic) >> (64 - bits)) as usize;
                 table[index] = attacks[i];
             }
-            return (magic, table);
+            return FoundMagic {
+                mask,
+                magic,
+                shift: 64 - bits,
+                table,
+            };
         }
     }
 }
@@ -194,45 +208,40 @@ fn generate_attacks_source(out_dir: &Path) -> io::Result<()> {
     }
 
     let mut rng = Rng::new();
-    let mut rook_attack_table = Vec::new();
-    let mut bishop_attack_table = Vec::new();
-
-    for sq in 0..64 {
-        let (_, mut table) = find_magic_for_sq(sq, true, &mut rng);
-        rook_attack_table.append(&mut table);
-    }
-
-    for sq in 0..64 {
-        let (_, mut table) = find_magic_for_sq(sq, false, &mut rng);
-        bishop_attack_table.append(&mut table);
-    }
-
-    writeln!(
-        f,
-        "\npub static ROOK_ATTACKS: [Bitboard; {}] = [",
-        rook_attack_table.len()
-    )?;
-    for (i, &attack) in rook_attack_table.iter().enumerate() {
-        write!(f, "0x{attack:016X},")?;
-        if (i + 1) % 8 == 0 {
-            writeln!(f)?;
-        }
-    }
-    writeln!(f, "];")?;
-
-    writeln!(
-        f,
-        "\npub static BISHOP_ATTACKS: [Bitboard; {}] = [",
-        bishop_attack_table.len()
-    )?;
-    for (i, &attack) in bishop_attack_table.iter().enumerate() {
-        write!(f, "0x{attack:016X},")?;
-        if (i + 1) % 8 == 0 {
-            writeln!(f)?;
-        }
-    }
-    writeln!(f, "];")?;
+    let rooks: Vec<FoundMagic> = (0..64)
+        .map(|sq| find_magic_for_sq(sq, true, &mut rng))
+        .collect();
+    let bishops: Vec<FoundMagic> = (0..64)
+        .map(|sq| find_magic_for_sq(sq, false, &mut rng))
+        .collect();
+    write_slider_tables(&mut f, "ROOK", &rooks)?;
+    write_slider_tables(&mut f, "BISHOP", &bishops)?;
     Ok(())
+}
+
+/// Writes `{name}_MAGICS`, one `Magic` per square, and `{name}_ATTACKS`, the
+/// squares' tables end to end at the offsets the magics give.
+fn write_slider_tables(f: &mut impl Write, name: &str, found: &[FoundMagic]) -> io::Result<()> {
+    writeln!(f, "\nconst {name}_MAGICS: [Magic; 64] = [")?;
+    let mut offset = 0;
+    for square in found {
+        writeln!(
+            f,
+            "    Magic {{ mask: 0x{:X}, magic: 0x{:X}, shift: {}, offset: {offset} }},",
+            square.mask, square.magic, square.shift
+        )?;
+        offset += square.table.len();
+    }
+    writeln!(f, "];")?;
+
+    writeln!(f, "\npub static {name}_ATTACKS: [Bitboard; {offset}] = [")?;
+    for (i, attack) in found.iter().flat_map(|square| &square.table).enumerate() {
+        write!(f, "0x{attack:016X},")?;
+        if (i + 1) % 8 == 0 {
+            writeln!(f)?;
+        }
+    }
+    writeln!(f, "];")
 }
 
 fn generate_zobrist_keys(out_dir: &Path) -> io::Result<()> {
