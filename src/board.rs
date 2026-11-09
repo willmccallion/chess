@@ -45,6 +45,18 @@ pub struct Board {
     eval_state: EvalState,
 }
 
+/// The castling rights that survive a move from, or a capture on, `square`:
+/// all but the right whose rook starts there.
+const fn rights_kept_at(square: usize) -> u8 {
+    match square {
+        0 => !WQ_CASTLE,
+        7 => !WK_CASTLE,
+        56 => !BQ_CASTLE,
+        63 => !BK_CASTLE,
+        _ => !0,
+    }
+}
+
 impl Board {
     pub fn empty() -> Self {
         Self {
@@ -578,8 +590,14 @@ impl Board {
 
     #[inline]
     pub fn make_move(&mut self, m: Move) -> Undo {
-        let mut undo = Undo {
-            captured_piece: Piece::Empty,
+        let moving = self.piece_on[m.from.index()];
+        let captured_square = m.captured_square(self.turn);
+        let undo = Undo {
+            captured_piece: if m.is_capture() {
+                self.piece_on[captured_square]
+            } else {
+                Piece::Empty
+            },
             old_castle: self.castle,
             old_en_passant: self.en_passant,
             old_halfmove_clock: self.halfmove_clock,
@@ -587,10 +605,6 @@ impl Board {
             old_zobrist: self.zobrist,
         };
         self.plies_from_null += 1;
-
-        let from = m.from.index();
-        let to = m.to.index();
-        let moving = self.piece_on[from];
 
         let position = PositionView {
             piece_on: &self.piece_on,
@@ -601,60 +615,23 @@ impl Board {
         };
         self.eval_state.push_move(position, m);
 
-        if m.is_capture() {
-            let cap_sq = m.captured_square(self.turn);
-            undo.captured_piece = self.piece_on[cap_sq];
-        }
-
         if let Some(ep) = self.en_passant.take() {
             self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
-
-        self.zobrist ^= zobrist::ZOB.piece_key(moving, from);
-        self.piece_on[from] = Piece::Empty;
-        self.piece_bb[moving.index()] ^= 1u64 << from;
-
-        self.color_bb[self.turn as usize] ^= 1u64 << from;
-
-        if m.is_capture() {
-            let cap_sq = m.captured_square(self.turn);
-
-            let captured = undo.captured_piece;
-            if !captured.is_empty() {
-                self.zobrist ^= zobrist::ZOB.piece_key(captured, cap_sq);
-                self.piece_on[cap_sq] = Piece::Empty;
-                self.piece_bb[captured.index()] ^= 1u64 << cap_sq;
-                self.color_bb[self.turn.other() as usize] ^= 1u64 << cap_sq;
-            }
+        self.remove_piece(moving, m.from.index());
+        if !undo.captured_piece.is_empty() {
+            self.remove_piece(undo.captured_piece, captured_square);
         }
-
-        if let Some(pk) = m.promotion() {
-            let promoted_piece = Piece::from_kind(pk, self.turn);
-            self.piece_on[to] = promoted_piece;
-            self.piece_bb[promoted_piece.index()] |= 1u64 << to;
-            self.zobrist ^= zobrist::ZOB.piece_key(promoted_piece, to);
-        } else {
-            self.piece_on[to] = moving;
-            self.piece_bb[moving.index()] |= 1u64 << to;
-            self.zobrist ^= zobrist::ZOB.piece_key(moving, to);
-        }
-
-        self.color_bb[self.turn as usize] |= 1u64 << to;
-
+        let arriving = m
+            .promotion()
+            .map_or(moving, |kind| Piece::from_kind(kind, self.turn));
+        self.put_piece(arriving, m.to.index());
         if m.is_castle() {
-            let (rook_from, rook_to) = castling_rook_squares(from, to);
-            let rook_piece = self.piece_on[rook_from];
-            self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_from);
-            self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_to);
-            self.piece_on[rook_from] = Piece::Empty;
-            self.piece_on[rook_to] = rook_piece;
-
-            let rook_bb = (1u64 << rook_from) | (1u64 << rook_to);
-            self.piece_bb[rook_piece.index()] ^= rook_bb;
-
-            self.color_bb[self.turn as usize] ^= rook_bb;
+            let (rook_from, rook_to) = castling_rook_squares(m.from.index(), m.to.index());
+            let rook = self.piece_on[rook_from];
+            self.remove_piece(rook, rook_from);
+            self.put_piece(rook, rook_to);
         }
-
         if m.is_double_push() {
             let ep =
                 Square::from_file_rank(m.from.file(), u8::midpoint(m.from.rank(), m.to.rank()));
@@ -662,46 +639,59 @@ impl Board {
             self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
 
-        if matches!(moving.kind(), Some(PieceKind::Pawn)) || m.is_capture() {
-            self.halfmove_clock = 0;
+        self.halfmove_clock = if moving.kind() == Some(PieceKind::Pawn) || m.is_capture() {
+            0
         } else {
-            self.halfmove_clock += 1;
+            self.halfmove_clock + 1
+        };
+        self.update_castling_rights(moving, m);
+        self.all_pieces = self.color_bb[0] | self.color_bb[1];
+        self.zobrist ^= zobrist::ZOB.side;
+        if self.turn == Color::Black {
+            self.fullmove_number += 1;
         }
+        self.turn = self.turn.other();
+        self.history.push(self.zobrist);
+        undo
+    }
 
+    /// Takes `piece` off `square`, leaving `all_pieces` to the caller.
+    #[inline(always)]
+    fn remove_piece(&mut self, piece: Piece, square: usize) {
+        self.zobrist ^= zobrist::ZOB.piece_key(piece, square);
+        self.piece_on[square] = Piece::Empty;
+        self.piece_bb[piece.index()] ^= 1u64 << square;
+        if let Some(color) = piece.color() {
+            self.color_bb[color as usize] ^= 1u64 << square;
+        }
+    }
+
+    /// Puts `piece` on the empty `square`, leaving `all_pieces` to the caller.
+    #[inline(always)]
+    fn put_piece(&mut self, piece: Piece, square: usize) {
+        self.zobrist ^= zobrist::ZOB.piece_key(piece, square);
+        self.piece_on[square] = piece;
+        self.piece_bb[piece.index()] |= 1u64 << square;
+        if let Some(color) = piece.color() {
+            self.color_bb[color as usize] |= 1u64 << square;
+        }
+    }
+
+    /// Drops the rights `m` ends: a king move ends both of its side's, and a
+    /// move from or a capture on a rook's home square ends that rook's.
+    #[inline(always)]
+    fn update_castling_rights(&mut self, moving: Piece, m: Move) {
         self.zobrist ^= zobrist::ZOB.castle[(self.castle & 0xF) as usize];
         match moving {
             Piece::WK => self.castle &= !(WK_CASTLE | WQ_CASTLE),
             Piece::BK => self.castle &= !(BK_CASTLE | BQ_CASTLE),
             _ => {}
         }
-        match from {
-            0 => self.castle &= !WQ_CASTLE,
-            7 => self.castle &= !WK_CASTLE,
-            56 => self.castle &= !BQ_CASTLE,
-            63 => self.castle &= !BK_CASTLE,
-            _ => {}
-        }
+        self.castle &= rights_kept_at(m.from.index());
         if m.is_capture() {
-            match to {
-                0 => self.castle &= !WQ_CASTLE,
-                7 => self.castle &= !WK_CASTLE,
-                56 => self.castle &= !BQ_CASTLE,
-                63 => self.castle &= !BK_CASTLE,
-                _ => {}
-            }
+            self.castle &= rights_kept_at(m.to.index());
         }
         self.zobrist ^= zobrist::ZOB.castle[(self.castle & 0xF) as usize];
-
-        self.all_pieces = self.color_bb[0] | self.color_bb[1];
-        self.zobrist ^= zobrist::ZOB.side;
-        if self.turn == Color::Black {
-            self.fullmove_number += 1;
-        }
-
-        self.turn = self.turn.other();
-        self.history.push(self.zobrist);
-
-        undo
     }
 
     pub const fn position_view(&self) -> PositionView<'_> {
