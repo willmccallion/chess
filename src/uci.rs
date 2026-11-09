@@ -115,6 +115,21 @@ struct Options {
     search_params: SearchParams,
 }
 
+impl Options {
+    /// The options an engine starts with, evaluating with `eval`.
+    fn new(eval: EvalOptions) -> Self {
+        Self {
+            coach_level: None,
+            hash_mb: DEFAULT_HASH_MB,
+            threads: DEFAULT_THREADS,
+            own_book: true,
+            move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
+            eval,
+            search_params: SearchParams::default(),
+        }
+    }
+}
+
 /// Makes the evaluator the options name the one in use and returns whether
 /// it replaced another. A failure is reported and keeps the one in use, or
 /// exits when there is none: the engine cannot play without an evaluator.
@@ -415,15 +430,7 @@ fn print_eval(board: &mut Board) {
 
 pub fn run_uci(eval: EvalOptions) {
     let mut board = Board::from_fen(START_FEN).expect("valid startpos");
-    let mut options = Options {
-        coach_level: None,
-        hash_mb: DEFAULT_HASH_MB,
-        threads: DEFAULT_THREADS,
-        own_book: true,
-        move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
-        eval,
-        search_params: SearchParams::default(),
-    };
+    let mut options = Options::new(eval);
     let mut tt = SharedTransTable::new(options.hash_mb);
     let mut active: Option<ActiveGo> = None;
     let mut threads = Some(SearchThreads::new(options.threads));
