@@ -422,7 +422,8 @@ struct Search<'a> {
     stack: [StackEntry; MAX_PLY + 1],
     ply: usize,
     seldepth: usize,
-    /// Best root move found so far; only moves that raised alpha in a finished subtree.
+    /// Best root move found so far: the first one searched, then each that
+    /// raised alpha in a finished subtree.
     root_best: Option<(Move, i32)>,
     /// Nodes searched under each root move during this `go`.
     root_move_nodes: Vec<(Move, u64)>,
@@ -684,6 +685,8 @@ impl Search<'_> {
 
     /// Whether `m` is a capture quiescence skips: one that loses material, or
     /// one whose victim, with a margin, cannot lift `stand_pat` to `alpha`.
+    /// The victim's SEE value, near centipawns, is added to a score in search
+    /// units as it is; `delta_margin` was tuned that way.
     fn is_futile_capture(&self, m: Move, stand_pat: i32, alpha: i32) -> bool {
         if !m.is_capture() {
             return false;

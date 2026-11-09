@@ -130,9 +130,11 @@ const CORRECTION_BITS: u32 = 14;
 const CORRECTION_ENTRIES: usize = 1 << CORRECTION_BITS;
 const CORRECTION_GRAIN: i32 = 256;
 const CORRECTION_WEIGHT_SCALE: i32 = 256;
-const CORRECTION_LIMIT_CP: i32 = 128;
+/// The largest correction, in search units.
+const CORRECTION_LIMIT: i32 = 128;
 
-/// Learned static-eval error per pawn structure, in 1/256 centipawn units.
+/// Learned static-eval error per pawn structure, in 1/256 of the search's
+/// score unit (3/4 centipawn), which is what the search feeds it.
 pub struct CorrectionHistory {
     entries: Vec<[i32; CORRECTION_ENTRIES]>,
 }
@@ -149,7 +151,7 @@ impl CorrectionHistory {
         (pawn_key >> (64 - CORRECTION_BITS)) as usize
     }
 
-    /// Centipawns to add to the static eval of a position with this pawn structure.
+    /// Search units to add to the static eval of a position with this pawn structure.
     pub fn correction(&self, color: Color, pawn_key: u64) -> i32 {
         self.entries[color as usize][Self::slot(pawn_key)] / CORRECTION_GRAIN
     }
@@ -158,7 +160,7 @@ impl CorrectionHistory {
     /// trusting deeper searches more, up to `max_weight` (out of 256).
     pub fn update(&mut self, color: Color, pawn_key: u64, error: i32, depth: i32, max_weight: i32) {
         let weight = (depth + 1).min(max_weight);
-        let limit = CORRECTION_LIMIT_CP * CORRECTION_GRAIN;
+        let limit = CORRECTION_LIMIT * CORRECTION_GRAIN;
         let entry = &mut self.entries[color as usize][Self::slot(pawn_key)];
         let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
         let blended = (*entry * (CORRECTION_WEIGHT_SCALE - weight) + target * weight)
@@ -192,7 +194,7 @@ mod tests {
         }
         let saturated = correction.correction(Color::White, 99);
         assert!(
-            (CORRECTION_LIMIT_CP - 2..=CORRECTION_LIMIT_CP).contains(&saturated),
+            (CORRECTION_LIMIT - 2..=CORRECTION_LIMIT).contains(&saturated),
             "{saturated}"
         );
     }
