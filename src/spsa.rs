@@ -5,7 +5,9 @@
 //! Workers run pairs concurrently and update the shared estimate as results arrive
 //! (the schedule and step sizes follow OpenBench).
 
-use crate::game_runner::{GameClock, GameConfig, GameEndReason, GameResult, play_game};
+use crate::game_runner::{
+    GameClock, GameConfig, GameEndReason, GameResult, StartPosition, play_game,
+};
 use crate::search_params::{PARAM_SPECS, ParamSpec};
 use crate::tournament::spawn_and_init_pinned;
 use crate::uci_client::UciEngine;
@@ -62,7 +64,7 @@ pub fn parse_worker_groups(spec: &str) -> Result<Vec<WorkerGroup>, String> {
 pub struct SpsaConfig {
     pub engine: String,
     pub engine_options: Vec<(String, String)>,
-    pub openings: Vec<String>,
+    pub openings: Vec<StartPosition>,
     /// Planned number of game pairs (SPSA iterations).
     pub pairs: usize,
     pub base_time_ms: u64,
@@ -114,7 +116,7 @@ struct PairJob {
     plus: Vec<i32>,
     minus: Vec<i32>,
     signs: Vec<f64>,
-    opening: String,
+    opening: StartPosition,
 }
 
 impl Estimate {
@@ -215,7 +217,7 @@ fn play_pair(
         white_clock: clock,
         black_clock: clock,
         max_moves: MAX_MOVES,
-        start_fen: Some(job.opening.clone()),
+        start: job.opening.clone(),
     };
     let first = play_game(plus, minus, &game);
     let second = play_game(minus, plus, &game);
@@ -405,7 +407,7 @@ mod tests {
         let config = SpsaConfig {
             engine: String::new(),
             engine_options: Vec::new(),
-            openings: vec![crate::types::START_FEN.to_string()],
+            openings: vec![StartPosition::parse(crate::types::START_FEN).unwrap()],
             pairs: 100,
             base_time_ms: 0,
             increment_ms: 0,

@@ -1,5 +1,8 @@
-use crate::game_runner::{GameClock, GameConfig, GameEndReason, GameResult, play_game};
+use crate::game_runner::{
+    GameClock, GameConfig, GameEndReason, GameResult, StartPosition, play_game,
+};
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
+use crate::types::START_FEN;
 use crate::uci_client::UciEngine;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -18,9 +21,10 @@ pub struct TournamentConfig {
     pub e2_clock: GameClock,
     pub rounds: usize,
     pub concurrency: usize,
-    pub start_fen: Option<String>,
+    /// Where every game starts when there are no openings.
+    pub start: StartPosition,
     /// Start positions; game pair `p` plays `openings[p % len]` with colors swapped.
-    pub openings: Vec<String>,
+    pub openings: Vec<StartPosition>,
     pub sprt: Option<SprtConfig>,
 }
 
@@ -30,12 +34,12 @@ pub fn engine_name(name: Option<String>, path: &str) -> String {
 }
 
 impl TournamentConfig {
-    fn start_fen_for_game(&self, game_idx: usize) -> Option<String> {
+    fn start_for_game(&self, game_idx: usize) -> &StartPosition {
         if self.openings.is_empty() {
-            return self.start_fen.clone();
+            return &self.start;
         }
         let pair_idx = game_idx / 2;
-        Some(self.openings[pair_idx % self.openings.len()].clone())
+        &self.openings[pair_idx % self.openings.len()]
     }
 }
 
@@ -431,8 +435,8 @@ pub fn run_tournament(mut config: TournamentConfig) {
             "Openings: {} positions, each played as a color-swapped pair",
             config.openings.len()
         );
-    } else if let Some(ref fen) = config.start_fen {
-        println!("Start FEN: {}", fen);
+    } else if config.start.fen() != START_FEN {
+        println!("Start FEN: {}", config.start.fen());
     }
     if let Some(sprt) = config.sprt {
         println!(
@@ -500,7 +504,7 @@ pub fn run_tournament(mut config: TournamentConfig) {
                     white_clock,
                     black_clock,
                     max_moves: 300,
-                    start_fen: config.start_fen_for_game(game_idx),
+                    start: config.start_for_game(game_idx).clone(),
                 };
 
                 let (white, black) = if e1_is_white {
@@ -672,7 +676,14 @@ pub fn run_tournament(mut config: TournamentConfig) {
 mod tests {
     use super::*;
 
-    fn config_with(openings: &[&str], start_fen: Option<&str>) -> TournamentConfig {
+    const OPENING_A: &str = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+    const OPENING_B: &str = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1";
+
+    fn position(fen: &str) -> StartPosition {
+        StartPosition::parse(fen).unwrap()
+    }
+
+    fn config_with(openings: &[&str], start: &str) -> TournamentConfig {
         let clock = GameClock {
             base_ms: 1000,
             increment_ms: 10,
@@ -688,8 +699,8 @@ mod tests {
             e2_clock: clock,
             rounds: 1,
             concurrency: 1,
-            start_fen: start_fen.map(str::to_string),
-            openings: openings.iter().map(|o| (*o).to_string()).collect(),
+            start: position(start),
+            openings: openings.iter().map(|o| position(o)).collect(),
             sprt: None,
         }
     }
@@ -753,19 +764,24 @@ mod tests {
 
     #[test]
     fn game_pairs_cycle_through_the_openings() {
-        let config = config_with(&["a", "b"], None);
+        let config = config_with(&[OPENING_A, OPENING_B], START_FEN);
 
-        let fens: Vec<_> = (0..6).map(|game| config.start_fen_for_game(game)).collect();
+        let fens: Vec<_> = (0..6)
+            .map(|game| config.start_for_game(game).fen())
+            .collect();
 
-        let expected = ["a", "a", "b", "b", "a", "a"].map(|o| Some(o.to_string()));
-        assert_eq!(fens, expected);
+        assert_eq!(
+            fens,
+            [
+                OPENING_A, OPENING_A, OPENING_B, OPENING_B, OPENING_A, OPENING_A
+            ]
+        );
     }
 
     #[test]
     fn without_openings_every_game_starts_from_the_start_fen() {
-        let config = config_with(&[], Some("fen"));
+        let config = config_with(&[], OPENING_B);
 
-        assert_eq!(config.start_fen_for_game(5), Some("fen".to_string()));
-        assert_eq!(config_with(&[], None).start_fen_for_game(0), None);
+        assert_eq!(config.start_for_game(5).fen(), OPENING_B);
     }
 }

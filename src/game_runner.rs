@@ -37,11 +37,35 @@ pub struct GameClock {
     pub increment_ms: u64,
 }
 
+/// A position a game can start from: a FEN that reads as a legal board.
+#[derive(Clone)]
+pub struct StartPosition {
+    fen: String,
+    board: Board,
+}
+
+impl StartPosition {
+    /// The position `fen` describes, or why it describes none.
+    pub fn parse(fen: &str) -> Result<Self, String> {
+        let board =
+            Board::from_fen(fen).map_err(|e| format!("invalid start position '{fen}': {e}"))?;
+        Ok(Self {
+            fen: fen.to_string(),
+            board,
+        })
+    }
+
+    /// The position as a FEN.
+    pub fn fen(&self) -> &str {
+        &self.fen
+    }
+}
+
 pub struct GameConfig {
     pub white_clock: GameClock,
     pub black_clock: GameClock,
     pub max_moves: usize,
-    pub start_fen: Option<String>,
+    pub start: StartPosition,
 }
 
 impl std::fmt::Display for GameEndReason {
@@ -110,19 +134,8 @@ pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConf
         eprintln!("Warning: black engine new_game failed: {}", e);
     }
 
-    let fen_str = config.start_fen.as_deref().unwrap_or(START_FEN);
-    let mut board = match Board::from_fen(fen_str) {
-        Ok(b) => b,
-        Err(_) => {
-            return GameOutcome {
-                result: GameResult::Draw,
-                reason: GameEndReason::EngineCrash,
-                move_count: 0,
-            };
-        }
-    };
-
-    let is_startpos = config.start_fen.is_none();
+    let mut board = config.start.board.clone();
+    let start_fen_arg = (config.start.fen() != START_FEN).then(|| config.start.fen());
     let mut wtime = config.white_clock.base_ms as i64;
     let mut btime = config.black_clock.base_ms as i64;
     let (winc, binc) = (
@@ -157,7 +170,6 @@ pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConf
         };
 
         // Send position
-        let start_fen_arg = if is_startpos { None } else { Some(fen_str) };
         if engine.set_position(start_fen_arg, &moves).is_err() {
             let result = if board.turn == Color::White {
                 GameResult::BlackWin

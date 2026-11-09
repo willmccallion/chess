@@ -1,5 +1,6 @@
 //! Loading start positions for engine matches from EPD opening suites.
 
+use crate::game_runner::StartPosition;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -20,15 +21,27 @@ pub fn epd_to_fen(line: &str) -> Option<String> {
     Some(format!("{} 0 1", fields.join(" ")))
 }
 
-/// Picks `count` openings uniformly at random (reservoir sampling) in shuffled order.
-pub fn sample_openings(path: &str, count: usize, seed: u64) -> Result<Vec<String>, String> {
+/// Picks `count` openings from the EPD file at `path` uniformly at random
+/// (reservoir sampling) in shuffled order.
+pub fn sample_openings(path: &str, count: usize, seed: u64) -> Result<Vec<StartPosition>, String> {
     let file = File::open(path).map_err(|e| format!("cannot open openings '{path}': {e}"))?;
+    sample_from(BufReader::new(file), path, count, seed)
+}
+
+/// [`sample_openings`] from the EPD lines of `epd`, which `source` names in
+/// errors.
+fn sample_from(
+    epd: impl BufRead,
+    source: &str,
+    count: usize,
+    seed: u64,
+) -> Result<Vec<StartPosition>, String> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut reservoir: Vec<String> = Vec::with_capacity(count);
     let mut seen = 0usize;
 
-    for line in BufReader::new(file).lines() {
-        let line = line.map_err(|e| format!("reading openings '{path}': {e}"))?;
+    for line in epd.lines() {
+        let line = line.map_err(|e| format!("reading openings '{source}': {e}"))?;
         let Some(fen) = epd_to_fen(&line) else {
             continue;
         };
@@ -44,10 +57,13 @@ pub fn sample_openings(path: &str, count: usize, seed: u64) -> Result<Vec<String
     }
 
     if reservoir.is_empty() {
-        return Err(format!("no positions found in openings file '{path}'"));
+        return Err(format!("no positions found in openings file '{source}'"));
     }
     reservoir.shuffle(&mut rng);
-    Ok(reservoir)
+    reservoir
+        .iter()
+        .map(|fen| StartPosition::parse(fen).map_err(|e| format!("{source}: {e}")))
+        .collect()
 }
 
 #[cfg(test)]
@@ -60,6 +76,28 @@ mod tests {
         assert_eq!(
             epd_to_fen(line).as_deref(),
             Some("rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 1")
+        );
+    }
+
+    #[test]
+    fn an_opening_that_is_no_legal_position_is_refused_by_name() {
+        let epd = "8/8/8/8/8/8/8/8 w - -\n";
+
+        let refused = sample_from(epd.as_bytes(), "suite.epd", 4, 1).err();
+
+        assert!(refused.is_some_and(|e| e.starts_with("suite.epd: invalid start position")));
+    }
+
+    #[test]
+    fn every_sampled_opening_reads_as_a_position() {
+        let epd = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6\n# skip\n";
+
+        let sampled = sample_from(epd.as_bytes(), "suite.epd", 4, 1).unwrap();
+
+        let fens: Vec<&str> = sampled.iter().map(StartPosition::fen).collect();
+        assert_eq!(
+            fens,
+            ["rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 1"]
         );
     }
 

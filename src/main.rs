@@ -2,7 +2,7 @@ use chess::bench;
 use chess::board::Board;
 use chess::compare::{CompareConfig, run_compare};
 use chess::eval;
-use chess::game_runner::GameClock;
+use chess::game_runner::{GameClock, StartPosition};
 use chess::openings;
 use chess::perft::{divide, perft};
 use chess::search_params::PARAM_SPECS;
@@ -602,7 +602,8 @@ fn main() {
                 },
                 rounds,
                 concurrency,
-                start_fen: fen,
+                start: StartPosition::parse(fen.as_deref().unwrap_or(START_FEN))
+                    .unwrap_or_else(|e| exit_with_error(&e)),
                 openings,
                 sprt,
             });
@@ -623,7 +624,10 @@ fn main() {
             let fens = match (fen.is_empty(), epd) {
                 (false, _) => fen,
                 (true, Some(path)) => openings::sample_openings(&path, count, seed)
-                    .unwrap_or_else(|e| exit_with_error(&e)),
+                    .unwrap_or_else(|e| exit_with_error(&e))
+                    .iter()
+                    .map(|position| position.fen().to_string())
+                    .collect(),
                 (true, None) => bench::BENCH_FENS.iter().map(|f| f.to_string()).collect(),
             };
             let engine_go =
