@@ -75,6 +75,7 @@ fn a_quiet_move_on_the_hundredth_half_move_draws() {
     assert_eq!(result.score, Some(Score::Centipawns(0)));
 }
 
+/// One position, from scratch, through `search_reporting`.
 #[test]
 fn searching_a_stateless_board_matches_searching_a_stateful_one() {
     load_stockfish_nets();
@@ -100,6 +101,8 @@ fn searching_a_stateless_board_matches_searching_a_stateful_one() {
     );
 }
 
+/// Positions a stateless board reaches by making moves, searched in turn by
+/// one `Searcher` that keeps its state between them.
 #[test]
 fn reviewing_stateless_game_positions_matches_reviewing_stateful_ones() {
     load_stockfish_nets();
