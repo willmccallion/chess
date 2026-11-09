@@ -58,6 +58,20 @@ impl Board {
         self.piece_bb[king_piece.index()].trailing_zeros()
     }
 
+    /// Whether the side to move may castle as `castling` describes, its
+    /// king's own square aside: the right is kept, the rook is home, the
+    /// squares between are empty and none the king crosses is attacked.
+    #[inline]
+    fn can_castle(&self, castling: &Castling) -> bool {
+        (self.castle & castling.right) != 0
+            && (self.all_pieces & castling.between) == 0
+            && self.piece_on[castling.rook_from()] == castling.rook
+            && !castling
+                .king_path
+                .iter()
+                .any(|&sq| self.is_square_attacked(sq, self.turn.other()))
+    }
+
     /// Whether the side to move's king is attacked; a board without that
     /// king is not in check.
     #[inline(always)]
@@ -427,67 +441,11 @@ impl Board {
             return;
         }
 
-        if white {
-            if (self.castle & WK_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 5) | (1u64 << 6))) == 0
-                && self.piece_on[7] == Piece::WR
-                && !self.is_square_attacked(5, Color::Black)
-                && !self.is_square_attacked(6, Color::Black)
-            {
+        for castling in &CASTLINGS[self.turn as usize] {
+            if self.can_castle(castling) {
                 out.push(Move {
-                    from: 4,
-                    to: 6,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-
-            if (self.castle & WQ_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 1) | (1u64 << 2) | (1u64 << 3))) == 0
-                && self.piece_on[0] == Piece::WR
-                && !self.is_square_attacked(3, Color::Black)
-                && !self.is_square_attacked(2, Color::Black)
-            {
-                out.push(Move {
-                    from: 4,
-                    to: 2,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-        } else {
-            if (self.castle & BK_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 61) | (1u64 << 62))) == 0
-                && self.piece_on[63] == Piece::BR
-                && !self.is_square_attacked(61, Color::White)
-                && !self.is_square_attacked(62, Color::White)
-            {
-                out.push(Move {
-                    from: 60,
-                    to: 62,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-
-            if (self.castle & BQ_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 57) | (1u64 << 58) | (1u64 << 59))) == 0
-                && self.piece_on[56] == Piece::BR
-                && !self.is_square_attacked(59, Color::White)
-                && !self.is_square_attacked(58, Color::White)
-            {
-                out.push(Move {
-                    from: 60,
-                    to: 58,
+                    from: castling.king_from,
+                    to: castling.king_to,
                     capture: false,
                     en_passant: false,
                     double_push: false,
@@ -817,65 +775,11 @@ impl Board {
             return;
         }
 
-        if white {
-            if (self.castle & WK_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 5) | (1u64 << 6))) == 0
-                && self.piece_on[7] == Piece::WR
-                && !self.is_square_attacked(5, Color::Black)
-                && !self.is_square_attacked(6, Color::Black)
-            {
+        for castling in &CASTLINGS[self.turn as usize] {
+            if self.can_castle(castling) {
                 out.push(Move {
-                    from: 4,
-                    to: 6,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-            if (self.castle & WQ_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 1) | (1u64 << 2) | (1u64 << 3))) == 0
-                && self.piece_on[0] == Piece::WR
-                && !self.is_square_attacked(3, Color::Black)
-                && !self.is_square_attacked(2, Color::Black)
-            {
-                out.push(Move {
-                    from: 4,
-                    to: 2,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-        } else {
-            if (self.castle & BK_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 61) | (1u64 << 62))) == 0
-                && self.piece_on[63] == Piece::BR
-                && !self.is_square_attacked(61, Color::White)
-                && !self.is_square_attacked(62, Color::White)
-            {
-                out.push(Move {
-                    from: 60,
-                    to: 62,
-                    capture: false,
-                    en_passant: false,
-                    double_push: false,
-                    castle: true,
-                    promotion: None,
-                });
-            }
-            if (self.castle & BQ_CASTLE) != 0
-                && (self.all_pieces & ((1u64 << 57) | (1u64 << 58) | (1u64 << 59))) == 0
-                && self.piece_on[56] == Piece::BR
-                && !self.is_square_attacked(59, Color::White)
-                && !self.is_square_attacked(58, Color::White)
-            {
-                out.push(Move {
-                    from: 60,
-                    to: 58,
+                    from: castling.king_from,
+                    to: castling.king_to,
                     capture: false,
                     en_passant: false,
                     double_push: false,
@@ -1040,51 +944,15 @@ impl Board {
         // Must replicate every check from gen_leapers/gen_leaper_quiets
         // because make_move blindly moves the rook from a computed square.
         if m.castle {
-            let white = self.turn == Color::White;
-            let expected_from: usize = if white { 4 } else { 60 };
-            if from != expected_from {
+            let castlings = &CASTLINGS[self.turn as usize];
+            let Some(castling) = castlings
+                .iter()
+                .find(|c| c.king_from == m.from && c.king_to == m.to)
+            else {
                 return false;
-            }
-            if self.is_square_attacked(from as i32, self.turn.other()) {
-                return false;
-            }
-            return if white {
-                match to {
-                    6 => {
-                        (self.castle & WK_CASTLE) != 0
-                            && self.piece_on[7] == Piece::WR
-                            && (self.all_pieces & ((1u64 << 5) | (1u64 << 6))) == 0
-                            && !self.is_square_attacked(5, Color::Black)
-                            && !self.is_square_attacked(6, Color::Black)
-                    }
-                    2 => {
-                        (self.castle & WQ_CASTLE) != 0
-                            && self.piece_on[0] == Piece::WR
-                            && (self.all_pieces & ((1u64 << 1) | (1u64 << 2) | (1u64 << 3))) == 0
-                            && !self.is_square_attacked(3, Color::Black)
-                            && !self.is_square_attacked(2, Color::Black)
-                    }
-                    _ => false,
-                }
-            } else {
-                match to {
-                    62 => {
-                        (self.castle & BK_CASTLE) != 0
-                            && self.piece_on[63] == Piece::BR
-                            && (self.all_pieces & ((1u64 << 61) | (1u64 << 62))) == 0
-                            && !self.is_square_attacked(61, Color::White)
-                            && !self.is_square_attacked(62, Color::White)
-                    }
-                    58 => {
-                        (self.castle & BQ_CASTLE) != 0
-                            && self.piece_on[56] == Piece::BR
-                            && (self.all_pieces & ((1u64 << 57) | (1u64 << 58) | (1u64 << 59))) == 0
-                            && !self.is_square_attacked(59, Color::White)
-                            && !self.is_square_attacked(58, Color::White)
-                    }
-                    _ => false,
-                }
             };
+            return !self.is_square_attacked(from as i32, self.turn.other())
+                && self.can_castle(castling);
         }
 
         // ── Target square ───────────────────────────────────────────
@@ -1245,11 +1113,7 @@ impl Board {
         }
 
         if m.castle {
-            let (rook_from, rook_to) = if to > from {
-                (to + 1, to - 1)
-            } else {
-                (to - 2, to + 1)
-            };
+            let (rook_from, rook_to) = castling_rook_squares(from, to);
             let rook_piece = self.piece_on[rook_from];
             self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_from);
             self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_to);
@@ -1435,11 +1299,7 @@ impl Board {
         }
 
         if m.castle {
-            let (rook_from, rook_to) = if to > from {
-                (to + 1, to - 1)
-            } else {
-                (to - 2, to + 1)
-            };
+            let (rook_from, rook_to) = castling_rook_squares(from, to);
             let rook = self.piece_on[rook_to];
             self.piece_on[rook_from] = rook;
             self.piece_on[rook_to] = Piece::Empty;

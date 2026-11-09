@@ -424,6 +424,77 @@ pub struct Undo {
     pub old_zobrist: ZKey,
 }
 
+/// Where the rook moves from and to when the king castles from
+/// `king_from` to `king_to`.
+#[inline(always)]
+pub const fn castling_rook_squares(king_from: usize, king_to: usize) -> (usize, usize) {
+    if king_to > king_from {
+        (king_to + 1, king_to - 1)
+    } else {
+        (king_to - 2, king_to + 1)
+    }
+}
+
+/// One of the four castlings: the right it needs and the squares it uses.
+pub struct Castling {
+    pub right: u8,
+    pub king_from: u8,
+    pub king_to: u8,
+    pub rook: Piece,
+    /// The squares between the king and the rook, which must be empty.
+    pub between: Bitboard,
+    /// The squares the king crosses and lands on, which must not be attacked.
+    pub king_path: [i32; 2],
+}
+
+impl Castling {
+    /// Where the castling rook starts.
+    #[inline(always)]
+    pub const fn rook_from(&self) -> usize {
+        castling_rook_squares(self.king_from as usize, self.king_to as usize).0
+    }
+}
+
+/// Each colour's castlings, king side first, indexed by `Color`.
+pub const CASTLINGS: [[Castling; 2]; 2] = [
+    [
+        Castling {
+            right: WK_CASTLE,
+            king_from: 4,
+            king_to: 6,
+            rook: Piece::WR,
+            between: (1 << 5) | (1 << 6),
+            king_path: [5, 6],
+        },
+        Castling {
+            right: WQ_CASTLE,
+            king_from: 4,
+            king_to: 2,
+            rook: Piece::WR,
+            between: (1 << 1) | (1 << 2) | (1 << 3),
+            king_path: [3, 2],
+        },
+    ],
+    [
+        Castling {
+            right: BK_CASTLE,
+            king_from: 60,
+            king_to: 62,
+            rook: Piece::BR,
+            between: (1 << 61) | (1 << 62),
+            king_path: [61, 62],
+        },
+        Castling {
+            right: BQ_CASTLE,
+            king_from: 60,
+            king_to: 58,
+            rook: Piece::BR,
+            between: (1 << 57) | (1 << 58) | (1 << 59),
+            king_path: [59, 58],
+        },
+    ],
+];
+
 pub const WK_CASTLE: u8 = 1 << 0;
 pub const WQ_CASTLE: u8 = 1 << 1;
 pub const BK_CASTLE: u8 = 1 << 2;

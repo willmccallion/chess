@@ -7,7 +7,7 @@ pub mod own;
 pub mod stockfish;
 
 use crate::board::Board;
-use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody};
+use crate::types::{Bitboard, Color, Move, Piece, StackVec, UpdateBody, castling_rook_squares};
 use bootstrap::{Bootstrap, NoState};
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -62,11 +62,7 @@ pub fn record_piece_changes(
         add: true,
     });
     if m.castle {
-        let (rook_from, rook_to) = if to > from {
-            (to + 1, to - 1)
-        } else {
-            (to - 2, to + 1)
-        };
+        let (rook_from, rook_to) = castling_rook_squares(from, to);
         let rook = position.piece_on[rook_from];
         out.push(UpdateBody {
             piece: rook,

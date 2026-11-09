@@ -7,7 +7,7 @@
 
 use crate::eval::PositionView;
 use crate::magics;
-use crate::types::{Bitboard, Color, Move, Piece, PieceKind, StackVec};
+use crate::types::{Bitboard, Color, Move, Piece, PieceKind, StackVec, castling_rook_squares};
 
 /// One attacker-target relation entering or leaving the position.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -224,11 +224,7 @@ pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
     replay.put(to, placed, out);
 
     if m.castle {
-        let (rook_from, rook_to) = if to > from {
-            (to + 1, to - 1)
-        } else {
-            (to - 2, to + 1)
-        };
+        let (rook_from, rook_to) = castling_rook_squares(from, to);
         let rook = replay.piece_at(rook_from);
         replay.remove(rook_from, out);
         replay.put(rook_to, rook, out);
