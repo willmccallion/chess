@@ -767,6 +767,7 @@ mod tests {
     use crate::coach::store::{Ending, Store};
     use crate::game_runner::GameResult;
     use crate::notation::parse_san_line;
+    use crate::types::Centipawns;
     use crate::types::START_FEN;
 
     /// Fool's mate, reviewed with the engine's lines filled in by hand.
@@ -792,9 +793,9 @@ mod tests {
         .unwrap();
         let mut screen = ReviewScreen::new(id, &data);
         let lines: [(Score, &[&str]); 4] = [
-            (Score::Centipawns(20), &["e4", "e5"]),
-            (Score::Centipawns(-10), &["e5"]),
-            (Score::Centipawns(-60), &["e4", "Nc6"]),
+            (Score::Centipawns(Centipawns::new(20)), &["e4", "e5"]),
+            (Score::Centipawns(Centipawns::new(-10)), &["e5"]),
+            (Score::Centipawns(Centipawns::new(-60)), &["e4", "Nc6"]),
             (Score::MateIn(1), &["Qh4#"]),
         ];
         while let Some(job) = screen.job(&data) {

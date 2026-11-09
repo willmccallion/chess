@@ -1,5 +1,6 @@
 //! Side-by-side analysis of positions by this engine and a reference engine (e.g. Stockfish).
 
+use crate::types::Centipawns;
 use crate::uci_client::{Analysis, EngineError, UciEngine, UciScore, engine_display_name};
 use std::path::PathBuf;
 
@@ -16,8 +17,8 @@ pub struct CompareConfig {
 struct Comparison {
     engine: Analysis,
     reference: Analysis,
-    engine_static_cp: Option<i32>,
-    reference_static_cp: Option<i32>,
+    engine_static: Option<Centipawns>,
+    reference_static: Option<Centipawns>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -33,7 +34,7 @@ struct Summary {
     mean_abs_static_diff: f64,
 }
 
-fn centipawn_pair(a: Option<UciScore>, b: Option<UciScore>) -> Option<(i32, i32)> {
+fn centipawn_pair(a: Option<UciScore>, b: Option<UciScore>) -> Option<(Centipawns, Centipawns)> {
     match (a?, b?) {
         (UciScore::Centipawns(x), UciScore::Centipawns(y)) => Some((x, y)),
         _ => None,
@@ -46,13 +47,13 @@ fn summarize(comparisons: &[Comparison]) -> Summary {
         .filter(|c| c.engine.best_move.is_some() && c.engine.best_move == c.reference.best_move)
         .count();
 
-    let score_pairs: Vec<(i32, i32)> = comparisons
+    let score_pairs: Vec<(Centipawns, Centipawns)> = comparisons
         .iter()
         .filter_map(|c| centipawn_pair(c.engine.score, c.reference.score))
         .collect();
-    let static_pairs: Vec<(i32, i32)> = comparisons
+    let static_pairs: Vec<(Centipawns, Centipawns)> = comparisons
         .iter()
-        .filter_map(|c| Some((c.engine_static_cp?, c.reference_static_cp?)))
+        .filter_map(|c| Some((c.engine_static?, c.reference_static?)))
         .collect();
 
     let mean = |values: &mut dyn Iterator<Item = f64>, n: usize| {
@@ -68,11 +69,11 @@ fn summarize(comparisons: &[Comparison]) -> Summary {
         best_move_matches,
         scored_pairs: score_pairs.len(),
         mean_abs_score_diff: mean(
-            &mut score_pairs.iter().map(|(e, r)| f64::from((e - r).abs())),
+            &mut score_pairs.iter().map(|&(e, r)| f64::from((e - r).abs())),
             score_pairs.len(),
         ),
         mean_signed_score_diff: mean(
-            &mut score_pairs.iter().map(|(e, r)| f64::from(e - r)),
+            &mut score_pairs.iter().map(|&(e, r)| f64::from(e - r)),
             score_pairs.len(),
         ),
         same_sign_scores: score_pairs
@@ -81,7 +82,7 @@ fn summarize(comparisons: &[Comparison]) -> Summary {
             .count(),
         static_pairs: static_pairs.len(),
         mean_abs_static_diff: mean(
-            &mut static_pairs.iter().map(|(e, r)| f64::from((e - r).abs())),
+            &mut static_pairs.iter().map(|&(e, r)| f64::from((e - r).abs())),
             static_pairs.len(),
         ),
     }
@@ -95,7 +96,7 @@ fn format_score(score: Option<UciScore>) -> String {
     }
 }
 
-fn format_static(cp: Option<i32>) -> String {
+fn format_static(cp: Option<Centipawns>) -> String {
     cp.map_or_else(|| "-".to_string(), |v| format!("{v:+}"))
 }
 
@@ -122,8 +123,8 @@ fn print_row(index: usize, fen: &str, c: &Comparison) {
         c.reference.depth,
         format_diff(c.engine.score, c.reference.score),
         marker,
-        format_static(c.engine_static_cp),
-        format_static(c.reference_static_cp),
+        format_static(c.engine_static),
+        format_static(c.reference_static),
     );
     println!("     {fen}");
 }
@@ -177,8 +178,8 @@ pub fn run_compare(config: &CompareConfig) -> Result<(), EngineError> {
     let mut comparisons = Vec::with_capacity(config.fens.len());
     for (index, fen) in config.fens.iter().enumerate() {
         let comparison = Comparison {
-            engine_static_cp: engine.static_eval_white_cp(fen)?,
-            reference_static_cp: reference.static_eval_white_cp(fen)?,
+            engine_static: engine.static_eval_white(fen)?,
+            reference_static: reference.static_eval_white(fen)?,
             engine: engine.analyse(fen, &config.engine_go)?,
             reference: reference.analyse(fen, &config.reference_go)?,
         };
@@ -208,8 +209,8 @@ mod tests {
         Comparison {
             engine,
             reference,
-            engine_static_cp: None,
-            reference_static_cp: None,
+            engine_static: None,
+            reference_static: None,
         }
     }
 
@@ -217,12 +218,12 @@ mod tests {
     fn summary_counts_matching_moves_and_score_gaps() {
         let comparisons = [
             comparison(
-                analysis(Some(UciScore::Centipawns(50)), "e2e4"),
-                analysis(Some(UciScore::Centipawns(30)), "e2e4"),
+                analysis(Some(UciScore::Centipawns(Centipawns::new(50))), "e2e4"),
+                analysis(Some(UciScore::Centipawns(Centipawns::new(30))), "e2e4"),
             ),
             comparison(
-                analysis(Some(UciScore::Centipawns(-10)), "d2d4"),
-                analysis(Some(UciScore::Centipawns(20)), "c2c4"),
+                analysis(Some(UciScore::Centipawns(Centipawns::new(-10))), "d2d4"),
+                analysis(Some(UciScore::Centipawns(Centipawns::new(20))), "c2c4"),
             ),
         ];
 
@@ -240,7 +241,7 @@ mod tests {
     fn mate_scores_are_excluded_from_centipawn_statistics() {
         let comparisons = [comparison(
             analysis(Some(UciScore::Mate(3)), "a1a8"),
-            analysis(Some(UciScore::Centipawns(900)), "a1a8"),
+            analysis(Some(UciScore::Centipawns(Centipawns::new(900))), "a1a8"),
         )];
 
         let summary = summarize(&comparisons);

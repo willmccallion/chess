@@ -14,6 +14,7 @@ use crate::game_runner::{GameEndReason, GameResult, position_outcome, win_for};
 use crate::notation::{numbered, san_of};
 use crate::search::Score;
 use crate::time::TimeBudget;
+use crate::types::Centipawns;
 use crate::types::{Color, Move};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -27,7 +28,7 @@ const ENGINE_MOVE_MS: u64 = 700;
 /// In a drill to win, giving up after this many of your moves.
 const MOVE_LIMIT: usize = 60;
 /// While holding a draw, the drill is lost once the engine thinks it is this far ahead.
-const LOST_HOLD_CP: i32 = 500;
+const LOST_HOLD: Centipawns = Centipawns::new(500);
 const WIDTH: u16 = 84;
 
 const KEYS: &[(&str, &str)] = &[
@@ -434,7 +435,7 @@ impl Screen for EndgameDrill {
         };
         let engine_winning = match outcome.score {
             Some(Score::MateIn(n)) => n > 0,
-            Some(Score::Centipawns(cp)) => cp >= LOST_HOLD_CP,
+            Some(Score::Centipawns(cp)) => cp >= LOST_HOLD,
             None => false,
         };
         self.play(m);

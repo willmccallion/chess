@@ -760,7 +760,7 @@ pub fn draw_key_help(frame: &mut Frame, keys: &[(&str, &str)]) {
 
 pub fn format_score(score: Score) -> String {
     match score {
-        Score::Centipawns(cp) => format!("{:+.2}", f64::from(cp) / 100.0),
+        Score::Centipawns(cp) => format!("{:+.2}", cp.pawns()),
         Score::MateIn(moves) if moves >= 0 => format!("#{moves}"),
         Score::MateIn(moves) => format!("#-{}", -moves),
     }
@@ -804,6 +804,7 @@ pub fn format_clock(ms: i64) -> String {
 mod tests {
     use super::*;
     use crate::tui::app::PlayConfig;
+    use crate::types::Centipawns;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -864,8 +865,14 @@ mod tests {
 
     #[test]
     fn scores_and_clocks_read_naturally() {
-        assert_eq!(format_score(Score::Centipawns(35)), "+0.35");
-        assert_eq!(format_score(Score::Centipawns(-120)), "-1.20");
+        assert_eq!(
+            format_score(Score::Centipawns(Centipawns::new(35))),
+            "+0.35"
+        );
+        assert_eq!(
+            format_score(Score::Centipawns(Centipawns::new(-120))),
+            "-1.20"
+        );
         assert_eq!(format_score(Score::MateIn(3)), "#3");
         assert_eq!(format_score(Score::MateIn(-2)), "#-2");
         assert_eq!(format_clock(305_000), "5:05");
@@ -874,8 +881,8 @@ mod tests {
 
     #[test]
     fn the_bar_favours_the_side_ahead() {
-        assert!((white_share(Score::Centipawns(0)) - 0.5).abs() < 1e-9);
-        assert!(white_share(Score::Centipawns(300)) > 0.7);
+        assert!((white_share(Score::Centipawns(Centipawns::ZERO)) - 0.5).abs() < 1e-9);
+        assert!(white_share(Score::Centipawns(Centipawns::new(300))) > 0.7);
         assert_eq!(white_share(Score::MateIn(-1)), 0.0);
     }
 

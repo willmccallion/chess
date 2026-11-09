@@ -6,10 +6,10 @@ use super::judgement::{
 use crate::board::Board;
 use crate::notation::{line_in_san, numbered, san_of};
 use crate::see::see;
-use crate::types::{Color, Move, MoveList, PieceKind, Square};
+use crate::types::{Centipawns, Color, Move, MoveList, PieceKind, Square};
 
-/// A capture whose exchange nets at least this much (centipawns) wins material outright.
-const WINNING_CAPTURE_SEE: i32 = 150;
+/// A capture whose exchange nets at least this much wins material outright.
+const WINNING_CAPTURE_SEE: Centipawns = Centipawns::new(150);
 /// Material (in points) a line must win before it counts as winning material.
 const MATERIAL_WIN_POINTS: i32 = 2;
 /// How far along an engine line material changes are followed.
@@ -485,7 +485,7 @@ mod tests {
     use crate::search::Score;
 
     fn cp(cp: i32) -> Eval {
-        Eval::Score(Score::Centipawns(cp))
+        Eval::Score(Score::Centipawns(Centipawns::new(cp)))
     }
 
     fn analysed(board: &Board, eval: Eval, line: &[&str]) -> AnalysedPosition {

@@ -232,6 +232,7 @@ mod tests {
     use crate::coach::store::{Ending, GameId, GameRecord};
     use crate::game_runner::GameResult;
     use crate::notation::parse_san_line;
+    use crate::types::Centipawns;
     use crate::types::{Color, START_FEN};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -308,9 +309,9 @@ mod tests {
         let game = played_game(&mut data);
         let mut screen = review::ReviewScreen::new(game, &data);
         let analysis: [(Score, &str); 4] = [
-            (Score::Centipawns(20), "e4"),
-            (Score::Centipawns(-10), "e5"),
-            (Score::Centipawns(-60), "e4"),
+            (Score::Centipawns(Centipawns::new(20)), "e4"),
+            (Score::Centipawns(Centipawns::new(-10)), "e5"),
+            (Score::Centipawns(Centipawns::new(-60)), "e4"),
             (Score::MateIn(1), "Qh4#"),
         ];
         while let Some(job) = screen.job(&data) {

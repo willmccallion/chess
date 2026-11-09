@@ -11,7 +11,7 @@ use crate::search::{
 };
 use crate::search_params::SearchParams;
 use crate::tt::SharedTransTable;
-use crate::types::{Color, Move, MoveList};
+use crate::types::{Centipawns, Color, Move, MoveList};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::OpenOptions;
@@ -24,13 +24,13 @@ use std::time::{Duration, Instant};
 
 const MAX_DEPTH: Depth = Depth::new(64);
 /// Openings the search already scores beyond this are too lopsided to learn from.
-const MAX_OPENING_SCORE_CP: i32 = 500;
+const MAX_OPENING_SCORE: Centipawns = Centipawns::new(500);
 /// Positions scored beyond this are not kept; mate scores never are.
-const MAX_KEPT_SCORE_CP: i32 = 3000;
+const MAX_KEPT_SCORE: Centipawns = Centipawns::new(3000);
 const MAX_GAME_PLIES: usize = 400;
-const WIN_SCORE_CP: i32 = 2000;
+const WIN_SCORE: Centipawns = Centipawns::new(2000);
 const WIN_PLIES: usize = 4;
-const DRAW_SCORE_CP: i32 = 10;
+const DRAW_SCORE: Centipawns = Centipawns::new(10);
 const DRAW_PLIES: usize = 8;
 const DRAW_MIN_PLY: usize = 60;
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -51,7 +51,7 @@ pub struct DatagenConfig {
 
 /// One finished game's kept positions and result.
 struct GameRecord {
-    positions: Vec<(String, i32)>,
+    positions: Vec<(String, Centipawns)>,
     result: GameResult,
 }
 
@@ -149,7 +149,7 @@ fn write_game(out: &mut impl Write, game: &GameRecord) -> io::Result<()> {
 /// The engine's verdict on a position, from White's side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Verdict {
-    Centipawns(i32),
+    Centipawns(Centipawns),
     /// White mates (true) or is mated (false).
     Mate(bool),
 }
@@ -158,7 +158,7 @@ impl Verdict {
     fn from_search(score: Score, turn: Color) -> Self {
         let sign = if turn == Color::White { 1 } else { -1 };
         match score {
-            Score::Centipawns(cp) => Self::Centipawns(sign * cp),
+            Score::Centipawns(cp) => Self::Centipawns(cp * sign),
             Score::MateIn(moves) => Self::Mate((moves > 0) == (turn == Color::White)),
         }
     }
@@ -177,7 +177,7 @@ impl Adjudicator {
     fn observe(&mut self, verdict: Verdict, ply: usize) -> Option<GameResult> {
         let leader = match verdict {
             Verdict::Mate(white_wins) => Some(white_wins),
-            Verdict::Centipawns(cp) if cp.abs() >= WIN_SCORE_CP => Some(cp > 0),
+            Verdict::Centipawns(cp) if cp.abs() >= WIN_SCORE => Some(cp > Centipawns::ZERO),
             Verdict::Centipawns(_) => None,
         };
         if leader.is_some() && leader == self.winning_side {
@@ -194,7 +194,7 @@ impl Adjudicator {
             });
         }
 
-        let quiet = matches!(verdict, Verdict::Centipawns(cp) if cp.abs() <= DRAW_SCORE_CP);
+        let quiet = matches!(verdict, Verdict::Centipawns(cp) if cp.abs() <= DRAW_SCORE);
         self.quiet_streak = if quiet && ply >= DRAW_MIN_PLY {
             self.quiet_streak + 1
         } else {
@@ -244,7 +244,7 @@ fn play_training_game(
     let plies = config.random_plies + rng.gen_range(0..=1);
     let mut board = random_opening(rng, plies)?;
     let (_, opening_score) = think(&board, tt, threads, config.nodes)?;
-    if !matches!(opening_score, Score::Centipawns(cp) if cp.abs() <= MAX_OPENING_SCORE_CP) {
+    if !matches!(opening_score, Score::Centipawns(cp) if cp.abs() <= MAX_OPENING_SCORE) {
         return None;
     }
 
@@ -259,7 +259,7 @@ fn play_training_game(
         // A best move that changes material teaches the network little about
         // quiet play.
         if let Verdict::Centipawns(cp) = verdict
-            && cp.abs() <= MAX_KEPT_SCORE_CP
+            && cp.abs() <= MAX_KEPT_SCORE
             && best.is_quiet()
             && !board.in_check()
         {
@@ -319,14 +319,14 @@ mod tests {
     fn a_lasting_big_advantage_wins_and_a_brief_one_does_not() {
         let mut lasting = Adjudicator::default();
         let mut brief = Adjudicator::default();
-        let big = Verdict::Centipawns(-2500);
+        let big = Verdict::Centipawns(Centipawns::new(-2500));
 
         let lasting_results: Vec<_> = (0..WIN_PLIES)
             .map(|ply| lasting.observe(big, ply))
             .collect();
         brief.observe(big, 0);
         brief.observe(big, 1);
-        let after_recovery = brief.observe(Verdict::Centipawns(50), 2);
+        let after_recovery = brief.observe(Verdict::Centipawns(Centipawns::new(50)), 2);
 
         assert_eq!(lasting_results.last(), Some(&Some(GameResult::BlackWin)));
         assert!(lasting_results[..WIN_PLIES - 1].iter().all(Option::is_none));
@@ -337,7 +337,7 @@ mod tests {
     fn level_endgames_are_drawn_only_after_the_opening_phase() {
         let mut early = Adjudicator::default();
         let mut late = Adjudicator::default();
-        let level = Verdict::Centipawns(3);
+        let level = Verdict::Centipawns(Centipawns::new(3));
 
         let early_result = (0..DRAW_PLIES)
             .map(|ply| early.observe(level, ply))
@@ -363,8 +363,8 @@ mod tests {
             Verdict::Mate(true)
         );
         assert_eq!(
-            Verdict::from_search(Score::Centipawns(40), Color::Black),
-            Verdict::Centipawns(-40)
+            Verdict::from_search(Score::Centipawns(Centipawns::new(40)), Color::Black),
+            Verdict::Centipawns(Centipawns::new(-40))
         );
     }
 
@@ -400,7 +400,7 @@ mod tests {
             assert_eq!(fields.len(), 3, "{line}");
             Board::from_fen(fields[0]).unwrap();
             let score: i16 = fields[1].parse().unwrap();
-            assert!(i32::from(score).abs() <= MAX_KEPT_SCORE_CP);
+            assert!(i32::from(score).abs() <= MAX_KEPT_SCORE.get());
             assert!(["1.0", "0.5", "0.0"].contains(&fields[2]));
         }
     }

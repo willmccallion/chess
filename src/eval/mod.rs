@@ -7,7 +7,7 @@ pub mod own;
 pub mod stockfish;
 
 use crate::board::Board;
-use crate::types::{Bitboard, Color, Move, Piece, StackVec, castling_rook_squares};
+use crate::types::{Bitboard, Centipawns, Color, Move, Piece, StackVec, castling_rook_squares};
 use bootstrap::{Bootstrap, NoState};
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -155,7 +155,7 @@ pub trait Evaluator {
     fn new_state(&self) -> Self::State;
 
     /// Centipawns for the side to move in `position`, which `state` describes.
-    fn evaluate(&self, state: &mut Self::State, position: PositionView) -> i32;
+    fn evaluate(&self, state: &mut Self::State, position: PositionView) -> Centipawns;
 }
 
 /// The evaluators this build can use.
@@ -446,9 +446,9 @@ impl IncrementalState for EvalState {
 }
 
 /// Static evaluation in centipawns for the side to move; 0 if no evaluator is loaded.
-pub fn evaluate(board: &mut Board) -> i32 {
+pub fn evaluate(board: &mut Board) -> Centipawns {
     let Some(active) = active() else {
-        return 0;
+        return Centipawns::ZERO;
     };
     match active {
         Active::Bootstrap => Bootstrap.evaluate(&mut NoState, board.position_view()),
@@ -469,7 +469,7 @@ fn evaluate_with<E: Evaluator>(
     board: &mut Board,
     stored: fn(&mut EvalState) -> Option<&mut E::State>,
     wrap: fn(E::State) -> EvalState,
-) -> i32 {
+) -> Centipawns {
     let (state, position) = board.eval_state_and_view();
     if let Some(stack) = stored(state) {
         net.evaluate(stack, position)

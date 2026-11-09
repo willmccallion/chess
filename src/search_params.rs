@@ -1,6 +1,7 @@
 //! Search parameters that can be changed at runtime, for SPSA tuning.
 
 use crate::search::Depth;
+use crate::types::Centipawns;
 
 /// A tunable parameter: its UCI option name, default, range and SPSA perturbation size.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -36,6 +37,16 @@ impl ParamValue for Depth {
 
     fn raw(self) -> i32 {
         self.plies()
+    }
+}
+
+impl ParamValue for Centipawns {
+    fn from_raw(raw: i32) -> Self {
+        Self::new(raw)
+    }
+
+    fn raw(self) -> i32 {
+        self.get()
     }
 }
 
@@ -90,8 +101,8 @@ search_params! {
     futility_base("FutilityBase"): i32 = 97, 30..=250, step 10;
     futility_per_depth("FutilityPerDepth"): i32 = 99, 30..=250, step 10;
     lmp_base("LmpBase"): i32 = 5, 1..=8, step 1;
-    see_quiet_margin("SeeQuietMargin"): i32 = 51, 10..=150, step 5;
-    see_capture_margin("SeeCaptureMargin"): i32 = 90, 20..=200, step 8;
+    see_quiet_margin("SeeQuietMargin"): Centipawns = 51, 10..=150, step 5;
+    see_capture_margin("SeeCaptureMargin"): Centipawns = 90, 20..=200, step 8;
     history_pruning_margin("HistoryPruningMargin"): i32 = 2071, 512..=6000, step 200;
     delta_margin("DeltaMargin"): i32 = 208, 50..=500, step 20;
     probcut_margin("ProbcutMargin"): i32 = 193, 80..=400, step 15;

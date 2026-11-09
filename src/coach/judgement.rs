@@ -2,12 +2,13 @@
 
 use crate::board::Board;
 use crate::search::Score;
+use crate::types::Centipawns;
 use crate::types::{Color, PieceKind};
 
 /// Lichess's fit of expected score to centipawns.
 const WIN_CHANCE_SLOPE: f64 = 0.003_682_08;
 /// Scores beyond this many centipawns are all but decided; clamping keeps them comparable.
-const CP_CLAMP: i32 = 1000;
+const CP_CLAMP: Centipawns = Centipawns::new(1000);
 
 /// Win-chance drops (in percentage points) at which a move counts as each kind of error.
 const INACCURACY_DROP: f64 = 5.0;
@@ -29,7 +30,7 @@ pub enum Eval {
 }
 
 impl Eval {
-    pub const DRAWN: Self = Self::Score(Score::Centipawns(0));
+    pub const DRAWN: Self = Self::Score(Score::Centipawns(Centipawns::ZERO));
 
     /// The chance the side to move wins (draws counting half).
     pub fn win_chance(self) -> WinChance {
@@ -75,7 +76,7 @@ impl Eval {
                     format!("#-{}", -moves)
                 }
             }
-            Self::Score(Score::Centipawns(cp)) => format!("{:+.1}", f64::from(cp * sign) / 100.0),
+            Self::Score(Score::Centipawns(cp)) => format!("{:+.1}", (cp * sign).pawns()),
         }
     }
 }
@@ -266,14 +267,16 @@ mod tests {
 
     #[test]
     fn a_piece_up_is_a_large_but_not_certain_edge() {
-        let chance = Eval::Score(Score::Centipawns(300)).win_chance().percent();
+        let chance = Eval::Score(Score::Centipawns(Centipawns::new(300)))
+            .win_chance()
+            .percent();
 
         assert!((70.0..85.0).contains(&chance), "{chance}");
     }
 
     #[test]
     fn the_opponents_chance_is_the_complement() {
-        let eval = Eval::Score(Score::Centipawns(150));
+        let eval = Eval::Score(Score::Centipawns(Centipawns::new(150)));
 
         let mine = eval.win_chance_for(Color::White, Color::White).percent();
         let theirs = eval.win_chance_for(Color::White, Color::Black).percent();
@@ -303,7 +306,7 @@ mod tests {
     #[test]
     fn scores_read_from_whites_side() {
         assert_eq!(
-            Eval::Score(Score::Centipawns(130)).text_for_white(Color::Black),
+            Eval::Score(Score::Centipawns(Centipawns::new(130))).text_for_white(Color::Black),
             "-1.3"
         );
         assert_eq!(

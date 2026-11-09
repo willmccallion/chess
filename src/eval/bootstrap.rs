@@ -2,7 +2,7 @@
 //! Its piece-square terms come from simple formulas rather than tuned tables.
 
 use super::{Evaluator, IncrementalState, PositionView};
-use crate::types::{Color, Move, Piece, PieceKind};
+use crate::types::{Centipawns, Color, Move, Piece, PieceKind};
 
 /// Middlegame and endgame values of each piece kind, pawn first.
 const MATERIAL: [(i32, i32); 6] = [
@@ -118,7 +118,7 @@ impl Evaluator for Bootstrap {
         NoState
     }
 
-    fn evaluate(&self, _state: &mut NoState, position: PositionView) -> i32 {
+    fn evaluate(&self, _state: &mut NoState, position: PositionView) -> Centipawns {
         let (white_mg, white_eg, white_phase) = side_score(position, Color::White);
         let (black_mg, black_eg, black_phase) = side_score(position, Color::Black);
         let phase = (white_phase + black_phase).min(MAX_PHASE);
@@ -130,7 +130,7 @@ impl Evaluator for Bootstrap {
         } else {
             -white_relative
         };
-        side_relative + TEMPO
+        Centipawns::new(side_relative + TEMPO)
     }
 }
 
@@ -142,7 +142,9 @@ mod tests {
 
     fn eval(fen: &str) -> i32 {
         let board = Board::from_fen(fen).unwrap();
-        Bootstrap.evaluate(&mut NoState, board.position_view())
+        Bootstrap
+            .evaluate(&mut NoState, board.position_view())
+            .get()
     }
 
     #[test]

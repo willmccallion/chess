@@ -9,6 +9,7 @@ use crate::search::{
 use crate::search_params::SearchParams;
 use crate::time::TimeBudget;
 use crate::tt::SharedTransTable;
+use crate::types::Centipawns;
 use crate::types::{Move, MoveList};
 use std::sync::Arc;
 
@@ -112,7 +113,7 @@ impl Searcher {
             child.make_move(m);
             let score = match position_outcome(&child) {
                 Some((_, GameEndReason::Checkmate)) => Score::MateIn(1),
-                Some(_) => Score::Centipawns(0),
+                Some(_) => Score::Centipawns(Centipawns::ZERO),
                 None => {
                     let child_control = SearchControl::new(None);
                     let outcome = self.search(
@@ -121,7 +122,7 @@ impl Searcher {
                         &child_control,
                         &|_| {},
                     );
-                    for_parent(outcome.score.unwrap_or(Score::Centipawns(0)))
+                    for_parent(outcome.score.unwrap_or(Score::Centipawns(Centipawns::ZERO)))
                 }
             };
             if control.is_stopped() {
@@ -134,7 +135,7 @@ impl Searcher {
 }
 
 /// A child position's score seen from the side that moved into it.
-const fn for_parent(child: Score) -> Score {
+fn for_parent(child: Score) -> Score {
     match child {
         Score::Centipawns(cp) => Score::Centipawns(-cp),
         Score::MateIn(moves) if moves > 0 => Score::MateIn(-moves),
@@ -148,7 +149,10 @@ mod tests {
 
     #[test]
     fn child_scores_flip_to_the_parents_side() {
-        assert_eq!(for_parent(Score::Centipawns(40)), Score::Centipawns(-40));
+        assert_eq!(
+            for_parent(Score::Centipawns(Centipawns::new(40))),
+            Score::Centipawns(Centipawns::new(-40))
+        );
         assert_eq!(for_parent(Score::MateIn(2)), Score::MateIn(-2));
         assert_eq!(for_parent(Score::MateIn(-1)), Score::MateIn(2));
     }

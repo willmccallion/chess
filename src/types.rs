@@ -1,5 +1,6 @@
 use std::fmt;
 use std::mem::MaybeUninit;
+use std::ops::{Add, Mul, Neg, Sub};
 
 pub type Bitboard = u64;
 pub type ZKey = u64;
@@ -110,6 +111,82 @@ pub fn squares(mut bb: Bitboard) -> impl Iterator<Item = Square> {
         bb &= bb - 1;
         Some(square)
     })
+}
+
+/// A score in hundredths of a pawn.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+pub struct Centipawns(i32);
+
+impl Centipawns {
+    pub const ZERO: Self = Self(0);
+
+    pub const fn new(cp: i32) -> Self {
+        Self(cp)
+    }
+
+    pub const fn get(self) -> i32 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+
+    /// 1 when positive, -1 when negative, 0 when level.
+    pub const fn signum(self) -> i32 {
+        self.0.signum()
+    }
+
+    /// In pawns, for display and win-chance curves.
+    pub fn pawns(self) -> f64 {
+        f64::from(self.0) / 100.0
+    }
+}
+
+impl From<Centipawns> for f64 {
+    fn from(cp: Centipawns) -> Self {
+        Self::from(cp.0)
+    }
+}
+
+impl Add for Centipawns {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self(self.0 + other.0)
+    }
+}
+
+impl Sub for Centipawns {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        Self(self.0 - other.0)
+    }
+}
+
+impl Neg for Centipawns {
+    type Output = Self;
+
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+impl Mul<i32> for Centipawns {
+    type Output = Self;
+
+    fn mul(self, factor: i32) -> Self {
+        Self(self.0 * factor)
+    }
+}
+
+/// The bare number, honouring the formatter's flags (`{:+}`).
+impl fmt::Display for Centipawns {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
 }
 
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";

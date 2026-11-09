@@ -3,7 +3,7 @@ use crate::history::{ContinuationKey, Histories, captured_kind};
 use crate::magics;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::types::{
-    Bitboard, Color, MAX_MOVES, Move, MoveList, Piece, PieceKind, Square, StackVec,
+    Bitboard, Centipawns, Color, MAX_MOVES, Move, MoveList, Piece, PieceKind, Square, StackVec,
 };
 
 const MAX_BAD_CAPTURES: usize = 64;
@@ -141,12 +141,13 @@ impl OrderingContext<'_> {
 
     fn capture_score(&self, board: &Board, m: Move) -> i32 {
         let promotion_value = match m.promotion() {
-            Some(PieceKind::Queen) => PIECE_VALUES[PieceKind::Queen as usize],
+            Some(PieceKind::Queen) => PIECE_VALUES[PieceKind::Queen as usize].get(),
             _ => 0,
         };
         let piece = board.piece_on()[m.from.index()];
         let victim_score = captured_kind(board.piece_on()[m.to.index()], m).map_or(0, |victim| {
-            MVV_SCALE * PIECE_VALUES[victim as usize] + self.histories.capture(piece, m.to, victim)
+            MVV_SCALE * PIECE_VALUES[victim as usize].get()
+                + self.histories.capture(piece, m.to, victim)
         });
         victim_score + MVV_SCALE * promotion_value
     }
@@ -289,7 +290,7 @@ impl MovePicker {
                         if Some(m) == self.tt_move {
                             continue;
                         }
-                        if !see_ge(board, m, 0) {
+                        if !see_ge(board, m, Centipawns::ZERO) {
                             if self.bad_captures.len() < MAX_BAD_CAPTURES {
                                 self.bad_captures.push(m);
                             }
@@ -372,8 +373,10 @@ impl QMovePicker {
         loop {
             match self.stage {
                 QStage::GenCaptures => {
-                    self.scored
-                        .fill(|moves| board.generate_captures(moves), |m| see(board, m));
+                    self.scored.fill(
+                        |moves| board.generate_captures(moves),
+                        |m| see(board, m).get(),
+                    );
                     self.stage = QStage::Captures;
                 }
 

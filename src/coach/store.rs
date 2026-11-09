@@ -13,6 +13,7 @@ use crate::board::Board;
 use crate::fen::FenError;
 use crate::game_runner::{GameEndReason, GameResult};
 use crate::search::Score;
+use crate::types::Centipawns;
 use crate::types::{Color, Move};
 use crate::uci_io::{format_uci, parse_uci_move};
 use std::fs::{self, File, OpenOptions};
@@ -349,7 +350,7 @@ fn eval_from_token(token: &str) -> Option<Eval> {
     let (kind, value) = token.split_once(':')?;
     let value: i32 = value.parse().ok()?;
     match kind {
-        "cp" => Some(Eval::Score(Score::Centipawns(value))),
+        "cp" => Some(Eval::Score(Score::Centipawns(Centipawns::new(value)))),
         "mate" => Some(Eval::Score(Score::MateIn(value))),
         _ => None,
     }
@@ -616,7 +617,7 @@ mod tests {
         let start = Board::from_fen(START_FEN).unwrap();
         let analysis = vec![
             AnalysedPosition {
-                eval: Eval::Score(Score::Centipawns(25)),
+                eval: Eval::Score(Score::Centipawns(Centipawns::new(25))),
                 best_line: parse_san_line(&start, &["e4", "e5"]).unwrap(),
             },
             AnalysedPosition {

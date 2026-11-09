@@ -1,9 +1,16 @@
 use crate::board::Board;
 use crate::magics;
-use crate::types::{Bitboard, Color, Move, Piece, PieceKind};
+use crate::types::{Bitboard, Centipawns, Color, Move, Piece, PieceKind};
 
 /// Exchange values indexed by `PieceKind` (P, N, B, R, Q, K).
-pub const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
+pub const PIECE_VALUES: [Centipawns; 6] = [
+    Centipawns::new(100),
+    Centipawns::new(320),
+    Centipawns::new(330),
+    Centipawns::new(500),
+    Centipawns::new(900),
+    Centipawns::new(20000),
+];
 
 #[inline(always)]
 fn piece_value(p: Piece) -> i32 {
@@ -41,9 +48,9 @@ fn least_valuable_attacker(
     })
 }
 
-pub fn see(b: &Board, mov: Move) -> i32 {
+pub fn see(b: &Board, mov: Move) -> Centipawns {
     if !mov.is_capture() {
-        return 0;
+        return Centipawns::ZERO;
     }
 
     let from_sq = mov.from.index();
@@ -95,11 +102,11 @@ pub fn see(b: &Board, mov: Move) -> i32 {
         gain[gain_idx - 1] = -(-gain[gain_idx - 1]).max(gain[gain_idx]);
     }
 
-    gain[0]
+    Centipawns::new(gain[0])
 }
 
 const fn kind_value(kind: PieceKind) -> i32 {
-    PIECE_VALUES[kind as usize]
+    PIECE_VALUES[kind as usize].get()
 }
 
 /// All pieces of both colors attacking `sq` given the occupancy `occupied`.
@@ -128,7 +135,8 @@ const SEE_ORDER: [PieceKind; 6] = [
 ///
 /// Handles quiet moves and x-ray attackers; castling and promotions count as
 /// an exchange worth zero.
-pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
+pub fn see_ge(b: &Board, m: Move, threshold: Centipawns) -> bool {
+    let threshold = threshold.get();
     if m.is_castle() || m.promotion().is_some() {
         return 0 >= threshold;
     }
@@ -211,6 +219,7 @@ mod tests {
     use super::*;
 
     fn see_value_bracket(fen: &str, uci: &str, expected: i32) {
+        let expected = Centipawns::new(expected);
         let board = Board::from_fen(fen).unwrap();
         let m = crate::uci_io::parse_uci_move(&board, uci).unwrap();
         assert!(
@@ -218,9 +227,9 @@ mod tests {
             "{uci} should gain at least {expected}"
         );
         assert!(
-            !see_ge(&board, m, expected + 1),
+            !see_ge(&board, m, expected + Centipawns::new(1)),
             "{uci} should gain less than {}",
-            expected + 1
+            expected + Centipawns::new(1)
         );
     }
 
@@ -260,6 +269,10 @@ mod tests {
 
         let value = see(&board, exd6);
 
-        assert_eq!(value, 100, "exd6 wins a pawn: Rxd6 Rxd6 loses Black's rook");
+        assert_eq!(
+            value,
+            Centipawns::new(100),
+            "exd6 wins a pawn: Rxd6 Rxd6 loses Black's rook"
+        );
     }
 }

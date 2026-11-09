@@ -1,6 +1,7 @@
 //! The network's weights, read from the `quantised.bin` a bullet checkpoint saves, and its
 //! output layer.
 
+use crate::types::Centipawns;
 use std::fmt;
 use std::path::Path;
 
@@ -169,12 +170,12 @@ impl Network {
     }
 
     /// Centipawns for the side to move, from its accumulator and the other side's.
-    pub fn output(&self, us: &Column, them: &Column) -> i32 {
+    pub fn output(&self, us: &Column, them: &Column) -> Centipawns {
         let sum =
             screlu_dot(us, &self.output_weights[0]) + screlu_dot(them, &self.output_weights[1]);
         let output = i64::from(sum / QA_I32 + self.output_bias);
         let cp = output * i64::from(EVAL_SCALE) / i64::from(QA_I32 * QB_I32);
-        cp.clamp(-i64::from(MAX_EVAL_CP), i64::from(MAX_EVAL_CP)) as i32
+        Centipawns::new(cp.clamp(-i64::from(MAX_EVAL_CP), i64::from(MAX_EVAL_CP)) as i32)
     }
 }
 
@@ -251,6 +252,6 @@ pub(super) mod tests {
 
         let sum = 2 * 255 * 255 * 64 - 100 * 100 * 32;
         let expected = (sum / QA_I32 + 1000) * EVAL_SCALE / (QA_I32 * QB_I32);
-        assert_eq!(cp, expected);
+        assert_eq!(cp, Centipawns::new(expected));
     }
 }

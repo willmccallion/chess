@@ -23,6 +23,7 @@ use crate::game_runner::{GameClock, GameResult, position_outcome, win_for};
 use crate::opening_book::legal_book_moves;
 use crate::search::Score;
 use crate::time::TimeBudget;
+use crate::types::Centipawns;
 use crate::types::{Color, Move, PieceKind, START_FEN};
 use rand::Rng;
 use ratatui::Frame;
@@ -113,7 +114,7 @@ pub fn eval_after_search(board: &Board, score: Option<Score>) -> Eval {
     match position_outcome(board) {
         Some((GameResult::Draw, _)) => Eval::DRAWN,
         Some(_) => Eval::Checkmated,
-        None => Eval::Score(score.unwrap_or(Score::Centipawns(0))),
+        None => Eval::Score(score.unwrap_or(Score::Centipawns(Centipawns::ZERO))),
     }
 }
 
@@ -798,8 +799,18 @@ mod tests {
         let mut game = guarded_game(&data);
         propose(&mut game, "e4");
 
-        answer(&mut game, &mut data, Score::Centipawns(20), &["e4", "e5"]);
-        answer(&mut game, &mut data, Score::Centipawns(-20), &["e5"]);
+        answer(
+            &mut game,
+            &mut data,
+            Score::Centipawns(Centipawns::new(20)),
+            &["e4", "e5"],
+        );
+        answer(
+            &mut game,
+            &mut data,
+            Score::Centipawns(Centipawns::new(-20)),
+            &["e5"],
+        );
 
         assert_eq!(game.app.history().len(), 1);
         assert!(game.warning.is_none());
@@ -817,7 +828,12 @@ mod tests {
         game.app.set_hold_moves(true);
         propose(&mut game, "g4");
 
-        answer(&mut game, &mut data, Score::Centipawns(-60), &["e4"]);
+        answer(
+            &mut game,
+            &mut data,
+            Score::Centipawns(Centipawns::new(-60)),
+            &["e4"],
+        );
         answer(&mut game, &mut data, Score::MateIn(1), &["Qh4#"]);
 
         assert_eq!(game.app.history().len(), 2);

@@ -11,7 +11,7 @@ pub mod trace;
 
 use super::{Evaluator, IncrementalState, NetCache, PositionView};
 use crate::board::Board;
-use crate::types::{Color, Move, Piece, PieceKind};
+use crate::types::{Centipawns, Color, Move, Piece, PieceKind};
 use accumulator::AccumulatorStack;
 use arch::OUTPUT_SCALE;
 use net_file::{BigNetwork, NetKind, NetLoadError, Network, load_big_network, load_small_network};
@@ -166,7 +166,7 @@ impl Evaluator for Networks {
         AccumulatorStack::new()
     }
 
-    fn evaluate(&self, state: &mut AccumulatorStack, position: PositionView) -> i32 {
+    fn evaluate(&self, state: &mut AccumulatorStack, position: PositionView) -> Centipawns {
         trace::to_cp(stockfish_eval(self, state, position), position)
     }
 }
@@ -204,7 +204,7 @@ pub fn trace_text(nets: &Networks, board: &Board) -> String {
     };
     format!(
         "{trace}Final evaluation       {:+.2} (white side)\n",
-        0.01 * f64::from(trace::to_cp(white_relative, position))
+        trace::to_cp(white_relative, position).pawns()
     )
 }
 

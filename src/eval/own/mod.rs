@@ -8,7 +8,7 @@ pub use accumulator::{AccumulatorStack, active_features};
 pub use network::{EVAL_SCALE, HIDDEN, INPUTS, NetLoadError, Network, QA, QB};
 
 use super::{Evaluator, IncrementalState, NetCache, PositionView};
-use crate::types::{Color, Move};
+use crate::types::{Centipawns, Color, Move};
 use std::path::{Path, PathBuf};
 
 /// Network path baked in at build time from `CHESS_NNUE_OWN`, if it was set.
@@ -49,7 +49,7 @@ impl Evaluator for Network {
         AccumulatorStack::new()
     }
 
-    fn evaluate(&self, state: &mut AccumulatorStack, position: PositionView) -> i32 {
+    fn evaluate(&self, state: &mut AccumulatorStack, position: PositionView) -> Centipawns {
         let [white, black] = state.current(self, position);
         match position.turn {
             Color::White => self.output(white, black),
@@ -91,7 +91,7 @@ mod tests {
         Network::from_bytes(&bytes).unwrap()
     }
 
-    fn refreshed_eval(net: &Network, board: &Board) -> i32 {
+    fn refreshed_eval(net: &Network, board: &Board) -> Centipawns {
         net.evaluate(&mut net.new_state(), board.position_view())
     }
 

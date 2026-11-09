@@ -564,6 +564,7 @@ mod tests {
     use crate::game_runner::GameResult;
     use crate::notation::parse_san_line;
     use crate::search::Score;
+    use crate::types::Centipawns;
     use crate::types::{Color, START_FEN};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
@@ -613,7 +614,7 @@ mod tests {
     }
 
     fn cp(cp: i32) -> Eval {
-        Eval::Score(Score::Centipawns(cp))
+        Eval::Score(Score::Centipawns(Centipawns::new(cp)))
     }
 
     fn fools_mate(id: u64) -> ReviewedGame {

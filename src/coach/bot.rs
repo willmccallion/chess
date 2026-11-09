@@ -3,6 +3,7 @@
 use super::judgement::Eval;
 use super::rating::Elo;
 use crate::search::Score;
+use crate::types::Centipawns;
 use crate::types::Move;
 use rand::Rng;
 
@@ -10,7 +11,7 @@ use rand::Rng;
 /// not absurd ones.
 const DELIBERATE_MISTAKE_DROP: std::ops::RangeInclusive<f64> = 8.0..=40.0;
 /// Beyond this lead winning chances barely change, so extra material counts directly.
-const CLEAR_WIN_CP: i32 = 1000;
+const CLEAR_WIN: Centipawns = Centipawns::new(1000);
 const CP_PER_UTILITY: f64 = 100.0;
 const MATE_UTILITY: f64 = 200.0;
 
@@ -156,7 +157,8 @@ fn utility(score: Score) -> f64 {
         Score::MateIn(moves) if moves > 0 => MATE_UTILITY - f64::from(moves),
         Score::MateIn(moves) => -MATE_UTILITY / 2.0 - f64::from(moves),
         Score::Centipawns(cp) => {
-            let beyond_clear_win = f64::from(cp.signum() * (cp.abs() - CLEAR_WIN_CP).max(0));
+            let beyond_clear_win =
+                f64::from((cp.abs() - CLEAR_WIN).max(Centipawns::ZERO) * cp.signum());
             Eval::Score(score).win_chance().percent() + beyond_clear_win / CP_PER_UTILITY
         }
     }
@@ -281,9 +283,9 @@ mod tests {
     fn strong_levels_nearly_always_find_the_winning_move() {
         let m = moves(3);
         let scores = [
-            (m[0], Score::Centipawns(-50)),
-            (m[1], Score::Centipawns(400)),
-            (m[2], Score::Centipawns(0)),
+            (m[0], Score::Centipawns(Centipawns::new(-50))),
+            (m[1], Score::Centipawns(Centipawns::new(400))),
+            (m[2], Score::Centipawns(Centipawns::ZERO)),
         ];
 
         let chosen = picks(&scores, Level::STRONGEST, 500);
@@ -295,9 +297,11 @@ mod tests {
     #[test]
     fn weak_levels_often_miss_a_free_piece() {
         let m = moves(20);
-        let mut scores: Vec<(Move, Score)> =
-            m.iter().map(|&mv| (mv, Score::Centipawns(0))).collect();
-        scores[0].1 = Score::Centipawns(300);
+        let mut scores: Vec<(Move, Score)> = m
+            .iter()
+            .map(|&mv| (mv, Score::Centipawns(Centipawns::ZERO)))
+            .collect();
+        scores[0].1 = Score::Centipawns(Centipawns::new(300));
 
         let chosen = picks(&scores, Level::WEAKEST, 1000);
 
@@ -322,8 +326,10 @@ mod tests {
     #[test]
     fn weak_levels_still_take_mate_in_won_positions() {
         let m = moves(20);
-        let mut scores: Vec<(Move, Score)> =
-            m.iter().map(|&mv| (mv, Score::Centipawns(1500))).collect();
+        let mut scores: Vec<(Move, Score)> = m
+            .iter()
+            .map(|&mv| (mv, Score::Centipawns(Centipawns::new(1500))))
+            .collect();
         scores[0].1 = Score::MateIn(1);
 
         let chosen = picks(&scores, Level::WEAKEST, 1000);

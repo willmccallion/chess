@@ -613,6 +613,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Centipawns;
     use crate::types::START_FEN;
     use std::time::Duration;
 
@@ -792,7 +793,7 @@ mod tests {
         let info = IterationInfo {
             depth: Depth::new(5),
             seldepth: 7,
-            score: Score::Centipawns(20),
+            score: Score::Centipawns(Centipawns::new(20)),
             hashfull_permill: 0,
             nodes: 1000,
             nps: 1000,

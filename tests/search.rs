@@ -9,7 +9,7 @@ use chess::search::{
 };
 use chess::search_params::SearchParams;
 use chess::tt::SharedTransTable;
-use chess::types::{MoveList, START_FEN};
+use chess::types::{Centipawns, MoveList, START_FEN};
 use chess::uci_io::{format_uci, parse_uci_move};
 use std::sync::Mutex;
 
@@ -72,7 +72,7 @@ fn a_quiet_move_on_the_hundredth_half_move_draws() {
 
     let result = fixed_depth_search(&board(fen), 6, 1);
 
-    assert_eq!(result.score, Some(Score::Centipawns(0)));
+    assert_eq!(result.score, Some(Score::Centipawns(Centipawns::ZERO)));
 }
 
 /// One position, from scratch, through `search_reporting`.

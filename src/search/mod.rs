@@ -7,7 +7,7 @@ use crate::search_params::SearchParams;
 use crate::see::{PIECE_VALUES, see, see_ge};
 use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable, TTEntry, TTWrite};
-use crate::types::{Move, MoveList, Piece, StackVec, Undo, ZKey};
+use crate::types::{Centipawns, Move, MoveList, Piece, StackVec, Undo, ZKey};
 use crate::uci_io::format_uci;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -41,12 +41,12 @@ const LMR_TABLE_SIZE: usize = 64;
 const SEARCH_UNITS_PER_CP_NUM: i32 = 4;
 const SEARCH_UNITS_PER_CP_DEN: i32 = 3;
 
-const fn cp_to_search_units(cp: i32) -> i32 {
-    cp * SEARCH_UNITS_PER_CP_NUM / SEARCH_UNITS_PER_CP_DEN
+const fn cp_to_search_units(cp: Centipawns) -> i32 {
+    cp.get() * SEARCH_UNITS_PER_CP_NUM / SEARCH_UNITS_PER_CP_DEN
 }
 
-const fn search_units_to_cp(score: i32) -> i32 {
-    score * SEARCH_UNITS_PER_CP_DEN / SEARCH_UNITS_PER_CP_NUM
+const fn search_units_to_cp(score: i32) -> Centipawns {
+    Centipawns::new(score * SEARCH_UNITS_PER_CP_DEN / SEARCH_UNITS_PER_CP_NUM)
 }
 
 const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
@@ -702,9 +702,9 @@ impl Search<'_> {
             && self.board.piece_on()[m.to.index()]
                 .kind()
                 .is_some_and(|kind| {
-                    stand_pat + PIECE_VALUES[kind as usize] + self.params.delta_margin < alpha
+                    stand_pat + PIECE_VALUES[kind as usize].get() + self.params.delta_margin < alpha
                 });
-        victim_falls_short || !see_ge(&self.board, m, 0)
+        victim_falls_short || !see_ge(&self.board, m, Centipawns::ZERO)
     }
 
     /// The TT's score for this node when `entry` is deep enough and its bound
@@ -942,7 +942,7 @@ fn quiesce_evasions(
         |moves| search.board.generate_pseudo_legal_moves(moves),
         |m| {
             if m.is_capture() {
-                see(&search.board, m)
+                see(&search.board, m).get()
             } else {
                 0
             }
@@ -1076,7 +1076,11 @@ fn probcut(
     let probe_depth = n.depth - search.params.probcut_reduction;
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&search.board) {
-        if !see_ge(&search.board, m, probcut_beta - n.static_eval) {
+        if !see_ge(
+            &search.board,
+            m,
+            Centipawns::new(probcut_beta - n.static_eval),
+        ) {
             continue;
         }
         let Some(undo) = search.make_move(m, legality) else {
@@ -1892,7 +1896,7 @@ pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> 
 /// A search score as reported to the user: centipawns, or moves until mate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Score {
-    Centipawns(i32),
+    Centipawns(Centipawns),
     /// Positive when the side to move mates, negative when it is mated.
     MateIn(i32),
 }
@@ -2362,7 +2366,7 @@ mod mate_score_tests {
             MATE_SCORE - 3,
             -MATE_SCORE,
             -MATE_SCORE + 2,
-            cp_to_search_units(300),
+            cp_to_search_units(Centipawns::new(300)),
         ]
         .map(Score::from_search);
 
@@ -2373,7 +2377,7 @@ mod mate_score_tests {
                 Score::MateIn(2),
                 Score::MateIn(0),
                 Score::MateIn(-1),
-                Score::Centipawns(300),
+                Score::Centipawns(Centipawns::new(300)),
             ]
         );
     }

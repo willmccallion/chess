@@ -1,3 +1,4 @@
+use crate::types::Centipawns;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ const EVAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// A UCI score from the side to move's point of view.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum UciScore {
-    Centipawns(i32),
+    Centipawns(Centipawns),
     /// Moves to mate; negative when the side to move is being mated.
     Mate(i32),
 }
@@ -28,7 +29,7 @@ impl UciScore {
             return None;
         }
         match *tokens.first()? {
-            "cp" => Some(Self::Centipawns(value)),
+            "cp" => Some(Self::Centipawns(Centipawns::new(value))),
             "mate" => Some(Self::Mate(value)),
             _ => None,
         }
@@ -59,19 +60,19 @@ fn parse_info_line(line: &str) -> Option<(u32, UciScore)> {
 ///
 /// Accepts Stockfish's `Final evaluation  +0.12 (white side)` and this engine's
 /// `info string eval: +12 cp (white to move)`.
-fn parse_static_eval_white_cp(line: &str) -> Option<i32> {
+fn parse_static_eval_white(line: &str) -> Option<Centipawns> {
     if let Some(rest) = line.strip_prefix("Final evaluation") {
         let pawns: f64 = rest.split_whitespace().next()?.parse().ok()?;
-        return Some((pawns * 100.0).round() as i32);
+        return Some(Centipawns::new((pawns * 100.0).round() as i32));
     }
     let rest = line.strip_prefix("info string eval:")?;
     let mut tokens = rest.split_whitespace();
-    let side_to_move_cp: i32 = tokens.next()?.trim_start_matches('+').parse().ok()?;
+    let side_to_move = Centipawns::new(tokens.next()?.trim_start_matches('+').parse().ok()?);
     let black_to_move = rest.contains("(black to move)");
     Some(if black_to_move {
-        -side_to_move_cp
+        -side_to_move
     } else {
-        side_to_move_cp
+        side_to_move
     })
 }
 
@@ -368,11 +369,11 @@ impl UciEngine {
 
     /// Asks for the static evaluation via the non-standard `eval` command.
     /// Returns `None` if the engine does not support it or declines (e.g. in check).
-    pub fn static_eval_white_cp(&mut self, fen: &str) -> Result<Option<i32>, EngineError> {
+    pub fn static_eval_white(&mut self, fen: &str) -> Result<Option<Centipawns>, EngineError> {
         self.send(&format!("position fen {fen}"))?;
         self.send("eval")?;
         match self.read_until(is_static_eval_line, EVAL_TIMEOUT) {
-            Ok(line) => Ok(parse_static_eval_white_cp(&line)),
+            Ok(line) => Ok(parse_static_eval_white(&line)),
             Err(EngineError::TimedOut { .. }) => Ok(None),
             Err(e) => Err(e),
         }
@@ -399,7 +400,10 @@ mod tests {
     #[test]
     fn info_line_with_exact_score_is_parsed() {
         let line = "info depth 12 seldepth 18 multipv 1 score cp -34 nodes 1000 pv e2e4";
-        assert_eq!(parse_info_line(line), Some((12, UciScore::Centipawns(-34))));
+        assert_eq!(
+            parse_info_line(line),
+            Some((12, UciScore::Centipawns(Centipawns::new(-34))))
+        );
     }
 
     #[test]
@@ -417,9 +421,9 @@ mod tests {
     #[test]
     fn stockfish_static_eval_is_white_pov_centipawns() {
         let line = "Final evaluation       +0.12 (white side) [with scaled NNUE, ...]";
-        assert_eq!(parse_static_eval_white_cp(line), Some(12));
+        assert_eq!(parse_static_eval_white(line), Some(Centipawns::new(12)));
         assert_eq!(
-            parse_static_eval_white_cp("Final evaluation: none (in check)"),
+            parse_static_eval_white("Final evaluation: none (in check)"),
             None
         );
     }
@@ -427,8 +431,8 @@ mod tests {
     #[test]
     fn own_static_eval_is_converted_to_white_pov() {
         let line = "info string eval: +40 cp (black to move)";
-        assert_eq!(parse_static_eval_white_cp(line), Some(-40));
+        assert_eq!(parse_static_eval_white(line), Some(Centipawns::new(-40)));
         let line = "info string eval: -7 cp (white to move)";
-        assert_eq!(parse_static_eval_white_cp(line), Some(-7));
+        assert_eq!(parse_static_eval_white(line), Some(Centipawns::new(-7)));
     }
 }
