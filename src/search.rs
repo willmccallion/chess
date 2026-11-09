@@ -453,7 +453,7 @@ fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
 #[inline(always)]
 fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
     (
-        prev.capture as usize,
+        prev.is_capture() as usize,
         board.piece_on[prev.to.index()].index(),
         prev.to.index(),
     )
@@ -555,7 +555,7 @@ impl Search<'_> {
 
     fn is_allowed_root_move(&self, m: Move) -> bool {
         self.allowed_root_moves
-            .is_none_or(|allowed| allowed.as_slice().iter().any(|&a| same_move(a, m)))
+            .is_none_or(|allowed| allowed.as_slice().contains(&m))
     }
 
     fn record_root_move_nodes(&mut self, m: Move, nodes: u64) {
@@ -709,7 +709,7 @@ impl Search<'_> {
         let continuations = self.continuation_keys();
         let color = self.board.turn;
 
-        if best.capture {
+        if best.is_capture() {
             self.update_capture_history(best, bonus);
         } else {
             let ply = self.ply;
@@ -808,7 +808,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     let mut best_move = None;
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&s.board) {
-        if m.capture && m.promotion.is_none() {
+        if m.is_capture() && m.promotion().is_none() {
             let captured = s.board.piece_on[m.to.index()];
             if let Some(kind) = captured.kind()
                 && stand_pat + PIECE_VALUES[kind as usize] + s.params.delta_margin < alpha
@@ -816,7 +816,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 continue;
             }
         }
-        if m.capture && !see_ge(&s.board, m, 0) {
+        if m.is_capture() && !see_ge(&s.board, m, 0) {
             continue;
         }
 
@@ -864,7 +864,7 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &Legali
 
     let mut scores = [0i32; MAX_MOVES];
     for (score, &m) in scores.iter_mut().zip(move_list.as_slice()) {
-        *score = if m.capture { see(&s.board, m) } else { 0 };
+        *score = if m.is_capture() { see(&s.board, m) } else { 0 };
     }
 
     let mut best_score = -MATE_SCORE + s.ply as i32;
@@ -1051,7 +1051,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
     let tt_entry = s.tt.probe(key);
     let tt_move = tt_entry.and_then(|e| e.best_move());
-    let tt_capture = tt_move.is_some_and(|m| m.capture);
+    let tt_capture = tt_move.is_some_and(|m| m.is_capture());
     if excluded_move.is_none() {
         s.stack[s.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
     }
@@ -1369,7 +1369,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
         if is_quiet && tried_quiets.len() < MAX_TRIED_MOVES {
             tried_quiets.push(m);
-        } else if m.capture && tried_captures.len() < MAX_TRIED_MOVES {
+        } else if m.is_capture() && tried_captures.len() < MAX_TRIED_MOVES {
             tried_captures.push(m);
         }
     }
@@ -1392,7 +1392,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         s.reward_prior_quiet_move(depth);
     }
     if let Some(static_eval) = corrected_eval
-        && best_move.is_none_or(|m| !m.capture)
+        && best_move.is_none_or(|m| !m.is_capture())
         && best_score.abs() < MATE_THRESHOLD
         && search_disagrees_with_eval(bound, best_score, static_eval)
     {
@@ -1515,11 +1515,6 @@ fn iteration_info(s: &Search, depth: usize, best_move: Move, score: i32) -> Iter
         time_ms: elapsed_ms,
         pv,
     }
-}
-
-/// Whether `a` and `b` are the same move, whatever flags each carries.
-fn same_move(a: Move, b: Move) -> bool {
-    a.from == b.from && a.to == b.to && a.promotion == b.promotion
 }
 
 fn legal_moves(board: &Board) -> MoveList {

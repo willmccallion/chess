@@ -102,7 +102,7 @@ fn get_attackers(
 }
 
 pub fn see(b: &Board, mov: Move) -> i32 {
-    if !mov.capture {
+    if !mov.is_capture() {
         return 0;
     }
 
@@ -116,7 +116,7 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     let mut occupied = b.all_pieces;
     let mut current_turn = b.turn;
 
-    let captured_piece = if mov.en_passant {
+    let captured_piece = if mov.is_en_passant() {
         Piece::from_kind(PieceKind::Pawn, b.turn.other())
     } else {
         b.piece_on[to_sq]
@@ -125,7 +125,7 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     gain[0] = val(captured_piece);
 
     occupied ^= 1u64 << from_sq;
-    if mov.en_passant {
+    if mov.is_en_passant() {
         occupied ^= 1u64 << mov.captured_square(b.turn);
     }
 
@@ -187,7 +187,7 @@ const SEE_ORDER: [PieceKind; 6] = [
 /// for the side to move. Handles quiet moves and x-ray attackers; castling and
 /// promotions are treated as an exchange worth zero.
 pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
-    if m.castle || m.promotion.is_some() {
+    if m.is_castle() || m.promotion().is_some() {
         return 0 >= threshold;
     }
     let from = m.from.index();
@@ -196,7 +196,7 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
         return 0 >= threshold;
     };
 
-    let captured_value = if m.en_passant {
+    let captured_value = if m.is_en_passant() {
         kind_value(PieceKind::Pawn)
     } else {
         b.piece_on[to].kind().map_or(0, kind_value)
@@ -211,7 +211,7 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
     }
 
     let mut occupied = b.all_pieces ^ (1u64 << from) ^ (1u64 << to);
-    if m.en_passant {
+    if m.is_en_passant() {
         occupied ^= 1u64 << m.captured_square(b.turn);
     }
     let rooks_queens = b.kind_bb(PieceKind::Rook) | b.kind_bb(PieceKind::Queen);

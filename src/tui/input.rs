@@ -100,7 +100,7 @@ impl MoveInput {
         let PendingPromotion { from, to } = self.pending_promotion.take()?;
         legal
             .iter()
-            .find(|m| m.from == from && m.to == to && m.promotion == Some(kind))
+            .find(|m| m.from == from && m.to == to && m.promotion() == Some(kind))
             .copied()
     }
 }
@@ -126,7 +126,7 @@ fn moves_between(board: &Board, legal: &[Move], from: Square, to: Square) -> Vec
     }
     legal
         .iter()
-        .filter(|m| m.castle && m.from == from && (m.to > m.from) == (to > from))
+        .filter(|m| m.is_castle() && m.from == from && (m.to > m.from) == (to > from))
         .copied()
         .collect()
 }

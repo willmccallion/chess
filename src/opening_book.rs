@@ -58,7 +58,7 @@ impl BookEntry {
         }?;
         legal
             .iter()
-            .find(|m| m.from == from && m.to == to && m.promotion == promotion)
+            .find(|m| m.from == from && m.to == to && m.promotion() == promotion)
             .copied()
     }
 }

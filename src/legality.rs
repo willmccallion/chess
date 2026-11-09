@@ -134,14 +134,14 @@ impl Board {
         let them = self.turn.other();
 
         if from == info.king_sq {
-            if m.castle {
+            if m.is_castle() {
                 return true;
             }
             let occupied = self.all_pieces ^ (1u64 << from);
             return attackers_of(self, to, them, occupied, 1u64 << to) == 0;
         }
 
-        if m.en_passant {
+        if m.is_en_passant() {
             let captured = 1u64 << m.captured_square(self.turn);
             let occupied = (self.all_pieces ^ (1u64 << from) ^ captured) | (1u64 << to);
             return attackers_of(self, info.king_sq, them, occupied, captured) == 0;

@@ -94,7 +94,7 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
         let kind = board.piece_on[m.from.index()].kind();
         let undeveloped = undeveloped_minors(&board, side);
         if kind == Some(PieceKind::Queen)
-            && !m.capture
+            && !m.is_capture()
             && own_moves <= EARLY_QUEEN_MOVES
             && undeveloped >= 2
         {
@@ -104,7 +104,7 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
         let moved_before = moved_from_home.contains(&m.from);
         if is_minor
             && moved_before
-            && !m.capture
+            && !m.is_capture()
             && own_moves <= REPEAT_PIECE_MOVES
             && undeveloped >= 1
             && !board.is_square_attacked(m.from, side.other())
@@ -112,13 +112,13 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
             note(Habit::SamePieceTwice, ply);
         }
         if kind == Some(PieceKind::King)
-            && !m.castle
+            && !m.is_castle()
             && own_moves <= KING_WALK_MOVES
             && queens_on(&board)
         {
             note(Habit::KingWalk, ply);
         }
-        castled |= m.castle;
+        castled |= m.is_castle();
         moved_from_home.retain(|&square| square != m.from);
         moved_from_home.push(m.to);
         board.make_move(m);

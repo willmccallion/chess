@@ -91,7 +91,7 @@ pub fn positional_differences(
     let (worse, good) = (after(played), after(better));
     let mut notes = Vec::new();
     let rights = |b: &Board| castling_rights(b, mover);
-    if rights(&worse) < rights(before) && !played.castle && rights(&good) == rights(before) {
+    if rights(&worse) < rights(before) && !played.is_castle() && rights(&good) == rights(before) {
         notes.push(format!(
             "{played_san} gives up the right to castle; {better_san} keeps it."
         ));

@@ -43,7 +43,7 @@ impl ContinuationKey {
 
 /// The victim of a capture, or `None` for a quiet promotion.
 pub fn captured_kind(board_piece_on_to: Piece, m: Move) -> Option<PieceKind> {
-    if m.en_passant {
+    if m.is_en_passant() {
         Some(PieceKind::Pawn)
     } else {
         board_piece_on_to.kind()

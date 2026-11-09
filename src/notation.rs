@@ -35,8 +35,8 @@ fn parse_san_loosely(board: &Board, legal: &[Move], san: &str) -> Option<Move> {
     let mut matching = legal.iter().copied().filter(|m| {
         board.piece_on[m.from.index()].kind() == Some(parts.kind)
             && m.to == parts.to
-            && !m.castle
-            && m.promotion == parts.promotion
+            && !m.is_castle()
+            && m.promotion() == parts.promotion
             && parts.from_file.is_none_or(|file| m.from.file() == file)
             && parts.from_rank.is_none_or(|rank| m.from.rank() == rank)
     });
@@ -174,7 +174,7 @@ mod tests {
         let letters = parse_typed_move(&board, legal.as_slice(), "O-O").unwrap();
         let zeros = parse_typed_move(&board, legal.as_slice(), "0-0").unwrap();
 
-        assert!(letters.castle && letters == zeros);
+        assert!(letters.is_castle() && letters == zeros);
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub fn record_piece_changes(
         sq: from,
         add: false,
     });
-    if m.capture {
+    if m.is_capture() {
         let cap_sq = m.captured_square(position.turn);
         let captured = position.piece_on[cap_sq];
         if !captured.is_empty() {
@@ -54,14 +54,14 @@ pub fn record_piece_changes(
         }
     }
     let placed = m
-        .promotion
+        .promotion()
         .map_or(moving, |kind| Piece::from_kind(kind, position.turn));
     out.push(UpdateBody {
         piece: placed,
         sq: to,
         add: true,
     });
-    if m.castle {
+    if m.is_castle() {
         let (rook_from, rook_to) = castling_rook_squares(from, to);
         let rook = position.piece_on[rook_from];
         out.push(UpdateBody {

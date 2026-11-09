@@ -37,7 +37,7 @@ pub struct CoachData {
 pub fn is_book(board: &Board, m: Move) -> bool {
     legal_book_moves(board)
         .iter()
-        .any(|w| w.m.from == m.from && w.m.to == m.to && w.m.promotion == m.promotion)
+        .any(|w| w.m.from == m.from && w.m.to == m.to && w.m.promotion() == m.promotion())
 }
 
 pub fn now() -> UnixTime {

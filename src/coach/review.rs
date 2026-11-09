@@ -387,8 +387,9 @@ fn lost_material_cause(
     let capture = first_move_text(after_board, reply_line);
     let target = reply.to;
     let piece = after_board.piece_on[target.index()].kind();
-    let wins_outright =
-        reply.capture && !reply.en_passant && see(after_board, reply) >= WINNING_CAPTURE_SEE;
+    let wins_outright = reply.is_capture()
+        && !reply.is_en_passant()
+        && see(after_board, reply) >= WINNING_CAPTURE_SEE;
     let Some(piece) = piece.filter(|_| wins_outright) else {
         return Cause::AllowedTactic {
             points,
@@ -428,7 +429,7 @@ fn was_already_attacked(board: &Board, square: Square) -> bool {
     legal
         .as_slice()
         .iter()
-        .any(|&m| m.to == square && m.capture && see(&passed, m) >= WINNING_CAPTURE_SEE)
+        .any(|&m| m.to == square && m.is_capture() && see(&passed, m) >= WINNING_CAPTURE_SEE)
 }
 
 /// How many points of material `side` gains along `line` from `board`, measured once the
@@ -442,7 +443,7 @@ pub(super) fn material_gain_along(board: &Board, line: &[Move], side: Color) -> 
             break;
         }
         position.make_move(m);
-        let next_is_capture = line.get(i + 1).is_some_and(|next| next.capture);
+        let next_is_capture = line.get(i + 1).is_some_and(|next| next.is_capture());
         if !next_is_capture || i + 1 == LINE_MATERIAL_PLIES {
             settled = material_balance(&position, side);
         }

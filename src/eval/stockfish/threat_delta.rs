@@ -208,8 +208,8 @@ pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
     let mut replay = Replay::new(position);
 
     replay.remove(from, out);
-    if m.capture {
-        let captured_sq = match (m.en_passant, turn) {
+    if m.is_capture() {
+        let captured_sq = match (m.is_en_passant(), turn) {
             (true, Color::White) => to - 8,
             (true, Color::Black) => to + 8,
             (false, _) => to,
@@ -219,11 +219,11 @@ pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
         }
     }
     let placed = m
-        .promotion
+        .promotion()
         .map_or(moving, |kind| Piece::from_kind(kind, turn));
     replay.put(to, placed, out);
 
-    if m.castle {
+    if m.is_castle() {
         let (rook_from, rook_to) = castling_rook_squares(from, to);
         let rook = replay.piece_at(rook_from);
         replay.remove(rook_from, out);
@@ -329,9 +329,9 @@ mod tests {
                     }
                     let m = moves.get(rng.gen_range(0..moves.len()));
 
-                    castles += usize::from(m.castle);
-                    en_passants += usize::from(m.en_passant);
-                    promotions += usize::from(m.promotion.is_some());
+                    castles += usize::from(m.is_castle());
+                    en_passants += usize::from(m.is_en_passant());
+                    promotions += usize::from(m.promotion().is_some());
                     let before = relations(&board);
                     let mut deltas = ThreatDeltas::default();
                     record_move(board.position_view(), m, &mut deltas);

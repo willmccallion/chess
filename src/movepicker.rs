@@ -148,7 +148,7 @@ impl OrderingContext<'_> {
     }
 
     fn capture_score(&self, board: &Board, m: Move) -> i32 {
-        let promotion_value = match m.promotion {
+        let promotion_value = match m.promotion() {
             Some(PieceKind::Queen) => PIECE_VALUES[PieceKind::Queen as usize],
             _ => 0,
         };
@@ -510,7 +510,7 @@ mod tests {
         let mut picker = MovePicker::new(None, None, None, None);
 
         let first_quiet = std::iter::from_fn(|| picker.next(&board, &ctx))
-            .find(|m| !m.capture)
+            .find(|m| !m.is_capture())
             .unwrap();
 
         assert_eq!(first_quiet.from, Square::new(27), "{first_quiet:?}");

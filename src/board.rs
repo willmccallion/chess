@@ -313,8 +313,8 @@ impl Board {
             {
                 if promoting {
                     if kinds != MoveKinds::Quiet {
-                        for kind in PROMOTION_KINDS {
-                            out.push(Move::promotion(from, to, kind));
+                        for kind in PROMOTION_PIECES {
+                            out.push(Move::promotion_push(from, to, kind));
                         }
                     }
                 } else if kinds != MoveKinds::Tactical {
@@ -340,7 +340,7 @@ impl Board {
                 };
                 if (enemy & cap.bb()) != 0 {
                     if promoting {
-                        for kind in PROMOTION_KINDS {
+                        for kind in PROMOTION_PIECES {
                             out.push(Move::promotion_capture(from, cap, kind));
                         }
                     } else {
@@ -458,17 +458,19 @@ impl Board {
         };
 
         // Flag consistency: special flags require specific piece types
-        if m.castle && kind != PieceKind::King {
+        if m.is_castle() && kind != PieceKind::King {
             return false;
         }
-        if (m.en_passant || m.double_push || m.promotion.is_some()) && kind != PieceKind::Pawn {
+        if (m.is_en_passant() || m.is_double_push() || m.promotion().is_some())
+            && kind != PieceKind::Pawn
+        {
             return false;
         }
 
         // ── Castling ────────────────────────────────────────────────
         // Must replicate every check from gen_leapers/gen_leaper_quiets
         // because make_move blindly moves the rook from a computed square.
-        if m.castle {
+        if m.is_castle() {
             let castlings = &CASTLINGS[self.turn as usize];
             let Some(castling) = castlings
                 .iter()
@@ -482,8 +484,8 @@ impl Board {
 
         // ── Target square ───────────────────────────────────────────
         let to_piece = self.piece_on[to];
-        if m.capture {
-            if m.en_passant {
+        if m.is_capture() {
+            if m.is_en_passant() {
                 // En-passant: target square must be empty (pawn is beside us),
                 // the en-passant square must match, and the captured pawn must exist.
                 if self.en_passant != Some(m.to) {
@@ -530,11 +532,11 @@ impl Board {
                 let forward: i8 = if white { 8 } else { -8 };
                 let (start_rank, promo_rank) = if white { (1, 6) } else { (6, 1) };
                 let ahead = m.from.offset(forward);
-                let reaches = if m.capture {
+                let reaches = if m.is_capture() {
                     m.to.file().abs_diff(m.from.file()) == 1
                         && (m.from.offset(forward - 1) == Some(m.to)
                             || m.from.offset(forward + 1) == Some(m.to))
-                } else if m.double_push {
+                } else if m.is_double_push() {
                     m.from.rank() == start_rank
                         && ahead.is_some_and(|mid| {
                             (self.all_pieces & mid.bb()) == 0 && mid.offset(forward) == Some(m.to)
@@ -543,7 +545,7 @@ impl Board {
                     ahead == Some(m.to)
                 };
                 // A pawn promotes exactly when it reaches the last rank.
-                reaches && (m.from.rank() == promo_rank) == m.promotion.is_some()
+                reaches && (m.from.rank() == promo_rank) == m.promotion().is_some()
             }
         }
     }
@@ -573,7 +575,7 @@ impl Board {
         };
         self.eval_state.push_move(position, m);
 
-        if m.capture {
+        if m.is_capture() {
             let cap_sq = m.captured_square(self.turn);
             undo.captured_piece = self.piece_on[cap_sq];
         }
@@ -588,7 +590,7 @@ impl Board {
 
         self.color_bb[self.turn as usize] ^= 1u64 << from;
 
-        if m.capture {
+        if m.is_capture() {
             let cap_sq = m.captured_square(self.turn);
 
             let captured = undo.captured_piece;
@@ -600,7 +602,7 @@ impl Board {
             }
         }
 
-        if let Some(pk) = m.promotion {
+        if let Some(pk) = m.promotion() {
             let promoted_piece = Piece::from_kind(pk, self.turn);
             self.piece_on[to] = promoted_piece;
             self.piece_bb[promoted_piece.index()] |= 1u64 << to;
@@ -613,7 +615,7 @@ impl Board {
 
         self.color_bb[self.turn as usize] |= 1u64 << to;
 
-        if m.castle {
+        if m.is_castle() {
             let (rook_from, rook_to) = castling_rook_squares(from, to);
             let rook_piece = self.piece_on[rook_from];
             self.zobrist ^= zobrist::ZOB.piece_key(rook_piece, rook_from);
@@ -627,13 +629,13 @@ impl Board {
             self.color_bb[self.turn as usize] ^= rook_bb;
         }
 
-        if m.double_push {
+        if m.is_double_push() {
             let ep = Square::from_file_rank(m.from.file(), (m.from.rank() + m.to.rank()) / 2);
             self.en_passant = Some(ep);
             self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
 
-        if matches!(moving.kind(), Some(PieceKind::Pawn)) || m.capture {
+        if matches!(moving.kind(), Some(PieceKind::Pawn)) || m.is_capture() {
             self.halfmove_clock = 0;
         } else {
             self.halfmove_clock += 1;
@@ -652,7 +654,7 @@ impl Board {
             63 => self.castle &= !BK_CASTLE,
             _ => {}
         }
-        if m.capture {
+        if m.is_capture() {
             match to {
                 0 => self.castle &= !WQ_CASTLE,
                 7 => self.castle &= !WK_CASTLE,
@@ -728,7 +730,7 @@ impl Board {
         let to = m.to.index();
 
         let piece_on_to = self.piece_on[to];
-        let moving_piece = if m.promotion.is_some() {
+        let moving_piece = if m.promotion().is_some() {
             Piece::from_kind(PieceKind::Pawn, self.turn.other())
         } else {
             piece_on_to
@@ -756,10 +758,10 @@ impl Board {
         self.piece_bb[piece_on_to.index()] &= !(1u64 << to);
         self.color_bb[self.turn as usize] &= !(1u64 << to);
 
-        if m.capture {
+        if m.is_capture() {
             let captured = u.captured_piece;
 
-            if m.en_passant {
+            if m.is_en_passant() {
                 self.piece_on[to] = Piece::Empty;
             }
             let cap_sq = m.captured_square(self.turn);
@@ -773,7 +775,7 @@ impl Board {
             self.piece_on[to] = Piece::Empty;
         }
 
-        if m.castle {
+        if m.is_castle() {
             let (rook_from, rook_to) = castling_rook_squares(from, to);
             let rook = self.piece_on[rook_to];
             self.piece_on[rook_from] = rook;
@@ -827,7 +829,7 @@ impl Board {
     }
 
     pub fn to_san(&self, m: Move, legal_moves: &[Move]) -> String {
-        if m.castle {
+        if m.is_castle() {
             return if m.to > m.from { "O-O" } else { "O-O-O" }.to_string();
         }
 
@@ -838,7 +840,7 @@ impl Board {
         if let Some(pk) = moving_piece.kind() {
             match pk {
                 PieceKind::Pawn => {
-                    if m.capture {
+                    if m.is_capture() {
                         san.push(m.from.file_char());
                     }
                 }
@@ -880,13 +882,13 @@ impl Board {
             }
         }
 
-        if m.capture {
+        if m.is_capture() {
             san.push('x');
         }
 
         san.push_str(&m.to.to_string());
 
-        if let Some(promo) = m.promotion {
+        if let Some(promo) = m.promotion() {
             san.push('=');
             san.push(promo.to_char_upper());
         }
@@ -938,12 +940,12 @@ mod tests {
                 let mut ours: Vec<_> = played
                     .as_slice()
                     .iter()
-                    .map(|m| (m.from, m.to, m.promotion))
+                    .map(|m| (m.from, m.to, m.promotion()))
                     .collect();
                 let mut fresh: Vec<_> = fresh_moves
                     .as_slice()
                     .iter()
-                    .map(|m| (m.from, m.to, m.promotion))
+                    .map(|m| (m.from, m.to, m.promotion()))
                     .collect();
                 ours.sort_unstable_by_key(|&(f, t, p)| (f, t, p.map(|k| k as u8)));
                 fresh.sort_unstable_by_key(|&(f, t, p)| (f, t, p.map(|k| k as u8)));
@@ -1091,16 +1093,8 @@ mod tests {
         }
     }
 
-    fn move_key(m: &Move) -> (Square, Square, bool, bool, bool, bool, Option<PieceKind>) {
-        (
-            m.from,
-            m.to,
-            m.capture,
-            m.en_passant,
-            m.double_push,
-            m.castle,
-            m.promotion,
-        )
+    fn move_key(m: &Move) -> u16 {
+        u16::from(*m)
     }
 
     /// The FENs the perft suite checks, and an en-passant position.

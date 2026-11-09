@@ -1,5 +1,5 @@
 use crate::board::Board;
-use crate::types::{Move, MoveList, PieceKind, Square};
+use crate::types::{Move, MoveList, PieceKind, PromotionPiece, Square};
 
 pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
     let bytes = s.as_bytes();
@@ -16,7 +16,7 @@ pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
     moves
         .as_slice()
         .iter()
-        .find(|m| m.from == from && m.to == to && m.promotion == promo)
+        .find(|m| m.from == from && m.to == to && m.promotion() == promo)
         .copied()
 }
 
@@ -34,13 +34,12 @@ fn promotion_kind(letter: u8) -> Option<PieceKind> {
 pub fn format_uci(m: Move) -> String {
     let mut s = format!("{}{}", m.from, m.to);
 
-    if let Some(pk) = m.promotion {
-        s.push(match pk {
-            PieceKind::Queen => 'q',
-            PieceKind::Rook => 'r',
-            PieceKind::Bishop => 'b',
-            PieceKind::Knight => 'n',
-            _ => unreachable!("invalid promotion piece kind"),
+    if let Some(piece) = m.promotion_piece() {
+        s.push(match piece {
+            PromotionPiece::Queen => 'q',
+            PromotionPiece::Rook => 'r',
+            PromotionPiece::Bishop => 'b',
+            PromotionPiece::Knight => 'n',
         });
     }
 

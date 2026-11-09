@@ -390,13 +390,13 @@ mod tests {
             .as_slice()
             .iter()
             .copied()
-            .find(|m| m.capture)
+            .find(|m| m.is_capture())
             .unwrap();
         let other = legal
             .as_slice()
             .iter()
             .copied()
-            .find(|m| !m.capture)
+            .find(|m| !m.is_capture())
             .unwrap();
         let puzzle = Puzzle {
             id: PuzzleId::Game { game: 1, ply: 0 },

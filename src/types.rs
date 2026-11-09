@@ -284,46 +284,78 @@ const MOVE_FLAG_EN_PASSANT: u16 = 0b0101;
 const MOVE_FLAG_PROMOTION: u16 = 0b1000;
 const MOVE_FLAG_PROMO_CAPTURE: u16 = 0b1100;
 
+/// A piece a pawn can promote to.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum PromotionPiece {
+    Knight,
+    Bishop,
+    Rook,
+    Queen,
+}
+
+impl PromotionPiece {
+    /// The kind of piece it is.
+    #[inline(always)]
+    pub const fn kind(self) -> PieceKind {
+        match self {
+            Self::Knight => PieceKind::Knight,
+            Self::Bishop => PieceKind::Bishop,
+            Self::Rook => PieceKind::Rook,
+            Self::Queen => PieceKind::Queen,
+        }
+    }
+
+    /// The piece of `kind`, if a pawn can promote to it.
+    #[inline(always)]
+    pub const fn of(kind: PieceKind) -> Option<Self> {
+        match kind {
+            PieceKind::Knight => Some(Self::Knight),
+            PieceKind::Bishop => Some(Self::Bishop),
+            PieceKind::Rook => Some(Self::Rook),
+            PieceKind::Queen => Some(Self::Queen),
+            PieceKind::Pawn | PieceKind::King => None,
+        }
+    }
+}
+
+/// The pieces a pawn promotes to, in the order the generators list them.
+pub const PROMOTION_PIECES: [PromotionPiece; 4] = [
+    PromotionPiece::Queen,
+    PromotionPiece::Rook,
+    PromotionPiece::Bishop,
+    PromotionPiece::Knight,
+];
+
+/// What a move does besides taking a piece from one square to another.
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub enum MoveKind {
+    #[default]
+    Quiet,
+    /// A pawn's two-square advance.
+    DoublePush,
+    Capture,
+    /// A pawn's capture of the pawn beside it that has just advanced two.
+    EnPassant,
+    /// The king's move of castling; the rook moves with it.
+    Castle,
+    Promotion(PromotionPiece),
+    PromotionCapture(PromotionPiece),
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct Move {
     pub from: Square,
     pub to: Square,
-    pub capture: bool,
-    pub en_passant: bool,
-    pub double_push: bool,
-    pub castle: bool,
-    pub promotion: Option<PieceKind>,
+    pub kind: MoveKind,
 }
 
 impl Move {
-    /// The square of the piece this move takes when `mover` plays it:
-    /// beside the destination for en passant, the destination otherwise.
-    #[inline(always)]
-    pub const fn captured_square(self, mover: Color) -> usize {
-        let to = self.to.index();
-        match (self.en_passant, mover) {
-            (true, Color::White) => to - 8,
-            (true, Color::Black) => to + 8,
-            (false, _) => to,
-        }
-    }
-
-    /// Neither a capture nor a promotion.
-    #[inline(always)]
-    pub const fn is_quiet(self) -> bool {
-        !self.capture && self.promotion.is_none()
-    }
-
     #[inline(always)]
     pub const fn quiet(from: Square, to: Square) -> Self {
         Self {
             from,
             to,
-            capture: false,
-            en_passant: false,
-            double_push: false,
-            castle: false,
-            promotion: None,
+            kind: MoveKind::Quiet,
         }
     }
 
@@ -331,8 +363,9 @@ impl Move {
     #[inline(always)]
     pub const fn capture(from: Square, to: Square) -> Self {
         Self {
-            capture: true,
-            ..Self::quiet(from, to)
+            from,
+            to,
+            kind: MoveKind::Capture,
         }
     }
 
@@ -340,26 +373,29 @@ impl Move {
     #[inline(always)]
     pub const fn double_push(from: Square, to: Square) -> Self {
         Self {
-            double_push: true,
-            ..Self::quiet(from, to)
+            from,
+            to,
+            kind: MoveKind::DoublePush,
         }
     }
 
-    /// A pawn's advance to the last rank, promoting to `kind`.
+    /// A pawn's advance to the last rank, promoting to `piece`.
     #[inline(always)]
-    pub const fn promotion(from: Square, to: Square, kind: PieceKind) -> Self {
+    pub const fn promotion_push(from: Square, to: Square, piece: PromotionPiece) -> Self {
         Self {
-            promotion: Some(kind),
-            ..Self::quiet(from, to)
+            from,
+            to,
+            kind: MoveKind::Promotion(piece),
         }
     }
 
-    /// A pawn's capture onto the last rank, promoting to `kind`.
+    /// A pawn's capture onto the last rank, promoting to `piece`.
     #[inline(always)]
-    pub const fn promotion_capture(from: Square, to: Square, kind: PieceKind) -> Self {
+    pub const fn promotion_capture(from: Square, to: Square, piece: PromotionPiece) -> Self {
         Self {
-            promotion: Some(kind),
-            ..Self::capture(from, to)
+            from,
+            to,
+            kind: MoveKind::PromotionCapture(piece),
         }
     }
 
@@ -367,8 +403,9 @@ impl Move {
     #[inline(always)]
     pub const fn en_passant(from: Square, to: Square) -> Self {
         Self {
-            en_passant: true,
-            ..Self::capture(from, to)
+            from,
+            to,
+            kind: MoveKind::EnPassant,
         }
     }
 
@@ -376,55 +413,90 @@ impl Move {
     #[inline(always)]
     pub const fn castling(from: Square, to: Square) -> Self {
         Self {
-            castle: true,
-            ..Self::quiet(from, to)
+            from,
+            to,
+            kind: MoveKind::Castle,
+        }
+    }
+
+    /// Whether the move takes a piece, en passant included.
+    #[inline(always)]
+    pub const fn is_capture(self) -> bool {
+        matches!(
+            self.kind,
+            MoveKind::Capture | MoveKind::EnPassant | MoveKind::PromotionCapture(_)
+        )
+    }
+
+    #[inline(always)]
+    pub const fn is_en_passant(self) -> bool {
+        matches!(self.kind, MoveKind::EnPassant)
+    }
+
+    #[inline(always)]
+    pub const fn is_castle(self) -> bool {
+        matches!(self.kind, MoveKind::Castle)
+    }
+
+    #[inline(always)]
+    pub const fn is_double_push(self) -> bool {
+        matches!(self.kind, MoveKind::DoublePush)
+    }
+
+    /// The piece the move promotes to, if it promotes.
+    #[inline(always)]
+    pub const fn promotion_piece(self) -> Option<PromotionPiece> {
+        match self.kind {
+            MoveKind::Promotion(piece) | MoveKind::PromotionCapture(piece) => Some(piece),
+            _ => None,
+        }
+    }
+
+    /// The kind of piece the move promotes to, if it promotes.
+    #[inline(always)]
+    pub const fn promotion(self) -> Option<PieceKind> {
+        match self.promotion_piece() {
+            Some(piece) => Some(piece.kind()),
+            None => None,
+        }
+    }
+
+    /// Neither a capture nor a promotion.
+    #[inline(always)]
+    pub const fn is_quiet(self) -> bool {
+        matches!(
+            self.kind,
+            MoveKind::Quiet | MoveKind::DoublePush | MoveKind::Castle
+        )
+    }
+
+    /// The square of the piece this move takes when `mover` plays it:
+    /// beside the destination for en passant, the destination otherwise.
+    #[inline(always)]
+    pub const fn captured_square(self, mover: Color) -> usize {
+        let to = self.to.index();
+        match (self.kind, mover) {
+            (MoveKind::EnPassant, Color::White) => to - 8,
+            (MoveKind::EnPassant, Color::Black) => to + 8,
+            _ => to,
         }
     }
 }
 
-/// The pieces a pawn promotes to, in the order the generators list them.
-pub const PROMOTION_KINDS: [PieceKind; 4] = [
-    PieceKind::Queen,
-    PieceKind::Rook,
-    PieceKind::Bishop,
-    PieceKind::Knight,
-];
-
 impl From<Move> for u16 {
     #[inline(always)]
     fn from(m: Move) -> Self {
-        let from_u16 = m.from.index() as u16;
-        let to_u16 = (m.to.index() as u16) << 6;
-        let mut flags = 0u16;
-
-        if let Some(pk) = m.promotion {
-            flags = if m.capture {
-                MOVE_FLAG_PROMO_CAPTURE
-            } else {
-                MOVE_FLAG_PROMOTION
-            };
-            flags |= match pk {
-                PieceKind::Knight => 0,
-                PieceKind::Bishop => 1,
-                PieceKind::Rook => 2,
-                PieceKind::Queen => 3,
-                _ => 0,
-            };
-        } else if m.en_passant {
-            flags = MOVE_FLAG_EN_PASSANT;
-        } else if m.capture {
-            flags = MOVE_FLAG_CAPTURE;
-        } else if m.castle {
-            flags = if m.to.file() > m.from.file() {
-                MOVE_FLAG_KING_CASTLE
-            } else {
-                MOVE_FLAG_QUEEN_CASTLE
-            };
-        } else if m.double_push {
-            flags = MOVE_FLAG_DOUBLE_PUSH;
-        }
-
-        from_u16 | to_u16 | (flags << 12)
+        let flags = match m.kind {
+            MoveKind::Quiet => 0,
+            MoveKind::DoublePush => MOVE_FLAG_DOUBLE_PUSH,
+            MoveKind::Castle if m.to.file() > m.from.file() => MOVE_FLAG_KING_CASTLE,
+            MoveKind::Castle => MOVE_FLAG_QUEEN_CASTLE,
+            MoveKind::Capture => MOVE_FLAG_CAPTURE,
+            MoveKind::EnPassant => MOVE_FLAG_EN_PASSANT,
+            MoveKind::Promotion(piece) => MOVE_FLAG_PROMOTION | piece as u16,
+            MoveKind::PromotionCapture(piece) => MOVE_FLAG_PROMO_CAPTURE | piece as u16,
+        };
+        m.from.index() as u16 | (m.to.index() as u16) << 6 | flags << 12
     }
 }
 
@@ -434,34 +506,25 @@ impl From<u16> for Move {
         if m == 0 {
             return Move::default();
         }
-
         let from = Square::new((m & 0x3F) as u8);
         let to = Square::new(((m >> 6) & 0x3F) as u8);
         let flags = m >> 12;
-
-        let mut mov = Move::quiet(from, to);
-
-        if flags >= MOVE_FLAG_PROMOTION {
-            mov.promotion = Some(match flags & 0b11 {
-                0 => PieceKind::Knight,
-                1 => PieceKind::Bishop,
-                2 => PieceKind::Rook,
-                _ => PieceKind::Queen,
-            });
-            if (flags & 0b0100) != 0 {
-                mov.capture = true;
-            }
-        } else if flags == MOVE_FLAG_EN_PASSANT {
-            mov.capture = true;
-            mov.en_passant = true;
-        } else if flags == MOVE_FLAG_CAPTURE {
-            mov.capture = true;
-        } else if flags == MOVE_FLAG_KING_CASTLE || flags == MOVE_FLAG_QUEEN_CASTLE {
-            mov.castle = true;
-        } else if flags == MOVE_FLAG_DOUBLE_PUSH {
-            mov.double_push = true;
-        }
-        mov
+        let piece = match flags & 0b11 {
+            0 => PromotionPiece::Knight,
+            1 => PromotionPiece::Bishop,
+            2 => PromotionPiece::Rook,
+            _ => PromotionPiece::Queen,
+        };
+        let kind = match flags {
+            MOVE_FLAG_DOUBLE_PUSH => MoveKind::DoublePush,
+            MOVE_FLAG_KING_CASTLE | MOVE_FLAG_QUEEN_CASTLE => MoveKind::Castle,
+            MOVE_FLAG_CAPTURE => MoveKind::Capture,
+            MOVE_FLAG_EN_PASSANT => MoveKind::EnPassant,
+            f if f >= MOVE_FLAG_PROMO_CAPTURE => MoveKind::PromotionCapture(piece),
+            f if f >= MOVE_FLAG_PROMOTION => MoveKind::Promotion(piece),
+            _ => MoveKind::Quiet,
+        };
+        Self { from, to, kind }
     }
 }
 
