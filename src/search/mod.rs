@@ -842,16 +842,15 @@ impl Search<'_> {
     }
 }
 
+/// Searches captures until the position is quiet, standing pat on the static
+/// evaluation; every evasion when in check.
 fn quiesce(
     search: &mut Search,
-    mut alpha: SearchScore,
+    alpha: SearchScore,
     beta: SearchScore,
 ) -> Result<SearchScore, Aborted> {
-    use crate::movepicker::QMovePicker;
-
     search.seldepth = search.seldepth.max(search.ply);
     search.time.count_node();
-
     if search.time.check_hard_limit() {
         return Err(Aborted);
     }
@@ -860,10 +859,8 @@ fn quiesce(
     }
 
     let is_pv = beta - alpha > SearchScore::UNIT;
-    let alpha_orig = alpha;
     let key = search.board.zobrist();
     let tt_entry = search.tt.probe(key);
-    let tt_pv = tt_entry.is_some_and(|e| e.is_pv());
     if let Some(entry) = tt_entry {
         let tt_score = entry.score().at_ply(search.ply);
         if !is_pv && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
@@ -877,25 +874,49 @@ fn quiesce(
     }
 
     let node_eval = search.evaluate_node(tt_entry);
+    let ply = search.ply;
+    let entry = |score: SearchScore, bound, best_move| TTWrite {
+        depth: Depth::ZERO,
+        score: score.to_tt(ply),
+        eval: Some(node_eval.raw),
+        bound,
+        best_move,
+        is_pv: tt_entry.is_some_and(|e| e.is_pv()),
+    };
     let stand_pat = node_eval.refined;
     if stand_pat >= beta {
         if tt_entry.is_none() {
-            search.tt.store(
-                key,
-                TTWrite {
-                    depth: Depth::ZERO,
-                    score: stand_pat.to_tt(search.ply),
-                    eval: Some(node_eval.raw),
-                    bound: Bound::Lower,
-                    best_move: None,
-                    is_pv: tt_pv,
-                },
-            );
+            search.tt.store(key, entry(stand_pat, Bound::Lower, None));
         }
         return Ok(stand_pat);
     }
-    alpha = alpha.max(stand_pat);
 
+    let bounds = NodeBounds {
+        alpha: alpha.max(stand_pat),
+        beta,
+        best_score: stand_pat,
+    };
+    let (best_score, best_move) = quiesce_captures(search, &legality, bounds)?;
+    let bound = bound_for(best_score, alpha, beta);
+    search.tt.store(key, entry(best_score, bound, best_move));
+    Ok(best_score)
+}
+
+/// Searches the captures quiescence does not prune, from `bounds` with the
+/// stand-pat score as the best so far; the best score and the move that
+/// raised alpha to it.
+fn quiesce_captures(
+    search: &mut Search,
+    legality: &LegalityInfo,
+    bounds: NodeBounds,
+) -> Result<(SearchScore, Option<Move>), Aborted> {
+    use crate::movepicker::QMovePicker;
+
+    let NodeBounds {
+        mut alpha,
+        beta,
+        best_score: stand_pat,
+    } = bounds;
     let mut best_score = stand_pat;
     let mut best_move = None;
     let mut picker = QMovePicker::new();
@@ -903,17 +924,9 @@ fn quiesce(
         if search.is_futile_capture(m, stand_pat, alpha) {
             continue;
         }
-        let Some(undo) = search.make_move(m, &legality) else {
+        let Some(score) = quiesce_move(search, m, legality, alpha, beta)? else {
             continue;
         };
-        let score = quiesce(search, -beta, -alpha);
-        search.unmake_move(m, undo);
-        let score = -score?;
-
-        if search.time.check_hard_limit() {
-            return Err(Aborted);
-        }
-
         if score > best_score {
             best_score = score;
             if score > alpha {
@@ -925,20 +938,7 @@ fn quiesce(
             }
         }
     }
-
-    let bound = bound_for(best_score, alpha_orig, beta);
-    search.tt.store(
-        key,
-        TTWrite {
-            depth: Depth::ZERO,
-            score: best_score.to_tt(search.ply),
-            eval: Some(node_eval.raw),
-            bound,
-            best_move,
-            is_pv: tt_pv,
-        },
-    );
-    Ok(best_score)
+    Ok((best_score, best_move))
 }
 
 /// Quiescence when in check: every evasion is searched so mates are found.
@@ -962,17 +962,9 @@ fn quiesce_evasions(
 
     let mut best_score = SearchScore::mated_at(search.ply);
     while let Some(m) = evasions.pick_best() {
-        let Some(undo) = search.make_move(m, legality) else {
+        let Some(score) = quiesce_move(search, m, legality, alpha, beta)? else {
             continue;
         };
-        let score = quiesce(search, -beta, -alpha);
-        search.unmake_move(m, undo);
-        let score = -score?;
-
-        if search.time.check_hard_limit() {
-            return Err(Aborted);
-        }
-
         if score > best_score {
             best_score = score;
             if score > alpha {
@@ -984,6 +976,27 @@ fn quiesce_evasions(
         }
     }
     Ok(best_score)
+}
+
+/// The quiescence score of `m` for the side making it, in the window
+/// `alpha`..`beta`; `None` when `m` leaves its king in check.
+fn quiesce_move(
+    search: &mut Search,
+    m: Move,
+    legality: &LegalityInfo,
+    alpha: SearchScore,
+    beta: SearchScore,
+) -> Result<Option<SearchScore>, Aborted> {
+    let Some(undo) = search.make_move(m, legality) else {
+        return Ok(None);
+    };
+    let score = quiesce(search, -beta, -alpha);
+    search.unmake_move(m, undo);
+    let score = -score?;
+    if search.time.check_hard_limit() {
+        return Err(Aborted);
+    }
+    Ok(Some(score))
 }
 
 /// The score that ends a non-PV node not in check before its moves: from
