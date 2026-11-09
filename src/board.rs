@@ -187,18 +187,14 @@ impl Board {
     /// bishops that all stand on squares of one color.
     pub fn has_insufficient_material(&self) -> bool {
         const LIGHT_SQUARES: u64 = 0x55AA_55AA_55AA_55AA;
-        let bb = |p: Piece| self.piece_bb[p.index()];
-        let mating_material = bb(Piece::WP)
-            | bb(Piece::BP)
-            | bb(Piece::WR)
-            | bb(Piece::BR)
-            | bb(Piece::WQ)
-            | bb(Piece::BQ);
+        let mating_material = self.kind_bb(PieceKind::Pawn)
+            | self.kind_bb(PieceKind::Rook)
+            | self.kind_bb(PieceKind::Queen);
         if mating_material != 0 {
             return false;
         }
-        let knights = bb(Piece::WN) | bb(Piece::BN);
-        let bishops = bb(Piece::WB) | bb(Piece::BB);
+        let knights = self.kind_bb(PieceKind::Knight);
+        let bishops = self.kind_bb(PieceKind::Bishop);
         let minor_count = (knights | bishops).count_ones();
         let bishops_share_a_color = bishops & LIGHT_SQUARES == 0 || bishops & !LIGHT_SQUARES == 0;
         minor_count <= 1 || (knights == 0 && bishops_share_a_color)
@@ -725,7 +721,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn unmake_move(&mut self, m: Move, u: Undo) {
+    pub fn unmake_move(&mut self, m: Move, undo: Undo) {
         let from = m.from.index();
         let to = m.to.index();
 
@@ -739,17 +735,17 @@ impl Board {
         self.eval_state.pop_move();
 
         self.history.pop();
-        self.zobrist = u.old_zobrist;
+        self.zobrist = undo.old_zobrist;
 
         self.turn = self.turn.other();
         if self.turn == Color::Black {
             self.fullmove_number -= 1;
         }
 
-        self.castle = u.old_castle;
-        self.en_passant = u.old_en_passant;
-        self.halfmove_clock = u.old_halfmove_clock;
-        self.plies_from_null = u.old_plies_from_null;
+        self.castle = undo.old_castle;
+        self.en_passant = undo.old_en_passant;
+        self.halfmove_clock = undo.old_halfmove_clock;
+        self.plies_from_null = undo.old_plies_from_null;
 
         self.piece_on[from] = moving_piece;
         self.piece_bb[moving_piece.index()] |= 1u64 << from;
@@ -759,7 +755,7 @@ impl Board {
         self.color_bb[self.turn as usize] &= !(1u64 << to);
 
         if m.is_capture() {
-            let captured = u.captured_piece;
+            let captured = undo.captured_piece;
 
             if m.is_en_passant() {
                 self.piece_on[to] = Piece::Empty;
@@ -814,13 +810,13 @@ impl Board {
     }
 
     #[inline]
-    pub fn unmake_null_move(&mut self, u: Undo) {
+    pub fn unmake_null_move(&mut self, undo: Undo) {
         self.history.pop();
-        self.zobrist = u.old_zobrist;
+        self.zobrist = undo.old_zobrist;
         self.turn = self.turn.other();
-        self.en_passant = u.old_en_passant;
-        self.halfmove_clock = u.old_halfmove_clock;
-        self.plies_from_null = u.old_plies_from_null;
+        self.en_passant = undo.old_en_passant;
+        self.halfmove_clock = undo.old_halfmove_clock;
+        self.plies_from_null = undo.old_plies_from_null;
     }
 
     #[inline]
