@@ -147,7 +147,7 @@ impl Network {
             file_bytes: bytes.len(),
         };
         let mut feature_weights = Box::new([Column::ZERO; INPUTS]);
-        for column in feature_weights.iter_mut() {
+        for column in &mut feature_weights {
             *column = values.column("feature", MAX_FEATURE_WEIGHT)?;
         }
         let feature_bias = values.column("feature bias", MAX_FEATURE_WEIGHT)?;

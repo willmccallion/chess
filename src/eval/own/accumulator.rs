@@ -147,13 +147,12 @@ impl AccumulatorStack {
 
     /// Accumulators of the current position, which is `position`.
     pub fn current(&mut self, net: &Network, position: PositionView) -> &Pair {
-        match self.latest_computed() {
-            Some(base) => self.update_from(net, base),
-            None => {
-                let ply = &mut self.plies[self.top];
-                ply.accumulators = refreshed(net, position);
-                ply.computed = true;
-            }
+        if let Some(base) = self.latest_computed() {
+            self.update_from(net, base)
+        } else {
+            let ply = &mut self.plies[self.top];
+            ply.accumulators = refreshed(net, position);
+            ply.computed = true;
         }
         &self.plies[self.top].accumulators
     }

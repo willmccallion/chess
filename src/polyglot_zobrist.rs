@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unreadable_literal,
+    reason = "the random numbers of the Polyglot book format, as published"
+)]
+
 use crate::board::Board;
 use crate::types::{Bitboard, Color, Piece, PieceKind};
 

@@ -1,4 +1,4 @@
-//! Input feature indices: HalfKAv2_hm (piece-square) and FullThreats (attacker-target pairs).
+//! Input feature indices: `HalfKAv2_hm` (piece-square) and `FullThreats` (attacker-target pairs).
 
 use super::arch::{PSQ_DIMENSIONS, THREAT_DIMENSIONS};
 use crate::eval::PositionView;
@@ -54,7 +54,7 @@ const fn vertical_flip(perspective: Color) -> usize {
     }
 }
 
-/// HalfKAv2_hm feature of `piece` on `sq` seen by `perspective`, whose king is on `king_sq`.
+/// `HalfKAv2_hm` feature of `piece` on `sq` seen by `perspective`, whose king is on `king_sq`.
 pub fn psq_index(perspective: Color, sq: usize, piece: SfPiece, king_sq: usize) -> usize {
     let flip = vertical_flip(perspective);
     let piece_base = if piece.kind_index() == PieceKind::King as usize {
@@ -178,7 +178,7 @@ const fn threat_orientation(king_sq: usize) -> usize {
     if king_sq % 8 < 4 { 0 } else { 7 }
 }
 
-/// FullThreats feature for `attacker` on `from` hitting `attacked` on `to`, or `None` if
+/// `FullThreats` feature for `attacker` on `from` hitting `attacked` on `to`, or `None` if
 /// the pair is not an input of the network.
 pub fn threat_index(
     perspective: Color,
@@ -221,7 +221,7 @@ pub const fn king_square(position: PositionView, color: Color) -> usize {
     position.piece_bb[Piece::from_kind(PieceKind::King, color).index()].trailing_zeros() as usize
 }
 
-/// Every active HalfKAv2_hm feature of `perspective`.
+/// Every active `HalfKAv2_hm` feature of `perspective`.
 pub fn active_psq_features(position: PositionView, perspective: Color, out: &mut Vec<usize>) {
     let king_sq = king_square(position, perspective);
     let mut occupied = position.occupied;
@@ -234,7 +234,7 @@ pub fn active_psq_features(position: PositionView, perspective: Color, out: &mut
     }
 }
 
-/// Every active FullThreats feature of `perspective`.
+/// Every active `FullThreats` feature of `perspective`.
 pub fn active_threat_features(position: PositionView, perspective: Color, out: &mut Vec<usize>) {
     let king_sq = king_square(position, perspective);
     let occupied = position.occupied;

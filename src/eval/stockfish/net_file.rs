@@ -1,4 +1,4 @@
-//! Reader for Stockfish 18 `.nnue` files (HalfKAv2_hm + FullThreats big net, HalfKAv2_hm small net).
+//! Reader for Stockfish 18 `.nnue` files (`HalfKAv2_hm` + `FullThreats` big net, `HalfKAv2_hm` small net).
 
 use super::arch::{
     FC0_OUTPUTS, FC1_INPUTS_PADDED, FC1_OUTPUTS, LAYER_STACKS, PSQ_DIMENSIONS, PSQT_BUCKETS,

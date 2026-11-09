@@ -286,7 +286,7 @@ impl SharedTransTable {
     }
 
     pub fn clear(&self) {
-        for cluster in self.table.clusters.iter() {
+        for cluster in &self.table.clusters {
             for slot in &cluster.slots {
                 slot.clear();
             }

@@ -1,7 +1,15 @@
 //! SIMD kernels shared by the network layers.
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use std::arch::x86_64::{
+    __m256i, _mm_add_epi16, _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_set1_epi16,
+    _mm_shuffle_epi32, _mm_storeu_si128, _mm256_add_epi16, _mm256_castsi256_ps,
+    _mm256_castsi256_si128, _mm256_cmpeq_epi32, _mm256_cvtepi8_epi16, _mm256_dpbusd_avx_epi32,
+    _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_max_epi16, _mm256_min_epi16,
+    _mm256_movemask_ps, _mm256_mulhi_epi16, _mm256_packus_epi16, _mm256_permute4x64_epi64,
+    _mm256_set1_epi16, _mm256_set1_epi32, _mm256_setzero_si256, _mm256_slli_epi16,
+    _mm256_storeu_si256, _mm256_sub_epi16,
+};
 
 /// Dot product of activations (0..=127) and weights; exact for any length.
 #[inline(always)]
@@ -28,7 +36,7 @@ pub(crate) fn dot_u8_i8_scalar(input: &[u8], weights: &[i8]) -> i32 {
 /// Multiplies 32 u8 activations by 32 i8 weights and adds groups of four to `acc`.
 ///
 /// With AVX-VNNI this is one exact `dpbusd`. Otherwise `maddubs` sums adjacent pairs into
-/// i16; with activations <= 127 a pair lies within ±32_512, so it never saturates.
+/// i16; with activations <= 127 a pair lies within ±`32_512`, so it never saturates.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
 fn dpbusd(acc: __m256i, x: __m256i, w: __m256i) -> __m256i {

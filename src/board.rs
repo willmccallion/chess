@@ -1,7 +1,10 @@
 use crate::eval::{EvalState, IncrementalState, PositionView};
 use crate::fen;
 use crate::magics;
-use crate::types::*;
+use crate::types::{
+    BK_CASTLE, BQ_CASTLE, Bitboard, CASTLINGS, Castling, Color, Move, MoveList, PROMOTION_PIECES,
+    Piece, PieceKind, Square, Undo, WK_CASTLE, WQ_CASTLE, ZKey, castling_rook_squares, squares,
+};
 use crate::zobrist;
 
 /// The squares a piece move may land on, and which of them hold enemy
@@ -504,7 +507,7 @@ impl Board {
     }
 
     /// Whether the king's move `m` is one of the side to move's castlings and
-    /// may be played now. make_move moves the rook from the square the
+    /// may be played now. `make_move` moves the rook from the square the
     /// castling names, so every check the generator makes is repeated here.
     fn can_castle_as(&self, m: Move) -> bool {
         let Some(castling) = CASTLINGS[self.turn as usize]
@@ -653,7 +656,8 @@ impl Board {
         }
 
         if m.is_double_push() {
-            let ep = Square::from_file_rank(m.from.file(), (m.from.rank() + m.to.rank()) / 2);
+            let ep =
+                Square::from_file_rank(m.from.file(), u8::midpoint(m.from.rank(), m.to.rank()));
             self.en_passant = Some(ep);
             self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
@@ -860,45 +864,42 @@ impl Board {
         let mut san = String::new();
 
         if let Some(pk) = moving_piece.kind() {
-            match pk {
-                PieceKind::Pawn => {
-                    if m.is_capture() {
-                        san.push(m.from.file_char());
+            if pk == PieceKind::Pawn {
+                if m.is_capture() {
+                    san.push(m.from.file_char());
+                }
+            } else {
+                san.push(pk.to_char_upper());
+                let mut ambiguous_moves = Vec::new();
+                for other_move in legal_moves {
+                    let other_from = other_move.from.index();
+                    if self.piece_on[other_from].kind() == Some(pk)
+                        && other_from != from
+                        && other_move.to == m.to
+                    {
+                        ambiguous_moves.push(other_move);
                     }
                 }
-                _ => {
-                    san.push(pk.to_char_upper());
-                    let mut ambiguous_moves = Vec::new();
-                    for other_move in legal_moves {
-                        let other_from = other_move.from.index();
-                        if self.piece_on[other_from].kind() == Some(pk)
-                            && other_from != from
-                            && other_move.to == m.to
-                        {
-                            ambiguous_moves.push(other_move);
+
+                if !ambiguous_moves.is_empty() {
+                    let mut file_is_unique = true;
+                    let mut rank_is_unique = true;
+
+                    for amb_move in &ambiguous_moves {
+                        if amb_move.from.file() == m.from.file() {
+                            file_is_unique = false;
+                        }
+                        if amb_move.from.rank() == m.from.rank() {
+                            rank_is_unique = false;
                         }
                     }
 
-                    if !ambiguous_moves.is_empty() {
-                        let mut file_is_unique = true;
-                        let mut rank_is_unique = true;
-
-                        for amb_move in &ambiguous_moves {
-                            if amb_move.from.file() == m.from.file() {
-                                file_is_unique = false;
-                            }
-                            if amb_move.from.rank() == m.from.rank() {
-                                rank_is_unique = false;
-                            }
-                        }
-
-                        if file_is_unique {
-                            san.push(m.from.file_char());
-                        } else if rank_is_unique {
-                            san.push(m.from.rank_char());
-                        } else {
-                            san.push_str(&m.from.to_string());
-                        }
+                    if file_is_unique {
+                        san.push(m.from.file_char());
+                    } else if rank_is_unique {
+                        san.push(m.from.rank_char());
+                    } else {
+                        san.push_str(&m.from.to_string());
                     }
                 }
             }
@@ -928,6 +929,7 @@ impl Board {
 mod tests {
     use super::*;
     use crate::test_support::random_game_positions;
+    use crate::types::START_FEN;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 

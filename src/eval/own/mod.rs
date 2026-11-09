@@ -1,5 +1,5 @@
 //! Our own network, trained with bullet on the engine's self-play games: a
-//! `(768 → 128)×2 → 1` perspective network with SCReLU, loaded from a file at runtime.
+//! `(768 → 128)×2 → 1` perspective network with `SCReLU`, loaded from a file at runtime.
 
 mod accumulator;
 mod network;

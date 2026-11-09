@@ -1,3 +1,8 @@
+#![allow(
+    clippy::doc_markdown,
+    reason = "clap prints these doc comments as --help text"
+)]
+
 use chess::bench;
 use chess::board::Board;
 use chess::compare::{CompareConfig, run_compare};
@@ -804,9 +809,8 @@ fn options_without_book(extra: &[String]) -> Vec<(String, String)> {
 
 /// The path of this executable, which plays when no engine is named.
 fn own_binary() -> String {
-    std::env::current_exe()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|e| {
-            exit_with_error(&format!("cannot locate this binary ({e}); pass --engine"))
-        })
+    std::env::current_exe().map_or_else(
+        |e| exit_with_error(&format!("cannot locate this binary ({e}); pass --engine")),
+        |path| path.to_string_lossy().into_owned(),
+    )
 }

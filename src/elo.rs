@@ -3,28 +3,28 @@
 use crate::game_runner::Wdl;
 
 /// The two-sided 95% quantile of the normal distribution.
-pub(crate) const Z_95: f64 = 1.96;
+pub const Z_95: f64 = 1.96;
 
 /// The Elo difference at which the stronger side scores `score` (0 to 1).
-pub(crate) fn score_to_elo(score: f64) -> f64 {
+pub fn score_to_elo(score: f64) -> f64 {
     -400.0 * (1.0 / score - 1.0).log10()
 }
 
 /// The score (0 to 1) the stronger side expects at an Elo difference of `elo`.
-pub(crate) fn elo_to_score(elo: f64) -> f64 {
+pub fn elo_to_score(elo: f64) -> f64 {
     1.0 / (1.0 + 10f64.powf(-elo / 400.0))
 }
 
 /// The Elo difference `wdl` implies, or `None` without games or after a
 /// clean sweep, where it is infinite.
-pub(crate) fn elo_of(wdl: Wdl) -> Option<f64> {
+pub fn elo_of(wdl: Wdl) -> Option<f64> {
     let score = score_of(wdl)?;
     (score > 0.0 && score < 1.0).then(|| score_to_elo(score))
 }
 
 /// The half-width of a 95% confidence interval around [`elo_of`], counting
 /// games as independent; `None` with fewer than two games or a clean sweep.
-pub(crate) fn elo_error_95(wdl: Wdl) -> Option<f64> {
+pub fn elo_error_95(wdl: Wdl) -> Option<f64> {
     let games = wdl.games() as f64;
     let score = score_of(wdl).filter(|&s| games >= 2.0 && s > 0.0 && s < 1.0)?;
     let standard_error = (score * (1.0 - score) / games).sqrt();

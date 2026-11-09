@@ -1,9 +1,9 @@
 //! SPSA tuning of the search parameters from self-play game pairs.
 //!
-//! Each pair perturbs every parameter by ±c_k, plays the two perturbed engines against
+//! Each pair perturbs every parameter by ±`c_k`, plays the two perturbed engines against
 //! each other twice with colors swapped, and moves the parameters toward the winner.
 //! Workers run pairs concurrently and update the shared estimate as results arrive
-//! (the schedule and step sizes follow OpenBench).
+//! (the schedule and step sizes follow `OpenBench`).
 
 use crate::game_runner::{
     EngineResult, GameClock, GameConfig, GameEndReason, GameResult, StartPosition, Wdl, play_game,
@@ -86,7 +86,7 @@ struct Gains {
     learning: f64,
 }
 
-/// OpenBench's schedule: `c_k = c / (k+1)^γ`, `a_k = a / (A+k+1)^α`, with `c` and `a`
+/// `OpenBench`'s schedule: `c_k = c / (k+1)^γ`, `a_k = a / (A+k+1)^α`, with `c` and `a`
 /// chosen so the final perturbation is one `step` and the final rate `R_END * step²`.
 fn gains(iteration: usize, planned: usize) -> Gains {
     let n = planned.max(1) as f64;
@@ -260,21 +260,20 @@ fn worker(
         let Some(job) = job else {
             return Ok(());
         };
-        match play_pair(&mut plus, &mut minus, &job, config).map_err(|e| e.to_string())? {
-            Some((result, games)) => {
-                let mut state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
-                state.apply(&job, result, config.pairs);
-                state.score.add(EngineResult::of(games[0], true));
-                state.score.add(EngineResult::of(games[1], false));
-                if state.completed % REPORT_EVERY == 0 {
-                    report(&state, config, started);
-                }
+        if let Some((result, games)) =
+            play_pair(&mut plus, &mut minus, &job, config).map_err(|e| e.to_string())?
+        {
+            let mut state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
+            state.apply(&job, result, config.pairs);
+            state.score.add(EngineResult::of(games[0], true));
+            state.score.add(EngineResult::of(games[1], false));
+            if state.completed % REPORT_EVERY == 0 {
+                report(&state, config, started);
             }
-            None => {
-                eprintln!("engine crashed; restarting both and discarding the pair");
-                plus = spawn()?;
-                minus = spawn()?;
-            }
+        } else {
+            eprintln!("engine crashed; restarting both and discarding the pair");
+            plus = spawn()?;
+            minus = spawn()?;
         }
     }
 }

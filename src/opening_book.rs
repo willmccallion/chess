@@ -74,7 +74,7 @@ impl OpeningBook {
         let mut entries = Vec::new();
         let mut buffer = [0; 16];
 
-        while let Ok(()) = reader.read_exact(&mut buffer) {
+        while matches!(reader.read_exact(&mut buffer), Ok(())) {
             let key = (&buffer[0..8]).read_u64::<BigEndian>()?;
             let raw_move = (&buffer[8..10]).read_u16::<BigEndian>()?;
             let weight = (&buffer[10..12]).read_u16::<BigEndian>()?;

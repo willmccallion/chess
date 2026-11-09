@@ -1,5 +1,5 @@
 //! Which attacker-target relations a move creates and destroys, for incremental
-//! FullThreats updates.
+//! `FullThreats` updates.
 //!
 //! The move is replayed as single-piece removals and placements on a lightweight copy of
 //! the position. Each step reports the threats of and against the piece, plus the slider

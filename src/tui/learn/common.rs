@@ -137,31 +137,29 @@ impl BoardPanel {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.input.pending_promotion().is_some() {
-                    return match geometry.promotion_at(mouse.column, mouse.row) {
-                        Some(kind) => self.input.choose_promotion(self.legal.as_slice(), kind),
-                        None => {
-                            self.input.clear();
-                            None
-                        }
-                    };
-                }
-                match square {
-                    Some(square) => self.input.press(&self.board, self.legal.as_slice(), square),
-                    None => {
+                    return if let Some(kind) = geometry.promotion_at(mouse.column, mouse.row) {
+                        self.input.choose_promotion(self.legal.as_slice(), kind)
+                    } else {
                         self.input.clear();
                         None
-                    }
+                    };
+                }
+                if let Some(square) = square {
+                    self.input.press(&self.board, self.legal.as_slice(), square)
+                } else {
+                    self.input.clear();
+                    None
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => match square {
-                Some(square) => self
-                    .input
-                    .release(&self.board, self.legal.as_slice(), square),
-                None => {
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(square) = square {
+                    self.input
+                        .release(&self.board, self.legal.as_slice(), square)
+                } else {
                     self.input.release_off_board();
                     None
                 }
-            },
+            }
             _ => None,
         }
     }
@@ -191,15 +189,13 @@ impl BoardPanel {
         }
         if self.input.pending_promotion().is_some() {
             let kind = key.code.as_char().and_then(promotion_kind);
-            return match kind {
-                Some(kind) => self
-                    .input
+            return if let Some(kind) = kind {
+                self.input
                     .choose_promotion(self.legal.as_slice(), kind)
-                    .map_or(BoardKey::Handled, BoardKey::Move),
-                None => {
-                    self.input.clear();
-                    BoardKey::Handled
-                }
+                    .map_or(BoardKey::Handled, BoardKey::Move)
+            } else {
+                self.input.clear();
+                BoardKey::Handled
             };
         }
         if key.code == KeyCode::Enter && interactive {

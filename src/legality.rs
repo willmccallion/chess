@@ -115,7 +115,7 @@ impl Board {
             let sniper = remaining.trailing_zeros() as usize;
             remaining &= remaining - 1;
             let blockers = tables.between[king_sq][sniper] & self.all_pieces;
-            if blockers.count_ones() == 1 && blockers & ours != 0 {
+            if blockers.is_power_of_two() && blockers & ours != 0 {
                 pinned |= blockers;
             }
         }

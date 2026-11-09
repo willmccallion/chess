@@ -119,16 +119,13 @@ impl Standings {
     /// Records engine 1's points for a game; returns true when this completes a pair.
     fn record_pair_game(&mut self, game_idx: usize, e1_points: f64) -> bool {
         let pair_idx = game_idx / 2;
-        match self.unpaired_e1_points.remove(&pair_idx) {
-            Some(partner_points) => {
-                self.penta
-                    .add(PairScore::from_game_points(partner_points, e1_points));
-                true
-            }
-            None => {
-                self.unpaired_e1_points.insert(pair_idx, e1_points);
-                false
-            }
+        if let Some(partner_points) = self.unpaired_e1_points.remove(&pair_idx) {
+            self.penta
+                .add(PairScore::from_game_points(partner_points, e1_points));
+            true
+        } else {
+            self.unpaired_e1_points.insert(pair_idx, e1_points);
+            false
         }
     }
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::unreadable_literal, reason = "the keys build.rs generates")]
+
 use crate::types::Piece;
 
 // Include the pre-computed keys

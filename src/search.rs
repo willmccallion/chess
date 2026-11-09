@@ -1039,7 +1039,7 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, 
     }))
 }
 
-/// What ProbCut weighs about a non-PV node not in check.
+/// What `ProbCut` weighs about a non-PV node not in check.
 #[derive(Clone, Copy)]
 struct ProbCutNode {
     depth: i32,
@@ -1104,7 +1104,7 @@ fn probcut(
     Ok(None)
 }
 
-/// The score of a ProbCut capture already made: its quiescence score, and if
+/// The score of a `ProbCut` capture already made: its quiescence score, and if
 /// that beats `probcut_beta`, a reduced search's.
 fn probe_capture(
     search: &mut Search,
@@ -1873,7 +1873,7 @@ fn iterative_deepening(
             };
             score = iteration_score;
             if score <= alpha {
-                beta = (alpha + beta) / 2;
+                beta = i32::midpoint(alpha, beta);
                 alpha = (score - delta).max(-SCORE_BOUND);
                 fail_highs = 0;
             } else if score >= beta {
@@ -1950,12 +1950,11 @@ pub fn search_reporting(
     tt.tick_age();
 
     let legal;
-    let root_moves = match &limits.root_moves {
-        Some(listed) => listed.as_slice(),
-        None => {
-            legal = legal_moves(board);
-            legal.as_slice()
-        }
+    let root_moves = if let Some(listed) = &limits.root_moves {
+        listed.as_slice()
+    } else {
+        legal = legal_moves(board);
+        legal.as_slice()
     };
     if root_moves.is_empty() {
         if limits.wait_for_stop {
@@ -2021,12 +2020,11 @@ pub fn search_reporting(
             nodes: 0,
             score: None,
         };
-        let main = match main {
-            Ok(handle) => handle.join().unwrap_or_else(|_| failed()),
-            Err(_) => {
-                control.stop();
-                failed()
-            }
+        let main = if let Ok(handle) = main {
+            handle.join().unwrap_or_else(|_| failed())
+        } else {
+            control.stop();
+            failed()
         };
         let helper_nodes: u64 = helpers.into_iter().map(|h| h.join().unwrap_or(0)).sum();
         let nodes = main.nodes + helper_nodes;

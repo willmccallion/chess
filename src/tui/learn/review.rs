@@ -663,7 +663,7 @@ impl Screen for ReviewScreen {
         let last = self.record.moves.len();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Nav::Back,
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+            KeyCode::Right | KeyCode::Char('l' | ' ') => {
                 self.cursor = (self.cursor + 1).min(last);
             }
             KeyCode::Left | KeyCode::Char('h') => {

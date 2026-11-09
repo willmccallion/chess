@@ -29,7 +29,7 @@ pub struct LevelSpec {
     pub book_plies: usize,
 }
 
-/// Interpolated from matches between levels, anchored on Stockfish's UCI_Elo; the Elo is
+/// Interpolated from matches between levels, anchored on Stockfish's `UCI_Elo`; the Elo is
 /// on an engine scale and only roughly a human rating.
 const LEVELS: [LevelSpec; 10] = [
     LevelSpec {

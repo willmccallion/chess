@@ -503,7 +503,7 @@ pub fn line_status(
 }
 
 /// One suggestion for today.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Task {
     ReviewPuzzles(usize),
     ReviewLines(usize),

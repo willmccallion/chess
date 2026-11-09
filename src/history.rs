@@ -24,7 +24,7 @@ pub fn stat_bonus(depth: i32, params: &SearchParams) -> i32 {
     bonus.clamp(0, params.history_bonus_max)
 }
 
-/// Moves the entry toward ±HISTORY_MAX, shrinking updates as it saturates.
+/// Moves the entry toward ±`HISTORY_MAX`, shrinking updates as it saturates.
 #[inline(always)]
 fn apply_gravity(entry: &mut i16, bonus: i32) {
     let value = i32::from(*entry);

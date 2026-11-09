@@ -1,6 +1,6 @@
 //! Dimensions of the Stockfish 18 network architecture.
 
-/// HalfKAv2_hm: 32 king buckets x 11 piece kinds x 64 squares.
+/// `HalfKAv2_hm`: 32 king buckets x 11 piece kinds x 64 squares.
 pub const PSQ_DIMENSIONS: usize = 22_528;
 pub const THREAT_DIMENSIONS: usize = 79_856;
 pub const PSQT_BUCKETS: usize = 8;

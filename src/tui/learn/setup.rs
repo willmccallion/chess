@@ -292,7 +292,7 @@ impl Screen for Setup {
                 self.change(false);
                 Nav::Stay
             }
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+            KeyCode::Right | KeyCode::Char('l' | ' ') => {
                 self.change(true);
                 Nav::Stay
             }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unreadable_literal,
+    reason = "the attack tables and magics build.rs generates"
+)]
+
 use crate::types::Bitboard;
 
 // The leaper attack tables, and for rooks and bishops the magics build.rs

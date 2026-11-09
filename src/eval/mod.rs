@@ -451,14 +451,13 @@ fn evaluate_with<E: Evaluator>(
     wrap: fn(E::State) -> EvalState,
 ) -> i32 {
     let (state, position) = board.eval_state_and_view();
-    match stored(state) {
-        Some(stack) => net.evaluate(stack, position),
-        None => {
-            let mut stack = net.new_state();
-            let score = net.evaluate(&mut stack, position);
-            *state = wrap(stack);
-            score
-        }
+    if let Some(stack) = stored(state) {
+        net.evaluate(stack, position)
+    } else {
+        let mut stack = net.new_state();
+        let score = net.evaluate(&mut stack, position);
+        *state = wrap(stack);
+        score
     }
 }
 
