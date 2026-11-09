@@ -403,6 +403,7 @@ pub struct Undo {
     pub old_en_passant_sq: i32,
     pub old_halfmove_clock: i32,
     pub old_plies_from_null: u32,
+    pub old_zobrist: ZKey,
 }
 
 pub const WK_CASTLE: u8 = 1 << 0;

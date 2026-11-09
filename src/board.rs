@@ -1174,6 +1174,7 @@ impl Board {
             old_en_passant_sq: self.en_passant_sq,
             old_halfmove_clock: self.halfmove_clock,
             old_plies_from_null: self.plies_from_null,
+            old_zobrist: self.zobrist,
         };
         self.plies_from_null += 1;
 
@@ -1395,7 +1396,7 @@ impl Board {
         self.eval_state.pop_move();
 
         self.history.pop();
-        self.zobrist = *self.history.last().unwrap_or(&0);
+        self.zobrist = u.old_zobrist;
 
         self.turn = self.turn.other();
         if self.turn == Color::Black {
@@ -1484,6 +1485,7 @@ impl Board {
             old_en_passant_sq: self.en_passant_sq,
             old_halfmove_clock: self.halfmove_clock,
             old_plies_from_null: self.plies_from_null,
+            old_zobrist: self.zobrist,
         };
         self.plies_from_null = 0;
 
@@ -1503,7 +1505,7 @@ impl Board {
     #[inline]
     pub fn unmake_null_move(&mut self, u: Undo) {
         self.history.pop();
-        self.zobrist = *self.history.last().unwrap_or(&0);
+        self.zobrist = u.old_zobrist;
         self.turn = self.turn.other();
         self.en_passant_sq = u.old_en_passant_sq;
         self.halfmove_clock = u.old_halfmove_clock;
@@ -1734,6 +1736,23 @@ mod tests {
         assert_eq!(san("1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1", "a7b8q"), "axb8=Q+");
         assert_eq!(san("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "e1g1"), "O-O");
         assert_eq!(san("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "e1c1"), "O-O-O");
+    }
+
+    #[test]
+    fn unmaking_restores_the_key_whatever_the_history_holds() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        board.history.clear();
+        let before = board.zobrist;
+        let mut legal = MoveList::new();
+        board.generate_legal_moves(&mut legal);
+        let m = legal.get(0);
+
+        let undo = board.make_move(m);
+        board.unmake_move(m, undo);
+        let null_undo = board.make_null_move();
+        board.unmake_null_move(null_undo);
+
+        assert_eq!(board.zobrist, before);
     }
 
     #[test]
