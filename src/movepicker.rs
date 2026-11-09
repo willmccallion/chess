@@ -267,53 +267,18 @@ impl MovePicker {
             if self.skip_quiets && self.stage.is_quiet_stage() {
                 self.stage = Stage::BadCaptures;
             }
-            match self.stage {
-                Stage::TtMove => {
-                    self.stage = Stage::GenCaptures;
-                    if let Some(m) = self.tt_move
-                        && board.is_pseudo_legal(m)
-                    {
-                        return Some(m);
-                    }
-                }
-
+            let found = match self.stage {
+                Stage::TtMove => self.tt_move_if_playable(board),
                 Stage::GenCaptures => {
                     self.scored.fill(
                         |moves| board.generate_captures(moves),
                         |m| ctx.capture_score(board, m),
                     );
                     self.stage = Stage::GoodCaptures;
+                    None
                 }
-
-                Stage::GoodCaptures => {
-                    while let Some(m) = self.scored.pick_best() {
-                        if Some(m) == self.tt_move {
-                            continue;
-                        }
-                        if !see_ge(board, m, Centipawns::ZERO) {
-                            if self.bad_captures.len() < MAX_BAD_CAPTURES {
-                                self.bad_captures.push(m);
-                            }
-                            continue;
-                        }
-                        return Some(m);
-                    }
-                    self.stage = Stage::Special(0);
-                }
-
-                Stage::Special(i) => {
-                    self.stage = if i + 1 < self.specials.len() {
-                        Stage::Special(i + 1)
-                    } else {
-                        Stage::GenQuiets
-                    };
-                    if let Some(m) = self.specials[i]
-                        && self.is_fresh_quiet_special(m, board, &self.specials[..i])
-                    {
-                        return Some(m);
-                    }
-                }
-
+                Stage::GoodCaptures => self.next_good_capture(board),
+                Stage::Special(i) => self.special_if_fresh(i, board),
                 Stage::GenQuiets => {
                     let threats = QuietThreats::new(board);
                     self.scored.fill(
@@ -321,31 +286,71 @@ impl MovePicker {
                         |m| ctx.quiet_score(board, &threats, m),
                     );
                     self.stage = Stage::Quiets;
+                    None
                 }
-
-                Stage::Quiets => {
-                    while let Some(m) = self.scored.pick_best() {
-                        let already_tried =
-                            Some(m) == self.tt_move || self.specials.contains(&Some(m));
-                        if !already_tried {
-                            return Some(m);
-                        }
-                    }
-                    self.stage = Stage::BadCaptures;
-                }
-
-                Stage::BadCaptures => {
-                    if self.bad_idx < self.bad_captures.len() {
-                        let m = self.bad_captures.as_slice()[self.bad_idx];
-                        self.bad_idx += 1;
-                        return Some(m);
-                    }
-                    self.stage = Stage::Done;
-                }
-
+                Stage::Quiets => self.next_untried_quiet(),
+                Stage::BadCaptures => self.next_bad_capture(),
                 Stage::Done => return None,
+            };
+            if found.is_some() {
+                return found;
             }
         }
+    }
+
+    fn tt_move_if_playable(&mut self, board: &Board) -> Option<Move> {
+        self.stage = Stage::GenCaptures;
+        self.tt_move.filter(|&m| board.is_pseudo_legal(m))
+    }
+
+    /// The best capture left that does not lose material; one that does is
+    /// kept for the bad-capture stage.
+    fn next_good_capture(&mut self, board: &Board) -> Option<Move> {
+        while let Some(m) = self.scored.pick_best() {
+            if Some(m) == self.tt_move {
+                continue;
+            }
+            if see_ge(board, m, Centipawns::ZERO) {
+                return Some(m);
+            }
+            if self.bad_captures.len() < MAX_BAD_CAPTURES {
+                self.bad_captures.push(m);
+            }
+        }
+        self.stage = Stage::Special(0);
+        None
+    }
+
+    /// The `i`th killer or counter-move, unless it is not a quiet move here
+    /// or was already handed out.
+    fn special_if_fresh(&mut self, i: usize, board: &Board) -> Option<Move> {
+        self.stage = if i + 1 < self.specials.len() {
+            Stage::Special(i + 1)
+        } else {
+            Stage::GenQuiets
+        };
+        self.specials[i].filter(|&m| self.is_fresh_quiet_special(m, board, &self.specials[..i]))
+    }
+
+    /// The best quiet move left that no earlier stage handed out.
+    fn next_untried_quiet(&mut self) -> Option<Move> {
+        while let Some(m) = self.scored.pick_best() {
+            let already_tried = Some(m) == self.tt_move || self.specials.contains(&Some(m));
+            if !already_tried {
+                return Some(m);
+            }
+        }
+        self.stage = Stage::BadCaptures;
+        None
+    }
+
+    fn next_bad_capture(&mut self) -> Option<Move> {
+        let Some(&m) = self.bad_captures.as_slice().get(self.bad_idx) else {
+            self.stage = Stage::Done;
+            return None;
+        };
+        self.bad_idx += 1;
+        Some(m)
     }
 }
 
