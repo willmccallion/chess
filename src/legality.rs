@@ -91,14 +91,13 @@ fn attackers_of(
 }
 
 impl Board {
-    /// `None` when the side to move has no king (only reachable from a malformed position).
-    pub fn legality_info(&self) -> Option<LegalityInfo> {
+    /// The checkers and pinned pieces of the side to move, whose king every
+    /// board has.
+    pub fn legality_info(&self) -> LegalityInfo {
         let us = self.turn();
         let them = us.other();
         let king_bb = self.pieces(PieceKind::King, us);
-        if king_bb == 0 {
-            return None;
-        }
+        debug_assert_ne!(king_bb, 0, "{} has no king to move", self.to_fen());
         let king_sq = king_bb.trailing_zeros() as usize;
         let checkers = attackers_of(self, king_sq, them, self.all_pieces(), 0);
 
@@ -120,11 +119,11 @@ impl Board {
             }
         }
 
-        Some(LegalityInfo {
+        LegalityInfo {
             king_sq,
             checkers,
             pinned,
-        })
+        }
     }
 
     /// Whether a pseudo-legal move of the side to move leaves its king safe.
@@ -184,7 +183,7 @@ mod tests {
     fn assert_agrees_with_make_unmake(board: &mut Board, depth: usize) {
         let mut moves = MoveList::new();
         board.generate_pseudo_legal_moves(&mut moves);
-        let info = board.legality_info().unwrap();
+        let info = board.legality_info();
         for &m in moves.as_slice() {
             let expected = legal_by_making(board, m);
             assert_eq!(

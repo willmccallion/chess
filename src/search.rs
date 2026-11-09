@@ -442,7 +442,7 @@ fn is_fifty_move_draw(board: &Board) -> bool {
 
 /// Makes `m` if it is legal in `pos`.
 fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
-    let info = pos.legality_info()?;
+    let info = pos.legality_info();
     (pos.is_pseudo_legal(m) && pos.is_legal(m, &info)).then(|| pos.make_move(m))
 }
 
@@ -855,10 +855,7 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
         }
     }
 
-    let Some(legality) = search.board.legality_info() else {
-        // Unreachable from a parsed FEN: every position has both kings.
-        return Ok(DRAW_SCORE);
-    };
+    let legality = search.board.legality_info();
     if legality.in_check() {
         return quiesce_evasions(search, alpha, beta, &legality);
     }
@@ -1520,10 +1517,7 @@ fn enter_node(
         return Ok(ControlFlow::Break(score));
     }
 
-    let Some(legality) = search.board.legality_info() else {
-        // Unreachable from a parsed FEN: every position has both kings.
-        return Ok(ControlFlow::Break(DRAW_SCORE));
-    };
+    let legality = search.board.legality_info();
     let in_check = legality.in_check();
     if in_check {
         depth += 1;

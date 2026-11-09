@@ -395,9 +395,7 @@ impl Board {
         let mut pseudo = MoveList::new();
         self.generate_pseudo_legal_moves(&mut pseudo);
         out.clear();
-        let Some(info) = self.legality_info() else {
-            return;
-        };
+        let info = self.legality_info();
         for &m in pseudo.as_slice() {
             if self.is_legal(m, &info) {
                 out.push(m);
