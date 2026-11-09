@@ -110,9 +110,8 @@ enum Stage {
     TtMove,
     GenCaptures,
     GoodCaptures,
-    Killer1,
-    Killer2,
-    CounterMove,
+    /// The `i`th of the killers and counter-move.
+    Special(usize),
     GenQuiets,
     Quiets,
     BadCaptures,
@@ -121,10 +120,7 @@ enum Stage {
 
 impl Stage {
     const fn is_quiet_stage(self) -> bool {
-        matches!(
-            self,
-            Self::Killer1 | Self::Killer2 | Self::CounterMove | Self::GenQuiets | Self::Quiets
-        )
+        matches!(self, Self::Special(_) | Self::GenQuiets | Self::Quiets)
     }
 }
 
@@ -221,9 +217,8 @@ impl Default for ScoredMoves {
 pub struct MovePicker {
     stage: Stage,
     tt_move: Option<Move>,
-    killer1: Option<Move>,
-    killer2: Option<Move>,
-    counter_move: Option<Move>,
+    /// The two killers, then the counter-move: quiet moves tried before the rest.
+    specials: [Option<Move>; 3],
 
     scored: ScoredMoves,
 
@@ -246,9 +241,7 @@ impl MovePicker {
                 Stage::GenCaptures
             },
             tt_move,
-            killer1,
-            killer2,
-            counter_move,
+            specials: [killer1, killer2, counter_move],
             scored: ScoredMoves::new(),
             bad_captures: StackVec::default(),
             bad_idx: 0,
@@ -304,31 +297,17 @@ impl MovePicker {
                         }
                         return Some(m);
                     }
-                    self.stage = Stage::Killer1;
+                    self.stage = Stage::Special(0);
                 }
 
-                Stage::Killer1 => {
-                    self.stage = Stage::Killer2;
-                    if let Some(m) = self.killer1
-                        && self.is_fresh_quiet_special(m, board, &[])
-                    {
-                        return Some(m);
-                    }
-                }
-
-                Stage::Killer2 => {
-                    self.stage = Stage::CounterMove;
-                    if let Some(m) = self.killer2
-                        && self.is_fresh_quiet_special(m, board, &[self.killer1])
-                    {
-                        return Some(m);
-                    }
-                }
-
-                Stage::CounterMove => {
-                    self.stage = Stage::GenQuiets;
-                    if let Some(m) = self.counter_move
-                        && self.is_fresh_quiet_special(m, board, &[self.killer1, self.killer2])
+                Stage::Special(i) => {
+                    self.stage = if i + 1 < self.specials.len() {
+                        Stage::Special(i + 1)
+                    } else {
+                        Stage::GenQuiets
+                    };
+                    if let Some(m) = self.specials[i]
+                        && self.is_fresh_quiet_special(m, board, &self.specials[..i])
                     {
                         return Some(m);
                     }
@@ -345,10 +324,8 @@ impl MovePicker {
 
                 Stage::Quiets => {
                     while let Some(m) = self.scored.pick_best() {
-                        let already_tried = Some(m) == self.tt_move
-                            || Some(m) == self.killer1
-                            || Some(m) == self.killer2
-                            || Some(m) == self.counter_move;
+                        let already_tried =
+                            Some(m) == self.tt_move || self.specials.contains(&Some(m));
                         if !already_tried {
                             return Some(m);
                         }
