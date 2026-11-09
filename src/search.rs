@@ -1761,7 +1761,9 @@ mod time_tests {
     fn untimed_control_started_ms_ago(ms: u64) -> SearchControl {
         let control = Arc::into_inner(SearchControl::new(None)).expect("sole owner");
         SearchControl {
-            start: Instant::now() - Duration::from_millis(ms),
+            start: Instant::now()
+                .checked_sub(Duration::from_millis(ms))
+                .expect("the clock has run longer than the test's lead"),
             ..control
         }
     }
