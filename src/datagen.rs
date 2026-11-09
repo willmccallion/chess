@@ -213,11 +213,6 @@ fn random_opening(rng: &mut StdRng, plies: usize) -> Option<Board> {
     position_outcome(&board).is_none().then_some(board)
 }
 
-/// Positions whose best move changes material teach the network little about quiet play.
-fn is_quiet(m: Move) -> bool {
-    !m.capture && m.promotion.is_none()
-}
-
 fn think(
     board: &Board,
     tt: &SharedTransTable,
@@ -257,9 +252,11 @@ fn play_game(
         }
         let (best, score) = think(&board, tt, threads, config.nodes)?;
         let verdict = Verdict::from_search(score, board.turn);
+        // A best move that changes material teaches the network little about
+        // quiet play.
         if let Verdict::Centipawns(cp) = verdict
             && cp.abs() <= MAX_KEPT_SCORE_CP
-            && is_quiet(best)
+            && best.is_quiet()
             && !board.in_check()
         {
             positions.push((board.to_fen(), cp));

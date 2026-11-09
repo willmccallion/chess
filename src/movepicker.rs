@@ -210,8 +210,7 @@ impl MovePicker {
     fn is_fresh_quiet_special(&self, m: Move, board: &Board, earlier: &[Option<Move>]) -> bool {
         Some(m) != self.tt_move
             && !earlier.contains(&Some(m))
-            && !m.capture
-            && m.promotion.is_none()
+            && m.is_quiet()
             && board.is_pseudo_legal(m)
     }
 

@@ -190,6 +190,12 @@ pub struct Move {
 }
 
 impl Move {
+    /// Neither a capture nor a promotion.
+    #[inline(always)]
+    pub const fn is_quiet(self) -> bool {
+        !self.capture && self.promotion.is_none()
+    }
+
     #[inline(always)]
     pub fn quiet(from: u8, to: u8) -> Self {
         Self {
