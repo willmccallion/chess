@@ -465,7 +465,7 @@ impl Screen for LineScreen {
                     }
                     let next = self.queue.remove(0);
                     let rest = std::mem::take(&mut self.queue);
-                    return Nav::Replace(Box::new(LineScreen::drill(next, rest)));
+                    return Nav::Replace(Box::new(Self::drill(next, rest)));
                 }
                 KeyCode::Char('r') => self.start_drill(),
                 KeyCode::Char('l') => self.start_lesson(),

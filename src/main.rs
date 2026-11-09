@@ -518,7 +518,10 @@ impl CompareArgs {
                 .iter()
                 .map(|position| position.fen().to_string())
                 .collect(),
-            (true, None) => bench::BENCH_FENS.iter().map(|f| f.to_string()).collect(),
+            (true, None) => bench::BENCH_FENS
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
         };
         let engine_go =
             movetime.map_or_else(|| format!("depth {depth}"), |ms| format!("movetime {ms}"));

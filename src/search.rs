@@ -720,7 +720,9 @@ impl Search<'_> {
     /// Moves the correction history toward the gap between `static_eval` and
     /// a quiet, non-mate search result that lies past it.
     fn update_correction(&mut self, static_eval: i32, outcome: NodeOutcome) {
-        if outcome.best_move.is_some_and(|m| m.is_capture())
+        if outcome
+            .best_move
+            .is_some_and(super::types::Move::is_capture)
             || outcome.best_score.abs() >= MATE_THRESHOLD
             || !bound_beyond(outcome.bound, outcome.best_score, static_eval)
         {
@@ -1457,7 +1459,7 @@ fn negamax(
 
     let tt_entry = search.tt.probe(key);
     let tt_move = tt_entry.and_then(|e| e.best_move());
-    let tt_capture = tt_move.is_some_and(|m| m.is_capture());
+    let tt_capture = tt_move.is_some_and(super::types::Move::is_capture);
     if excluded_move.is_none() {
         search.stack[search.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
     }

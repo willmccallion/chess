@@ -425,11 +425,11 @@ impl AccumulatorStack {
             match net {
                 PsqNet::Small => {
                     self.small_cache
-                        .refresh(ft, position, perspective, &mut ply.small_psq[p])
+                        .refresh(ft, position, perspective, &mut ply.small_psq[p]);
                 }
                 PsqNet::Big => {
                     self.big_cache
-                        .refresh(ft, position, perspective, &mut ply.big_psq[p])
+                        .refresh(ft, position, perspective, &mut ply.big_psq[p]);
                 }
             }
             ply.computed[part as usize][p] = true;

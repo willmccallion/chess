@@ -565,7 +565,7 @@ impl Screen for CoachGame {
         if self.finished.is_some() {
             return match key.code {
                 KeyCode::Enter => Nav::Replace(Box::new(ReviewScreen::new(self.id, data))),
-                KeyCode::Char('n') => Nav::Replace(Box::new(CoachGame::new(self.settings, data))),
+                KeyCode::Char('n') => Nav::Replace(Box::new(Self::new(self.settings, data))),
                 KeyCode::Esc | KeyCode::Char('q') => Nav::Back,
                 KeyCode::Char('f') => {
                     self.app.flipped = !self.app.flipped;
@@ -592,7 +592,7 @@ impl Screen for CoachGame {
             }
             KeyCode::Char('?' | 'h') => self.help = true,
             KeyCode::Enter | KeyCode::Char(':') if !self.is_bot_turn() => {
-                self.app.typed = Some(String::new())
+                self.app.typed = Some(String::new());
             }
             _ => {}
         }

@@ -88,7 +88,7 @@ impl OpeningBook {
             });
         }
 
-        Ok(OpeningBook { entries })
+        Ok(Self { entries })
     }
 
     fn find_entries(&self, key: u64) -> &[BookEntry] {

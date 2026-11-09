@@ -136,7 +136,7 @@ impl Standings {
 pub fn parse_option(s: &str) -> Result<(String, String), String> {
     let (name, value) = s
         .split_once('=')
-        .ok_or_else(|| format!("Invalid option '{}', expected Name=Value", s))?;
+        .ok_or_else(|| format!("Invalid option '{s}', expected Name=Value"))?;
     Ok((name.trim().to_string(), value.trim().to_string()))
 }
 
@@ -144,7 +144,7 @@ fn format_elo(wdl: Wdl) -> String {
     match elo_of(wdl) {
         // `{:+.0}` would show an estimate that rounds to zero as "+0" or "-0".
         Some(e) if e.round() == 0.0 => "0".to_string(),
-        Some(e) => format!("{:+.0}", e),
+        Some(e) => format!("{e:+.0}"),
         None if wdl.wins > wdl.losses => "+inf".to_string(),
         None if wdl.losses > wdl.wins => "-inf".to_string(),
         _ => "0".to_string(),
@@ -209,15 +209,15 @@ fn print_score_lines(standings: &Standings, elapsed: f64) {
         0.0
     };
     let elo_str = match err {
-        Some(e) => format!("{} +/- {:.0} Elo", elo, e),
-        None => format!("{} Elo", elo),
+        Some(e) => format!("{elo} +/- {e:.0} Elo"),
+        None => format!("{elo} Elo"),
     };
     println!(
         "  Score: {:.1} - {:.1}  [{elo_str}]",
         standings.e1.points(),
         standings.e1.opponent().points()
     );
-    println!("  Games: {}    Draw rate: {:.1}%", total, draw_rate);
+    println!("  Games: {total}    Draw rate: {draw_rate:.1}%");
     if standings.penta.pairs() > 0 {
         let [ll, ld, even, wd, ww] = standings.penta.counts();
         println!(
@@ -240,7 +240,7 @@ fn print_score_lines(standings: &Standings, elapsed: f64) {
     }
     if elapsed > 0.0 {
         let gps = total as f64 / elapsed;
-        println!("  Time:  {:.1}s ({:.1} games/sec)", elapsed, gps);
+        println!("  Time:  {elapsed:.1}s ({gps:.1} games/sec)");
     }
     println!();
 }
@@ -274,7 +274,7 @@ fn print_head_to_head_row(name: &str, wdl: Wdl, w: usize) {
 /// Engine 1's results as white and as black.
 fn print_colour_breakdown(standings: &Standings, e1_name: &str) {
     let border = "  +-----------+------+------+------+--------+";
-    println!("  White/Black Breakdown (from {}'s perspective):", e1_name);
+    println!("  White/Black Breakdown (from {e1_name}'s perspective):");
     println!("{border}");
     println!(
         "  | Color     | {0:>4} | {1:>4} | {2:>4} | {3:>6} |",

@@ -122,11 +122,11 @@ pub enum Color {
 
 impl Color {
     #[inline(always)]
-    pub fn other(self) -> Color {
-        if self == Color::White {
-            Color::Black
+    pub fn other(self) -> Self {
+        if self == Self::White {
+            Self::Black
         } else {
-            Color::White
+            Self::White
         }
     }
 }
@@ -144,12 +144,12 @@ pub enum PieceKind {
 impl PieceKind {
     pub fn to_char_upper(&self) -> char {
         match self {
-            PieceKind::Pawn => 'P',
-            PieceKind::Knight => 'N',
-            PieceKind::Bishop => 'B',
-            PieceKind::Rook => 'R',
-            PieceKind::Queen => 'Q',
-            PieceKind::King => 'K',
+            Self::Pawn => 'P',
+            Self::Knight => 'N',
+            Self::Bishop => 'B',
+            Self::Rook => 'R',
+            Self::Queen => 'Q',
+            Self::King => 'K',
         }
     }
 }
@@ -174,18 +174,14 @@ pub enum Piece {
 impl Piece {
     #[inline(always)]
     pub fn is_empty(self) -> bool {
-        matches!(self, Piece::Empty)
+        matches!(self, Self::Empty)
     }
 
     #[inline(always)]
     pub fn color(self) -> Option<Color> {
         match self {
-            Piece::WP | Piece::WN | Piece::WB | Piece::WR | Piece::WQ | Piece::WK => {
-                Some(Color::White)
-            }
-            Piece::BP | Piece::BN | Piece::BB | Piece::BR | Piece::BQ | Piece::BK => {
-                Some(Color::Black)
-            }
+            Self::WP | Self::WN | Self::WB | Self::WR | Self::WQ | Self::WK => Some(Color::White),
+            Self::BP | Self::BN | Self::BB | Self::BR | Self::BQ | Self::BK => Some(Color::Black),
             _ => None,
         }
     }
@@ -193,12 +189,12 @@ impl Piece {
     #[inline(always)]
     pub fn kind(self) -> Option<PieceKind> {
         match self {
-            Piece::WP | Piece::BP => Some(PieceKind::Pawn),
-            Piece::WN | Piece::BN => Some(PieceKind::Knight),
-            Piece::WB | Piece::BB => Some(PieceKind::Bishop),
-            Piece::WR | Piece::BR => Some(PieceKind::Rook),
-            Piece::WQ | Piece::BQ => Some(PieceKind::Queen),
-            Piece::WK | Piece::BK => Some(PieceKind::King),
+            Self::WP | Self::BP => Some(PieceKind::Pawn),
+            Self::WN | Self::BN => Some(PieceKind::Knight),
+            Self::WB | Self::BB => Some(PieceKind::Bishop),
+            Self::WR | Self::BR => Some(PieceKind::Rook),
+            Self::WQ | Self::BQ => Some(PieceKind::Queen),
+            Self::WK | Self::BK => Some(PieceKind::King),
             _ => None,
         }
     }
@@ -206,18 +202,18 @@ impl Piece {
     #[inline(always)]
     pub const fn from_kind(kind: PieceKind, color: Color) -> Self {
         match (kind, color) {
-            (PieceKind::Pawn, Color::White) => Piece::WP,
-            (PieceKind::Knight, Color::White) => Piece::WN,
-            (PieceKind::Bishop, Color::White) => Piece::WB,
-            (PieceKind::Rook, Color::White) => Piece::WR,
-            (PieceKind::Queen, Color::White) => Piece::WQ,
-            (PieceKind::King, Color::White) => Piece::WK,
-            (PieceKind::Pawn, Color::Black) => Piece::BP,
-            (PieceKind::Knight, Color::Black) => Piece::BN,
-            (PieceKind::Bishop, Color::Black) => Piece::BB,
-            (PieceKind::Rook, Color::Black) => Piece::BR,
-            (PieceKind::Queen, Color::Black) => Piece::BQ,
-            (PieceKind::King, Color::Black) => Piece::BK,
+            (PieceKind::Pawn, Color::White) => Self::WP,
+            (PieceKind::Knight, Color::White) => Self::WN,
+            (PieceKind::Bishop, Color::White) => Self::WB,
+            (PieceKind::Rook, Color::White) => Self::WR,
+            (PieceKind::Queen, Color::White) => Self::WQ,
+            (PieceKind::King, Color::White) => Self::WK,
+            (PieceKind::Pawn, Color::Black) => Self::BP,
+            (PieceKind::Knight, Color::Black) => Self::BN,
+            (PieceKind::Bishop, Color::Black) => Self::BB,
+            (PieceKind::Rook, Color::Black) => Self::BR,
+            (PieceKind::Queen, Color::Black) => Self::BQ,
+            (PieceKind::King, Color::Black) => Self::BK,
         }
     }
 
@@ -250,18 +246,18 @@ impl Piece {
 
     pub const fn from_fen_char(c: char) -> Option<Self> {
         Some(match c {
-            'P' => Piece::WP,
-            'N' => Piece::WN,
-            'B' => Piece::WB,
-            'R' => Piece::WR,
-            'Q' => Piece::WQ,
-            'K' => Piece::WK,
-            'p' => Piece::BP,
-            'n' => Piece::BN,
-            'b' => Piece::BB,
-            'r' => Piece::BR,
-            'q' => Piece::BQ,
-            'k' => Piece::BK,
+            'P' => Self::WP,
+            'N' => Self::WN,
+            'B' => Self::WB,
+            'R' => Self::WR,
+            'Q' => Self::WQ,
+            'K' => Self::WK,
+            'p' => Self::BP,
+            'n' => Self::BN,
+            'b' => Self::BB,
+            'r' => Self::BR,
+            'q' => Self::BQ,
+            'k' => Self::BK,
             _ => return None,
         })
     }
@@ -490,10 +486,10 @@ impl From<Move> for u16 {
             MoveKind::Castle => MOVE_FLAG_QUEEN_CASTLE,
             MoveKind::Capture => MOVE_FLAG_CAPTURE,
             MoveKind::EnPassant => MOVE_FLAG_EN_PASSANT,
-            MoveKind::Promotion(piece) => MOVE_FLAG_PROMOTION | piece as u16,
-            MoveKind::PromotionCapture(piece) => MOVE_FLAG_PROMO_CAPTURE | piece as u16,
+            MoveKind::Promotion(piece) => MOVE_FLAG_PROMOTION | piece as Self,
+            MoveKind::PromotionCapture(piece) => MOVE_FLAG_PROMO_CAPTURE | piece as Self,
         };
-        m.from.index() as u16 | (m.to.index() as u16) << 6 | flags << 12
+        m.from.index() as Self | (m.to.index() as Self) << 6 | flags << 12
     }
 }
 
@@ -501,7 +497,7 @@ impl From<u16> for Move {
     #[inline(always)]
     fn from(m: u16) -> Self {
         if m == 0 {
-            return Move::default();
+            return Self::default();
         }
         let from = Square::new((m & 0x3F) as u8);
         let to = Square::new(((m >> 6) & 0x3F) as u8);

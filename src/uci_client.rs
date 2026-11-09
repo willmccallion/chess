@@ -230,7 +230,7 @@ impl UciEngine {
     }
 
     fn send(&mut self, cmd: &str) -> Result<(), EngineError> {
-        writeln!(self.stdin, "{}", cmd).map_err(|source| EngineError::Send {
+        writeln!(self.stdin, "{cmd}").map_err(|source| EngineError::Send {
             engine: self.name.clone(),
             source,
         })
@@ -271,7 +271,7 @@ impl UciEngine {
 
     pub fn set_options(&mut self, options: &[(String, String)]) -> Result<(), EngineError> {
         for (name, value) in options {
-            self.send(&format!("setoption name {} value {}", name, value))?;
+            self.send(&format!("setoption name {name} value {value}"))?;
         }
         Ok(())
     }
@@ -293,7 +293,7 @@ impl UciEngine {
         moves: &[String],
     ) -> Result<(), EngineError> {
         let pos = match start_fen {
-            Some(fen) => format!("position fen {}", fen),
+            Some(fen) => format!("position fen {fen}"),
             None => "position startpos".to_string(),
         };
         if moves.is_empty() {
@@ -320,7 +320,7 @@ impl UciEngine {
         let line = self.read_until(|l| l.starts_with("bestmove"), Duration::from_secs(300))?;
         line.split_whitespace()
             .nth(1)
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| EngineError::MalformedBestMove {
                 engine: self.name.clone(),
             })

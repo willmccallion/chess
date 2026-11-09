@@ -258,7 +258,7 @@ impl Puzzles {
                 ));
             }
             Feedback::Revealed => {
-                lines.push(dim("Showing the solution: press s for the next move."))
+                lines.push(dim("Showing the solution: press s for the next move."));
             }
         }
         if finished {

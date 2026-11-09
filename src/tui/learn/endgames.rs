@@ -392,7 +392,7 @@ impl Screen for EndgameDrill {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Nav::Back,
             KeyCode::Char('t') => {
-                self.tips_shown = (self.tips_shown + 1).min(self.drill.tips.len())
+                self.tips_shown = (self.tips_shown + 1).min(self.drill.tips.len());
             }
             KeyCode::Char('r') => self.restart(),
             KeyCode::Char('f') => self.panel.flipped = !self.panel.flipped,

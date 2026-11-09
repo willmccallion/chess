@@ -100,7 +100,7 @@ search_params! {
 }
 
 impl ParamSpec {
-    pub fn find(name: &str) -> Option<&'static ParamSpec> {
+    pub fn find(name: &str) -> Option<&'static Self> {
         PARAM_SPECS
             .iter()
             .find(|spec| spec.name.eq_ignore_ascii_case(name))

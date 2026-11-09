@@ -123,7 +123,7 @@ impl Stage {
     fn is_quiet_stage(self) -> bool {
         matches!(
             self,
-            Stage::Killer1 | Stage::Killer2 | Stage::CounterMove | Stage::GenQuiets | Stage::Quiets
+            Self::Killer1 | Self::Killer2 | Self::CounterMove | Self::GenQuiets | Self::Quiets
         )
     }
 }

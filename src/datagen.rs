@@ -79,7 +79,7 @@ pub fn run(config: &DatagenConfig) -> io::Result<DatagenSummary> {
             thread::Builder::new()
                 .name(format!("datagen-{worker}"))
                 .spawn_scoped(scope, move || {
-                    play_training_games(config, seed, stop, &sender)
+                    play_training_games(config, seed, stop, &sender);
                 })?;
         }
         drop(sender);

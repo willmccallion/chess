@@ -61,16 +61,16 @@ impl Evaluator for Network {
 impl IncrementalState for AccumulatorStack {
     #[inline]
     fn push_move(&mut self, before: PositionView, m: Move) {
-        AccumulatorStack::push_move(self, before, m);
+        Self::push_move(self, before, m);
     }
 
     #[inline]
     fn pop_move(&mut self) {
-        AccumulatorStack::pop_move(self);
+        Self::pop_move(self);
     }
 
     fn reset(&mut self) {
-        AccumulatorStack::reset(self);
+        Self::reset(self);
     }
 }
 

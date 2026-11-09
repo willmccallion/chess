@@ -885,7 +885,11 @@ mod tests {
             .draw(|frame| draw(frame, app, Instant::now()))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        buffer.content().iter().map(|cell| cell.symbol()).collect()
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
     }
 
     fn app_with(mode: Mode, fen: &str) -> App {

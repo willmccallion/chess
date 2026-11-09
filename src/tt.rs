@@ -22,9 +22,9 @@ impl Bound {
     #[inline(always)]
     fn from_bits(bits: u64) -> Self {
         match bits {
-            0 => Bound::Exact,
-            1 => Bound::Lower,
-            _ => Bound::Upper,
+            0 => Self::Exact,
+            1 => Self::Lower,
+            _ => Self::Upper,
         }
     }
 }

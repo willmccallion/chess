@@ -188,7 +188,7 @@ impl IncrementalState for AccumulatorStack {
     }
 
     fn reset(&mut self) {
-        AccumulatorStack::reset(self);
+        Self::reset(self);
     }
 }
 

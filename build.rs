@@ -183,9 +183,9 @@ fn generate_attacks_source(out_dir: &Path) -> io::Result<()> {
         ("KNIGHT_ATTACKS", &knight_attacks),
         ("KING_ATTACKS", &king_attacks),
     ] {
-        writeln!(f, "\npub const {}: [Bitboard; 64] = [", name)?;
+        writeln!(f, "\npub const {name}: [Bitboard; 64] = [")?;
         for (i, &attack) in table.iter().enumerate() {
-            write!(f, "0x{:X},", attack)?;
+            write!(f, "0x{attack:X},")?;
             if (i + 1) % 8 == 0 {
                 writeln!(f)?;
             }
@@ -213,7 +213,7 @@ fn generate_attacks_source(out_dir: &Path) -> io::Result<()> {
         rook_attack_table.len()
     )?;
     for (i, &attack) in rook_attack_table.iter().enumerate() {
-        write!(f, "0x{:016X},", attack)?;
+        write!(f, "0x{attack:016X},")?;
         if (i + 1) % 8 == 0 {
             writeln!(f)?;
         }
@@ -226,7 +226,7 @@ fn generate_attacks_source(out_dir: &Path) -> io::Result<()> {
         bishop_attack_table.len()
     )?;
     for (i, &attack) in bishop_attack_table.iter().enumerate() {
-        write!(f, "0x{:016X},", attack)?;
+        write!(f, "0x{attack:016X},")?;
         if (i + 1) % 8 == 0 {
             writeln!(f)?;
         }
