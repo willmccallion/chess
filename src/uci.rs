@@ -548,17 +548,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_zero_clock_with_increment_still_times_the_search() {
+    fn a_zero_clock_with_increment_still_times_the_search_within_the_increment() {
         let budget = time_budget("wtime 0 btime 0 winc 100 binc 100", Color::White, 10);
 
-        assert!(budget.is_some());
+        assert!(
+            budget.is_some_and(|b| b.soft_ms >= 1 && b.hard_ms < 100),
+            "{budget:?}"
+        );
     }
 
     #[test]
-    fn a_negative_clock_still_times_the_search() {
+    fn a_negative_clock_still_times_the_search_and_moves_at_once() {
         let budget = time_budget("wtime -50 btime -50", Color::White, 10);
 
-        assert!(budget.is_some());
+        assert_eq!(budget, Some(TimeBudget::fixed(1)));
     }
 
     #[test]
