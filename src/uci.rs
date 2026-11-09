@@ -24,18 +24,6 @@ const MAX_DEPTH: usize = 127;
 const COACH_HASH_MB: usize = 16;
 
 #[inline]
-fn extract_i64(cmd: &str, key: &str) -> Option<i64> {
-    for tok in cmd.split_whitespace().collect::<Vec<_>>().windows(2) {
-        if let Ok(v) = tok[1].parse::<i64>()
-            && tok[0].eq_ignore_ascii_case(key)
-        {
-            return Some(v);
-        }
-    }
-    None
-}
-
-#[inline]
 fn parse_setoption(rest: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = rest.splitn(2, "name").collect();
     let after = parts.get(1)?.trim();
@@ -50,11 +38,6 @@ fn parse_setoption(rest: &str) -> Option<(String, String)> {
 
 fn parse_check_value(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "on")
-}
-
-fn has_token(cmd: &str, token: &str) -> bool {
-    cmd.split_whitespace()
-        .any(|t| t.eq_ignore_ascii_case(token))
 }
 
 fn send(line: &str) {
@@ -245,17 +228,83 @@ const GO_KEYWORDS: [&str; 11] = [
     "infinite",
 ];
 
-/// The legal moves listed after `searchmoves`, or `None` when `go` lists
+/// A `go` command's arguments. A number is the first one given for its
+/// keyword that reads as one.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct GoCommand {
+    ponder: bool,
+    infinite: bool,
+    wtime: Option<i64>,
+    btime: Option<i64>,
+    winc: Option<i64>,
+    binc: Option<i64>,
+    movestogo: Option<i64>,
+    depth: Option<i64>,
+    nodes: Option<i64>,
+    movetime: Option<i64>,
+    /// The words after `searchmoves`, up to the next keyword.
+    searchmoves: Vec<String>,
+}
+
+impl GoCommand {
+    fn parse(args: &str) -> Self {
+        let words: Vec<&str> = args.split_whitespace().collect();
+        let mut go = Self::default();
+        for (i, word) in words.iter().enumerate() {
+            if word.eq_ignore_ascii_case("ponder") {
+                go.ponder = true;
+            } else if word.eq_ignore_ascii_case("infinite") {
+                go.infinite = true;
+            } else if let Some(slot) = go.number_for(word)
+                && slot.is_none()
+            {
+                *slot = words.get(i + 1).and_then(|value| value.parse().ok());
+            }
+        }
+        go.searchmoves = words
+            .iter()
+            .skip_while(|w| !w.eq_ignore_ascii_case("searchmoves"))
+            .skip(1)
+            .take_while(|w| !GO_KEYWORDS.iter().any(|k| w.eq_ignore_ascii_case(k)))
+            .map(|w| (*w).to_string())
+            .collect();
+        go
+    }
+
+    fn number_for(&mut self, keyword: &str) -> Option<&mut Option<i64>> {
+        match keyword.to_ascii_lowercase().as_str() {
+            "wtime" => Some(&mut self.wtime),
+            "btime" => Some(&mut self.btime),
+            "winc" => Some(&mut self.winc),
+            "binc" => Some(&mut self.binc),
+            "movestogo" => Some(&mut self.movestogo),
+            "depth" => Some(&mut self.depth),
+            "nodes" => Some(&mut self.nodes),
+            "movetime" => Some(&mut self.movetime),
+            _ => None,
+        }
+    }
+
+    /// Whether the answer waits for `stop` or `ponderhit`.
+    const fn waits_for_stop(&self) -> bool {
+        self.ponder || self.infinite
+    }
+
+    /// The time left on the clock of the side to move, `turn`.
+    const fn clock(&self, turn: Color) -> Option<i64> {
+        match turn {
+            Color::White => self.wtime,
+            Color::Black => self.btime,
+        }
+    }
+}
+
+/// The legal moves `go` lists after `searchmoves`, or `None` when it lists
 /// none, or none of them is legal in `board`.
-fn search_moves(go_args: &str, board: &Board) -> Option<MoveList> {
-    let listed = go_args
-        .split_whitespace()
-        .skip_while(|w| !w.eq_ignore_ascii_case("searchmoves"))
-        .skip(1)
-        .take_while(|w| !GO_KEYWORDS.iter().any(|k| w.eq_ignore_ascii_case(k)));
+fn search_moves(go: &GoCommand, board: &Board) -> Option<MoveList> {
     let mut board = board.clone();
     let mut moves = MoveList::new();
-    for word in listed {
+    for word in &go.searchmoves {
         match parse_uci_move(&mut board, word) {
             Some(m) => moves.push(m),
             None => send(&format!("info string ignoring searchmove {word}")),
@@ -264,28 +313,23 @@ fn search_moves(go_args: &str, board: &Board) -> Option<MoveList> {
     (!moves.is_empty()).then_some(moves)
 }
 
-/// The time a `go` command gives the side to move, if any: its `movetime`,
-/// or a share of its clock.
-fn time_budget(go_args: &str, turn: Color, move_overhead_ms: i64) -> Option<TimeBudget> {
-    if let Some(movetime) = extract_i64(go_args, "movetime") {
+/// The time `go` gives the side to move, if any: its `movetime`, or a share
+/// of its clock.
+fn time_budget(go: &GoCommand, turn: Color, move_overhead_ms: i64) -> Option<TimeBudget> {
+    if let Some(movetime) = go.movetime {
         let usable = (movetime - move_overhead_ms).max(1);
         return Some(TimeBudget::fixed(usable as u64));
     }
     let tc = TimeControl {
-        wtime: extract_i64(go_args, "wtime").unwrap_or(0),
-        btime: extract_i64(go_args, "btime").unwrap_or(0),
-        winc: extract_i64(go_args, "winc").unwrap_or(0),
-        binc: extract_i64(go_args, "binc").unwrap_or(0),
-        movestogo: extract_i64(go_args, "movestogo").unwrap_or(0) as i32,
+        wtime: go.wtime.unwrap_or(0),
+        btime: go.btime.unwrap_or(0),
+        winc: go.winc.unwrap_or(0),
+        binc: go.binc.unwrap_or(0),
+        movestogo: go.movestogo.unwrap_or(0) as i32,
         move_overhead_ms,
     };
     // A clock at or below zero still bounds the search: it moves at once.
-    let clock_key = if turn == Color::White {
-        "wtime"
-    } else {
-        "btime"
-    };
-    extract_i64(go_args, clock_key).map(|_| tc.budget(turn))
+    go.clock(turn).map(|_| tc.budget(turn))
 }
 
 fn start_search(
@@ -293,18 +337,16 @@ fn start_search(
     tt: &SharedTransTable,
     options: &Options,
     mut threads: SearchThreads,
-    go_args: &str,
+    go: &GoCommand,
 ) -> ActiveSearch {
-    let is_ponder = has_token(go_args, "ponder");
-    let is_infinite = has_token(go_args, "infinite");
-    let max_depth =
-        extract_i64(go_args, "depth").map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
+    let max_depth = go
+        .depth
+        .map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
+    let budget = time_budget(go, board.turn, options.move_overhead_ms);
 
-    let budget = time_budget(go_args, board.turn, options.move_overhead_ms);
-
-    let (control, ponder_budget) = if is_ponder {
+    let (control, ponder_budget) = if go.ponder {
         (SearchControl::new(None), budget)
-    } else if is_infinite {
+    } else if go.infinite {
         (SearchControl::new(None), None)
     } else {
         (SearchControl::new(budget), None)
@@ -313,12 +355,12 @@ fn start_search(
     let limits = SearchLimits {
         params: options.search_params,
         max_depth,
-        wait_for_stop: is_ponder || is_infinite,
-        nodes: extract_i64(go_args, "nodes").map(|n| {
+        wait_for_stop: go.waits_for_stop(),
+        nodes: go.nodes.map(|n| {
             let n = n.max(1) as u64;
             NodeLimit { soft: n, hard: n }
         }),
-        root_moves: search_moves(go_args, board),
+        root_moves: search_moves(go, board),
     };
     let board = board.clone();
     let tt = tt.clone();
@@ -402,12 +444,11 @@ fn coach_move(
     choose_move(&scores, spec, &mut rng)
 }
 
-/// Sends `chosen` as the answer to `go_args`, or holds it in `active` until
+/// Sends `chosen` as the answer to `go`, or holds it in `active` until
 /// `stop` or `ponderhit` when the GUI asked to ponder or analyse.
-fn answer_now_or_hold(chosen: Option<Move>, go_args: &str, active: &mut Option<ActiveGo>) {
-    let waits_for_stop = has_token(go_args, "ponder") || has_token(go_args, "infinite");
+fn answer_now_or_hold(chosen: Option<Move>, go: &GoCommand, active: &mut Option<ActiveGo>) {
     match chosen {
-        Some(m) if waits_for_stop => *active = Some(ActiveGo::Holding(m)),
+        Some(m) if go.waits_for_stop() => *active = Some(ActiveGo::Holding(m)),
         _ => send_bestmove(chosen),
     }
 }
@@ -485,29 +526,25 @@ pub fn run_uci(eval: EvalOptions) {
                     coach_searcher: &mut coach_searcher,
                 };
                 ensure_evaluator(&options, &mut board, state);
+                let go = GoCommand::parse(rest);
                 if let Some(level) = options.coach_level {
                     let searcher =
                         coach_searcher.get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
-                    let clock_key = if board.turn == Color::White {
-                        "wtime"
-                    } else {
-                        "btime"
-                    };
-                    let chosen = coach_move(&board, level, extract_i64(rest, clock_key), searcher);
-                    answer_now_or_hold(chosen, rest, &mut active);
+                    let chosen = coach_move(&board, level, go.clock(board.turn), searcher);
+                    answer_now_or_hold(chosen, &go, &mut active);
                     continue;
                 }
                 if options.own_book
-                    && !has_token(rest, "infinite")
+                    && !go.infinite
                     && let Some(book_move) = get_book_move(&board)
                 {
-                    answer_now_or_hold(Some(book_move), rest, &mut active);
+                    answer_now_or_hold(Some(book_move), &go, &mut active);
                     continue;
                 }
                 let search_threads = threads
                     .take()
                     .unwrap_or_else(|| SearchThreads::new(options.threads));
-                let search = start_search(&board, &tt, &options, search_threads, rest);
+                let search = start_search(&board, &tt, &options, search_threads, &go);
                 active = Some(ActiveGo::Searching(search));
             }
             "ponderhit" => match &active {
@@ -543,7 +580,11 @@ mod tests {
 
     #[test]
     fn a_zero_clock_with_increment_still_times_the_search_within_the_increment() {
-        let budget = time_budget("wtime 0 btime 0 winc 100 binc 100", Color::White, 10);
+        let budget = time_budget(
+            &GoCommand::parse("wtime 0 btime 0 winc 100 binc 100"),
+            Color::White,
+            10,
+        );
 
         assert!(
             budget.is_some_and(|b| b.soft_ms >= 1 && b.hard_ms < 100),
@@ -553,19 +594,43 @@ mod tests {
 
     #[test]
     fn a_negative_clock_still_times_the_search_and_moves_at_once() {
-        let budget = time_budget("wtime -50 btime -50", Color::White, 10);
+        let budget = time_budget(&GoCommand::parse("wtime -50 btime -50"), Color::White, 10);
 
         assert_eq!(budget, Some(TimeBudget::fixed(1)));
     }
 
     #[test]
     fn a_go_without_clocks_is_untimed() {
-        assert_eq!(time_budget("depth 10", Color::White, 10), None);
+        assert_eq!(
+            time_budget(&GoCommand::parse("depth 10"), Color::White, 10),
+            None
+        );
+    }
+
+    #[test]
+    fn a_go_number_is_the_first_given_for_its_keyword_that_reads_as_one() {
+        let go = GoCommand::parse("wtime soon wtime 300 btime 200 wtime 100 ponder");
+
+        assert_eq!(
+            (go.wtime, go.btime, go.ponder),
+            (Some(300), Some(200), true)
+        );
+        assert_eq!((go.winc, go.infinite), (None, false));
+    }
+
+    #[test]
+    fn go_keywords_are_read_in_any_case() {
+        let go = GoCommand::parse("WTIME 5 Infinite MoveTime 40");
+
+        assert_eq!(
+            (go.wtime, go.movetime, go.infinite),
+            (Some(5), Some(40), true)
+        );
     }
 
     fn listed_search_moves(go_args: &str) -> Option<Vec<String>> {
         let board = Board::from_fen(START_FEN).unwrap();
-        search_moves(go_args, &board)
+        search_moves(&GoCommand::parse(go_args), &board)
             .map(|ms| ms.as_slice().iter().map(|&m| format_uci(m)).collect())
     }
 
@@ -661,7 +726,7 @@ mod tests {
 
     #[test]
     fn movetime_gives_its_time_less_the_overhead() {
-        let budget = time_budget("movetime 500", Color::Black, 10);
+        let budget = time_budget(&GoCommand::parse("movetime 500"), Color::Black, 10);
 
         assert_eq!(budget, Some(TimeBudget::fixed(490)));
     }
