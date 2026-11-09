@@ -537,7 +537,7 @@ impl CompareArgs {
             reference_go,
         };
         if let Err(e) = run_compare(&config) {
-            exit_with_error(&e);
+            exit_with_error(&e.to_string());
         }
     }
 }

@@ -4,7 +4,7 @@ use crate::game_runner::{
 };
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::types::START_FEN;
-use crate::uci_client::UciEngine;
+use crate::uci_client::{EngineError, UciEngine, engine_display_name};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -21,8 +21,8 @@ pub struct EngineSpec {
 }
 
 impl EngineSpec {
-    fn start(&self) -> Result<UciEngine, String> {
-        spawn_and_init_pinned(&self.path, &self.options, None)
+    fn start(&self) -> Result<UciEngine, EngineError> {
+        start_match_engine(&self.path, &self.options, None)
     }
 }
 
@@ -40,7 +40,7 @@ pub struct TournamentConfig {
 
 /// The name a tournament shows for an engine: `name` if given, else the binary's file name.
 pub fn engine_name(name: Option<String>, path: &str) -> String {
-    name.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string())
+    name.unwrap_or_else(|| engine_display_name(path).to_string())
 }
 
 /// The moves after which a game is called a draw.
@@ -189,22 +189,22 @@ fn format_pct(n: usize, total: usize) -> String {
 }
 
 /// Starts and configures an engine, restricted to the CPU list `cpus` if given.
-pub(crate) fn spawn_and_init_pinned(
+/// Starts an engine to play match games: on one search thread unless
+/// `options` set Threads.
+pub(crate) fn start_match_engine(
     path: &str,
     options: &[(String, String)],
     cpus: Option<&str>,
-) -> Result<UciEngine, String> {
-    let mut engine = UciEngine::spawn_pinned(path, cpus)?;
-    engine.init_uci()?;
-    if !options
+) -> Result<UciEngine, EngineError> {
+    let sets_threads = options
         .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("Threads"))
-    {
-        engine.set_options(&[("Threads".to_string(), "1".to_string())])?;
-    }
-    engine.set_options(options)?;
-    engine.is_ready()?;
-    Ok(engine)
+        .any(|(name, _)| name.eq_ignore_ascii_case("Threads"));
+    let one_thread = (!sets_threads).then(|| ("Threads".to_string(), "1".to_string()));
+    let options: Vec<_> = one_thread
+        .into_iter()
+        .chain(options.iter().cloned())
+        .collect();
+    UciEngine::start(path, &options, cpus)
 }
 
 fn print_summary(standings: &Standings, e1_name: &str, e2_name: &str, elapsed: f64) {

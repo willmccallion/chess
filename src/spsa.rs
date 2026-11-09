@@ -9,8 +9,8 @@ use crate::game_runner::{
     EngineResult, GameClock, GameConfig, GameEndReason, GameResult, StartPosition, Wdl, play_game,
 };
 use crate::search_params::{PARAM_SPECS, ParamSpec};
-use crate::tournament::spawn_and_init_pinned;
-use crate::uci_client::UciEngine;
+use crate::tournament::start_match_engine;
+use crate::uci_client::{EngineError, UciEngine};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fmt::Write as _;
@@ -182,7 +182,7 @@ pub fn read_estimate(text: &str) -> Result<Vec<(String, f64)>, String> {
     Ok(values)
 }
 
-fn set_params(engine: &mut UciEngine, values: &[i32]) -> Result<(), String> {
+fn set_params(engine: &mut UciEngine, values: &[i32]) -> Result<(), EngineError> {
     let options: Vec<(String, String)> = PARAM_SPECS
         .iter()
         .zip(values)
@@ -199,7 +199,7 @@ fn play_pair(
     minus: &mut UciEngine,
     job: &PairJob,
     config: &SpsaConfig,
-) -> Result<Option<(i32, [GameResult; 2])>, String> {
+) -> Result<Option<(i32, [GameResult; 2])>, EngineError> {
     set_params(plus, &job.plus)?;
     set_params(minus, &job.minus)?;
     let clock = GameClock {
@@ -247,7 +247,9 @@ fn worker(
     estimate: &Mutex<Estimate>,
     started: Instant,
 ) -> Result<(), String> {
-    let spawn = || spawn_and_init_pinned(&config.engine, &config.engine_options, cpus);
+    let spawn = || {
+        start_match_engine(&config.engine, &config.engine_options, cpus).map_err(|e| e.to_string())
+    };
     let mut plus = spawn()?;
     let mut minus = spawn()?;
     loop {
@@ -258,7 +260,7 @@ fn worker(
         let Some(job) = job else {
             return Ok(());
         };
-        match play_pair(&mut plus, &mut minus, &job, config)? {
+        match play_pair(&mut plus, &mut minus, &job, config).map_err(|e| e.to_string())? {
             Some((result, games)) => {
                 let mut state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
                 state.apply(&job, result, config.pairs);

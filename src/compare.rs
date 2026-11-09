@@ -1,6 +1,6 @@
 //! Side-by-side analysis of positions by this engine and a reference engine (e.g. Stockfish).
 
-use crate::uci_client::{Analysis, UciEngine, UciScore};
+use crate::uci_client::{Analysis, EngineError, UciEngine, UciScore, engine_display_name};
 
 pub struct CompareConfig {
     pub engine_path: String,
@@ -103,14 +103,6 @@ fn format_diff(engine: Option<UciScore>, reference: Option<UciScore>) -> String 
         .map_or_else(|| "-".to_string(), |(e, r)| format!("{:+}", e - r))
 }
 
-fn spawn(path: &str, options: &[(String, String)]) -> Result<UciEngine, String> {
-    let mut engine = UciEngine::spawn(path)?;
-    engine.init_uci()?;
-    engine.set_options(options)?;
-    engine.is_ready()?;
-    Ok(engine)
-}
-
 fn print_row(index: usize, fen: &str, c: &Comparison) {
     let best = |a: &Analysis| a.best_move.clone().unwrap_or_else(|| "-".to_string());
     let marker = if c.engine.best_move.is_some() && c.engine.best_move == c.reference.best_move {
@@ -169,15 +161,11 @@ fn print_summary(s: &Summary, engine_name: &str, reference_name: &str) {
     }
 }
 
-fn display_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
-pub fn run_compare(config: &CompareConfig) -> Result<(), String> {
-    let mut engine = spawn(&config.engine_path, &config.engine_options)?;
-    let mut reference = spawn(&config.reference_path, &config.reference_options)?;
-    let engine_name = display_name(&config.engine_path);
-    let reference_name = display_name(&config.reference_path);
+pub fn run_compare(config: &CompareConfig) -> Result<(), EngineError> {
+    let mut engine = UciEngine::start(&config.engine_path, &config.engine_options, None)?;
+    let mut reference = UciEngine::start(&config.reference_path, &config.reference_options, None)?;
+    let engine_name = engine_display_name(&config.engine_path);
+    let reference_name = engine_display_name(&config.reference_path);
 
     println!(
         "  #  {:>22} | {:>22} |   diff",
