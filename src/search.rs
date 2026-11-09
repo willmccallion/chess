@@ -774,13 +774,7 @@ impl Search<'_> {
     }
 
     /// Rewards the move that caused a beta cutoff and penalizes the moves tried before it.
-    fn update_cutoff_stats(
-        &mut self,
-        best: Move,
-        depth: i32,
-        tried_quiets: &[Move],
-        tried_captures: &[Move],
-    ) {
+    fn update_cutoff_stats(&mut self, best: Move, depth: i32, tried: &TriedMoves) {
         let bonus = stat_bonus(depth, &self.params);
         let continuations = self.continuation_keys();
         let color = self.board.turn;
@@ -801,7 +795,7 @@ impl Search<'_> {
             self.td
                 .histories
                 .update_quiet(color, best, piece, &continuations, bonus);
-            for &quiet in tried_quiets {
+            for &quiet in tried.quiets.as_slice() {
                 let piece = self.board.piece_on[quiet.from.index()];
                 self.td
                     .histories
@@ -809,7 +803,7 @@ impl Search<'_> {
             }
         }
 
-        for &capture in tried_captures {
+        for &capture in tried.captures.as_slice() {
             self.update_capture_history(capture, -bonus);
         }
     }
@@ -1220,6 +1214,28 @@ struct NodeEval {
     refined: i32,
 }
 
+/// The first quiet moves and captures a node searched without a cutoff, whose
+/// histories a later cutoff lowers.
+#[derive(Default)]
+struct TriedMoves {
+    quiets: StackVec<Move, MAX_TRIED_MOVES>,
+    captures: StackVec<Move, MAX_TRIED_MOVES>,
+}
+
+impl TriedMoves {
+    fn record(&mut self, m: Move) {
+        let list = if m.is_quiet() {
+            &mut self.quiets
+        } else if m.is_capture() {
+            &mut self.captures
+        } else {
+            return;
+        };
+        if list.len() < MAX_TRIED_MOVES {
+            list.push(m);
+        }
+    }
+}
 /// What searching a node's moves found.
 #[derive(Clone, Copy)]
 struct NodeOutcome {
@@ -1469,8 +1485,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
     let mut best_score = -INFINITY;
     let mut best_move: Option<Move> = None;
     let mut moves_searched = 0;
-    let mut tried_quiets: StackVec<Move, MAX_TRIED_MOVES> = StackVec::default();
-    let mut tried_captures: StackVec<Move, MAX_TRIED_MOVES> = StackVec::default();
+    let mut tried = TriedMoves::default();
 
     let lmp_limit = (s.params.lmp_base + depth * depth) / (2 - i32::from(improving));
     let mut quiets_seen = 0;
@@ -1590,12 +1605,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
                 best_move = Some(m);
                 alpha = score;
                 if alpha >= beta {
-                    s.update_cutoff_stats(
-                        m,
-                        depth,
-                        tried_quiets.as_slice(),
-                        tried_captures.as_slice(),
-                    );
+                    s.update_cutoff_stats(m, depth, &tried);
                     let entry = &mut s.stack[s.ply];
                     entry.cutoff_count = entry
                         .cutoff_count
@@ -1605,11 +1615,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
             }
         }
 
-        if is_quiet && tried_quiets.len() < MAX_TRIED_MOVES {
-            tried_quiets.push(m);
-        } else if m.is_capture() && tried_captures.len() < MAX_TRIED_MOVES {
-            tried_captures.push(m);
-        }
+        tried.record(m);
     }
 
     if moves_searched == 0 {
