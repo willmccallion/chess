@@ -667,3 +667,105 @@ pub fn run_tournament(mut config: TournamentConfig) {
 
     print_summary(&s, e1_name, e2_name, elapsed);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with(openings: &[&str], start_fen: Option<&str>) -> TournamentConfig {
+        let clock = GameClock {
+            base_ms: 1000,
+            increment_ms: 10,
+        };
+        TournamentConfig {
+            engine1_path: String::new(),
+            engine2_path: String::new(),
+            e1_options: Vec::new(),
+            e2_options: Vec::new(),
+            e1_name: "one".to_string(),
+            e2_name: "two".to_string(),
+            e1_clock: clock,
+            e2_clock: clock,
+            rounds: 1,
+            concurrency: 1,
+            start_fen: start_fen.map(str::to_string),
+            openings: openings.iter().map(|o| (*o).to_string()).collect(),
+            sprt: None,
+        }
+    }
+
+    #[test]
+    fn elo_is_undefined_without_games_or_with_a_clean_sweep() {
+        assert_eq!(elo_diff(0, 0, 0), None);
+        assert_eq!(elo_diff(5, 0, 0), None);
+        assert_eq!(elo_diff(0, 5, 0), None);
+    }
+
+    #[test]
+    fn elo_follows_the_logistic_curve() {
+        let even = elo_diff(3, 3, 4).unwrap();
+        let three_quarters = elo_diff(3, 1, 0).unwrap();
+
+        assert!(even.abs() < 1e-9, "{even}");
+        assert!(
+            (three_quarters - 400.0 * 3f64.log10()).abs() < 1e-9,
+            "{three_quarters}"
+        );
+    }
+
+    #[test]
+    fn the_error_bar_needs_two_games_and_a_mixed_score() {
+        assert_eq!(elo_error_95(1, 0, 0), None);
+        assert_eq!(elo_error_95(0, 0, 0), None);
+        assert_eq!(elo_error_95(4, 0, 0), None);
+        assert!(elo_error_95(10, 10, 0).is_some_and(|e| e.is_finite() && e > 0.0));
+    }
+
+    #[test]
+    fn a_clean_sweep_formats_as_infinite_elo() {
+        let shown = [
+            format_elo(4, 0, 0),
+            format_elo(0, 4, 0),
+            format_elo(0, 0, 0),
+            format_elo(3, 1, 0),
+        ];
+
+        assert_eq!(shown, ["+inf", "-inf", "0", "+191"]);
+    }
+
+    #[test]
+    fn the_two_games_of_a_pair_count_once_whichever_finishes_first() {
+        let mut score = Score::new();
+
+        let first_halves = [
+            score.record_pair_game(3, 1.0),
+            score.record_pair_game(0, 0.5),
+        ];
+        let second_halves = [
+            score.record_pair_game(2, 1.0),
+            score.record_pair_game(1, 0.0),
+        ];
+
+        assert_eq!(first_halves, [false, false]);
+        assert_eq!(second_halves, [true, true]);
+        assert_eq!(score.penta.counts(), [0, 1, 0, 0, 1]);
+    }
+
+    #[test]
+    fn game_pairs_cycle_through_the_openings() {
+        let config = config_with(&["a", "b"], None);
+
+        let fens: Vec<_> = (0..6).map(|game| config.start_fen_for_game(game)).collect();
+
+        let expected = ["a", "a", "b", "b", "a", "a"].map(|o| Some(o.to_string()));
+        assert_eq!(fens, expected);
+    }
+
+    #[test]
+    fn without_openings_every_game_starts_from_the_start_fen() {
+        let config = config_with(&[], Some("fen"));
+
+        assert_eq!(config.start_fen_for_game(5), Some("fen".to_string()));
+        assert_eq!(config_with(&[], None).start_fen_for_game(0), None);
+    }
+}
