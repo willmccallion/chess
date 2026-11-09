@@ -39,12 +39,10 @@ fn extract_i64(cmd: &str, key: &str) -> Option<i64> {
 fn parse_setoption(rest: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = rest.splitn(2, "name").collect();
     let after = parts.get(1)?.trim();
-    if let Some(idx) = after.to_ascii_lowercase().find(" value ") {
+    const VALUE: &str = " value ";
+    if let Some(idx) = after.to_ascii_lowercase().find(VALUE) {
         let (n, v) = after.split_at(idx);
-        Some((
-            n.trim().to_string(),
-            v.trim_start_matches(" value ").trim().to_string(),
-        ))
+        Some((n.trim().to_string(), v[VALUE.len()..].trim().to_string()))
     } else {
         Some((after.trim().to_string(), String::new()))
     }
@@ -605,6 +603,14 @@ mod tests {
             Some(("Ponder".to_string(), String::new()))
         );
         assert_eq!(parse_setoption(" Hash 16"), None);
+    }
+
+    #[test]
+    fn setoption_takes_the_value_keyword_in_any_case() {
+        assert_eq!(
+            parse_setoption(" name Threads VALUE 4"),
+            Some(("Threads".to_string(), "4".to_string()))
+        );
     }
 
     #[test]
