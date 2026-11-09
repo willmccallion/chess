@@ -337,6 +337,21 @@ pub enum EvalState {
 }
 
 impl EvalState {
+    #[cfg(feature = "stockfish-nnue")]
+    const fn stockfish(&mut self) -> Option<&mut stockfish::accumulator::AccumulatorStack> {
+        match self {
+            Self::Stockfish(stack) => Some(stack),
+            _ => None,
+        }
+    }
+
+    const fn own(&mut self) -> Option<&mut own::AccumulatorStack> {
+        match self {
+            Self::Own(stack) => Some(stack),
+            _ => None,
+        }
+    }
+
     /// State for the evaluator in use.
     pub fn for_active() -> Self {
         match active() {
@@ -388,23 +403,29 @@ pub fn evaluate(board: &mut Board) -> i32 {
         Active::Bootstrap => Bootstrap.evaluate(&mut NoState, board.position_view()),
         #[cfg(feature = "stockfish-nnue")]
         Active::Stockfish(nets) => {
-            let (state, position) = board.eval_state_and_view();
-            if let EvalState::Stockfish(stack) = state {
-                return nets.evaluate(stack, position);
-            }
-            let mut stack = nets.new_state();
-            let score = nets.evaluate(&mut stack, position);
-            *state = EvalState::Stockfish(stack);
-            score
+            evaluate_with(nets, board, EvalState::stockfish, EvalState::Stockfish)
         }
-        Active::Own(net) => {
-            let (state, position) = board.eval_state_and_view();
-            if let EvalState::Own(stack) = state {
-                return net.evaluate(stack, position);
-            }
+        Active::Own(net) => evaluate_with(net, board, EvalState::own, EvalState::Own),
+    }
+}
+
+/// Evaluates with `net`, continuing the board's incremental state when
+/// `stored` finds one of `net`'s kind in it, else replacing it with a new
+/// one that `wrap` makes the board's.
+#[inline(always)]
+fn evaluate_with<E: Evaluator>(
+    net: &E,
+    board: &mut Board,
+    stored: fn(&mut EvalState) -> Option<&mut E::State>,
+    wrap: fn(E::State) -> EvalState,
+) -> i32 {
+    let (state, position) = board.eval_state_and_view();
+    match stored(state) {
+        Some(stack) => net.evaluate(stack, position),
+        None => {
             let mut stack = net.new_state();
             let score = net.evaluate(&mut stack, position);
-            *state = EvalState::Own(stack);
+            *state = wrap(stack);
             score
         }
     }
