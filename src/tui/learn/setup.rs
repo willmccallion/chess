@@ -8,6 +8,7 @@ use super::{Nav, Screen};
 use crate::coach::bot::Level;
 use crate::coach::repertoire::{CHAPTERS, Chapter};
 use crate::game_runner::GameClock;
+use crate::time::Millis;
 use crate::types::Color;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -21,7 +22,7 @@ use std::time::Instant;
 const BLUNDER_CHECK_BELOW: i32 = 1000;
 const FORM_WIDTH: u16 = 64;
 
-const CLOCKS: [Option<(u64, u64)>; 5] = [
+const CLOCKS: [Option<(i64, i64)>; 5] = [
     None,
     Some((10, 5)),
     Some((15, 10)),
@@ -187,8 +188,8 @@ impl Setup {
             level: self.level.unwrap_or_else(|| data.profile.suggested_level()),
             human,
             clock: CLOCKS[self.clock].map(|(minutes, increment)| GameClock {
-                base_ms: minutes * 60_000,
-                increment_ms: increment * 1000,
+                base: Millis::new(minutes * 60_000),
+                increment: Millis::new(increment * 1000),
             }),
             blunder_check: self.blunder_check,
             opening: self

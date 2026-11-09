@@ -4,6 +4,7 @@ use super::sprites::{self, Pixel};
 use crate::board::Board;
 use crate::game_runner::GameResult;
 use crate::search::Score;
+use crate::time::Millis;
 use crate::types::{Color, Move, Piece, PieceKind, Square};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -518,8 +519,8 @@ fn players_panel(app: &App, now: Instant) -> Paragraph<'static> {
             Span::raw(format!("{side:<6} {:<7}", player_name(app, color))),
         ];
         if let Some(clocks) = app.clocks() {
-            let ms = clocks.remaining_ms(color, board.turn(), now);
-            spans.push(clock_span(ms, to_move, Style::new()));
+            let left = clocks.remaining(color, board.turn(), now);
+            spans.push(clock_span(left, to_move, Style::new()));
         }
         Line::from(spans)
     };
@@ -539,18 +540,18 @@ fn mode_text(app: &App) -> String {
         Mode::Watch => "Watching",
     };
     let time = match app.time_setting() {
-        TimeSetting::PerMove { ms } => format!("engine {:.1}s/move", ms as f64 / 1000.0),
+        TimeSetting::PerMove(time) => format!("engine {:.1}s/move", time.seconds()),
         TimeSetting::Clock(clock) => format!(
             "{}+{}",
-            format_minutes(clock.base_ms),
-            clock.increment_ms as f64 / 1000.0
+            format_minutes(clock.base),
+            clock.increment.seconds()
         ),
     };
     format!("{mode} · {time}")
 }
 
-fn format_minutes(ms: u64) -> String {
-    let minutes = ms as f64 / 60_000.0;
+fn format_minutes(time: Millis) -> String {
+    let minutes = time.seconds() / 60.0;
     if minutes.fract() == 0.0 {
         format!("{minutes:.0}")
     } else {
@@ -781,17 +782,17 @@ pub fn turn_marker(to_move: bool) -> Span<'static> {
 
 /// A clock showing `ms` (none below zero), highlighted while it runs and
 /// drawn in `idle` otherwise.
-pub fn clock_span(ms: i64, to_move: bool, idle: Style) -> Span<'static> {
+pub fn clock_span(left: Millis, to_move: bool, idle: Style) -> Span<'static> {
     let style = if to_move {
         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
     } else {
         idle
     };
-    Span::styled(format_clock(ms.max(0)), style)
+    Span::styled(format_clock(left.max(Millis::ZERO)), style)
 }
 
-pub fn format_clock(ms: i64) -> String {
-    let tenths = ms / 100;
+pub fn format_clock(left: Millis) -> String {
+    let tenths = left.get() / 100;
     let seconds = tenths / 10;
     if seconds < 20 {
         format!("{}:{:02}.{}", seconds / 60, seconds % 60, tenths % 10)
@@ -875,8 +876,8 @@ mod tests {
         );
         assert_eq!(format_score(Score::MateIn(3)), "#3");
         assert_eq!(format_score(Score::MateIn(-2)), "#-2");
-        assert_eq!(format_clock(305_000), "5:05");
-        assert_eq!(format_clock(9_400), "0:09.4");
+        assert_eq!(format_clock(Millis::new(305_000)), "5:05");
+        assert_eq!(format_clock(Millis::new(9_400)), "0:09.4");
     }
 
     #[test]
@@ -905,8 +906,8 @@ mod tests {
             mode,
             human: Color::White,
             time: TimeSetting::Clock(crate::game_runner::GameClock {
-                base_ms: 60_000,
-                increment_ms: 0,
+                base: Millis::new(60_000),
+                increment: Millis::new(0),
             }),
         };
         App::new(config, Instant::now())

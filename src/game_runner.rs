@@ -1,4 +1,5 @@
 use crate::board::Board;
+use crate::time::Millis;
 use crate::types::{Color, MoveList, START_FEN};
 use crate::uci_client::UciEngine;
 use crate::uci_io::parse_uci_move;
@@ -108,8 +109,8 @@ pub struct GameOutcome {
 /// One side's clock: starting time and the increment added after each move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GameClock {
-    pub base_ms: u64,
-    pub increment_ms: u64,
+    pub base: Millis,
+    pub increment: Millis,
 }
 
 /// A position a game can start from: a FEN that reads as a legal board.
@@ -224,34 +225,34 @@ fn start_new_game(engine: &mut UciEngine, side: &str) {
 
 /// Both sides' time left and the increment each gains after a move.
 struct Clocks {
-    white_ms: i64,
-    black_ms: i64,
-    white_increment_ms: u64,
-    black_increment_ms: u64,
+    white: Millis,
+    black: Millis,
+    white_increment: Millis,
+    black_increment: Millis,
 }
 
 impl Clocks {
     const fn new(config: &GameConfig) -> Self {
         Self {
-            white_ms: config.white_clock.base_ms as i64,
-            black_ms: config.black_clock.base_ms as i64,
-            white_increment_ms: config.white_clock.increment_ms,
-            black_increment_ms: config.black_clock.increment_ms,
+            white: config.white_clock.base,
+            black: config.black_clock.base,
+            white_increment: config.white_clock.increment,
+            black_increment: config.black_clock.increment,
         }
     }
 
-    /// Charges `side` for a move that took `elapsed_ms`, then adds its
+    /// Charges `side` for a move that took `elapsed`, then adds its
     /// increment, unless its flag fell first.
-    const fn charge(&mut self, side: Color, elapsed_ms: i64) -> Result<(), GameEndReason> {
-        let (left_ms, increment_ms) = match side {
-            Color::White => (&mut self.white_ms, self.white_increment_ms),
-            Color::Black => (&mut self.black_ms, self.black_increment_ms),
+    fn charge(&mut self, side: Color, elapsed: Millis) -> Result<(), GameEndReason> {
+        let (left, increment) = match side {
+            Color::White => (&mut self.white, self.white_increment),
+            Color::Black => (&mut self.black, self.black_increment),
         };
-        *left_ms -= elapsed_ms;
-        if *left_ms <= 0 {
+        *left -= elapsed;
+        if *left <= Millis::ZERO {
             return Err(GameEndReason::FlagFall);
         }
-        *left_ms += increment_ms as i64;
+        *left += increment;
         Ok(())
     }
 }
@@ -300,15 +301,10 @@ impl<'a> Game<'a> {
         let start = Instant::now();
         let c = &self.clocks;
         let bestmove = engine
-            .go(
-                c.white_ms,
-                c.black_ms,
-                c.white_increment_ms,
-                c.black_increment_ms,
-            )
+            .go(c.white, c.black, c.white_increment, c.black_increment)
             .map_err(|_| GameEndReason::EngineCrash)?;
         self.clocks
-            .charge(self.board.turn(), start.elapsed().as_millis() as i64)?;
+            .charge(self.board.turn(), Millis::from_duration(start.elapsed()))?;
         let Some(m) = parse_uci_move(&self.board, &bestmove) else {
             report_rejected_move(&engine.name, &bestmove, &self.board);
             return Err(GameEndReason::IllegalMove);

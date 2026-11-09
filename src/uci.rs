@@ -5,7 +5,7 @@ use crate::eval::{self, EvalOptions};
 use crate::opening_book::{get_book_move, legal_book_moves};
 use crate::search::{Depth, NodeLimit, SearchControl, SearchLimits, SearchThreads, search};
 use crate::search_params::SearchParams;
-use crate::time::{TimeBudget, TimeControl};
+use crate::time::{Millis, TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
 use crate::types::{Color, Move, MoveList};
 use crate::uci_io::{format_uci, parse_uci_move};
@@ -17,8 +17,8 @@ const DEFAULT_HASH_MB: usize = 256;
 const MAX_HASH_MB: usize = 4096;
 const DEFAULT_THREADS: usize = 1;
 const MAX_THREADS: usize = 128;
-const DEFAULT_MOVE_OVERHEAD_MS: i64 = 10;
-const MAX_MOVE_OVERHEAD_MS: i64 = 5000;
+const DEFAULT_MOVE_OVERHEAD: Millis = Millis::new(10);
+const MAX_MOVE_OVERHEAD: Millis = Millis::new(5000);
 const MAX_DEPTH: Depth = Depth::new(127);
 /// Hash for the coach bot's small per-move searches.
 const COACH_HASH_MB: usize = 16;
@@ -130,7 +130,7 @@ struct Options {
     hash_mb: usize,
     threads: usize,
     own_book: bool,
-    move_overhead_ms: i64,
+    move_overhead: Millis,
     eval: EvalOptions,
     search_params: SearchParams,
 }
@@ -143,7 +143,7 @@ impl Options {
             hash_mb: DEFAULT_HASH_MB,
             threads: DEFAULT_THREADS,
             own_book: true,
-            move_overhead_ms: DEFAULT_MOVE_OVERHEAD_MS,
+            move_overhead: DEFAULT_MOVE_OVERHEAD,
             eval,
             search_params: SearchParams::default(),
         }
@@ -183,7 +183,7 @@ fn print_options(options: &Options) {
         Level::STRONGEST.number()
     ));
     send(&format!(
-        "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD_MS} min 0 max {MAX_MOVE_OVERHEAD_MS}"
+        "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD} min 0 max {MAX_MOVE_OVERHEAD}"
     ));
     for line in options.eval.uci_options() {
         send(&line);
@@ -296,11 +296,12 @@ impl GoCommand {
     }
 
     /// The time left on the clock of the side to move, `turn`.
-    const fn clock(&self, turn: Color) -> Option<i64> {
+    fn clock(&self, turn: Color) -> Option<Millis> {
         match turn {
             Color::White => self.wtime,
             Color::Black => self.btime,
         }
+        .map(Millis::new)
     }
 }
 
@@ -319,18 +320,18 @@ fn search_moves(go: &GoCommand, board: &Board) -> Option<MoveList> {
 
 /// The time `go` gives the side to move, if any: its `movetime`, or a share
 /// of its clock.
-fn time_budget(go: &GoCommand, turn: Color, move_overhead_ms: i64) -> Option<TimeBudget> {
+fn time_budget(go: &GoCommand, turn: Color, move_overhead: Millis) -> Option<TimeBudget> {
     if let Some(movetime) = go.movetime {
-        let usable = (movetime - move_overhead_ms).max(1);
-        return Some(TimeBudget::fixed(usable as u64));
+        return Some(TimeBudget::fixed(Millis::new(movetime) - move_overhead));
     }
+    let clock = |ms: Option<i64>| Millis::new(ms.unwrap_or(0));
     let tc = TimeControl {
-        wtime: go.wtime.unwrap_or(0),
-        btime: go.btime.unwrap_or(0),
-        winc: go.winc.unwrap_or(0),
-        binc: go.binc.unwrap_or(0),
+        wtime: clock(go.wtime),
+        btime: clock(go.btime),
+        winc: clock(go.winc),
+        binc: clock(go.binc),
         movestogo: go.movestogo.unwrap_or(0) as i32,
-        move_overhead_ms,
+        move_overhead,
     };
     // A clock at or below zero still bounds the search: it moves at once.
     go.clock(turn).map(|_| tc.budget(turn))
@@ -346,7 +347,7 @@ fn start_search(
     let max_depth = go.depth.map_or(MAX_DEPTH, |d| {
         Depth::new(d.clamp(1, i64::from(MAX_DEPTH.plies())) as i32)
     });
-    let budget = time_budget(go, board.turn(), options.move_overhead_ms);
+    let budget = time_budget(go, board.turn(), options.move_overhead);
 
     let (control, ponder_budget) = if go.ponder {
         (SearchControl::new(None), budget)
@@ -406,8 +407,8 @@ fn apply_option(
         let number = parse_in_range(value, 0..=Level::STRONGEST.number())?;
         options.coach_level = Level::new(number);
     } else if name.eq_ignore_ascii_case("Move Overhead") {
-        let ms: i64 = parse_number(value)?;
-        options.move_overhead_ms = ms.clamp(0, MAX_MOVE_OVERHEAD_MS);
+        let overhead = Millis::new(parse_number(value)?);
+        options.move_overhead = overhead.clamp(Millis::ZERO, MAX_MOVE_OVERHEAD);
     } else if !options.eval.set_uci_option(name, value)? {
         // Tunable search parameters are accepted by name but not advertised.
         let number = parse_number(value)?;
@@ -423,7 +424,7 @@ fn apply_option(
 fn coach_move(
     board: &Board,
     level: Level,
-    remaining_ms: Option<i64>,
+    remaining: Option<Millis>,
     searcher: &mut Searcher,
 ) -> Option<Move> {
     let spec = level.spec();
@@ -440,7 +441,7 @@ fn coach_move(
         }
     }
     let control = SearchControl::new(None);
-    let scores = searcher.score_moves(board, spec.nodes_for_clock(remaining_ms), &control)?;
+    let scores = searcher.score_moves(board, spec.nodes_for_clock(remaining), &control)?;
     choose_move(&scores, spec, &mut rng)
 }
 
@@ -630,26 +631,30 @@ mod tests {
         let budget = time_budget(
             &GoCommand::parse("wtime 0 btime 0 winc 100 binc 100"),
             Color::White,
-            10,
+            Millis::new(10),
         );
 
         assert!(
-            budget.is_some_and(|b| b.soft_ms >= 1 && b.hard_ms < 100),
+            budget.is_some_and(|b| b.soft >= Millis::new(1) && b.hard < Millis::new(100)),
             "{budget:?}"
         );
     }
 
     #[test]
     fn a_negative_clock_still_times_the_search_and_moves_at_once() {
-        let budget = time_budget(&GoCommand::parse("wtime -50 btime -50"), Color::White, 10);
+        let budget = time_budget(
+            &GoCommand::parse("wtime -50 btime -50"),
+            Color::White,
+            Millis::new(10),
+        );
 
-        assert_eq!(budget, Some(TimeBudget::fixed(1)));
+        assert_eq!(budget, Some(TimeBudget::fixed(Millis::new(1))));
     }
 
     #[test]
     fn a_go_without_clocks_is_untimed() {
         assert_eq!(
-            time_budget(&GoCommand::parse("depth 10"), Color::White, 10),
+            time_budget(&GoCommand::parse("depth 10"), Color::White, Millis::new(10)),
             None
         );
     }
@@ -765,10 +770,13 @@ mod tests {
         let mut tt = SharedTransTable::new(1);
 
         apply_option("Move Overhead", "-5", &mut options, &mut tt).unwrap();
-        let low = options.move_overhead_ms;
+        let low = options.move_overhead;
         apply_option("Move Overhead", "999999", &mut options, &mut tt).unwrap();
 
-        assert_eq!((low, options.move_overhead_ms), (0, MAX_MOVE_OVERHEAD_MS));
+        assert_eq!(
+            (low, options.move_overhead),
+            (Millis::ZERO, MAX_MOVE_OVERHEAD)
+        );
     }
 
     #[test]
@@ -804,8 +812,12 @@ mod tests {
 
     #[test]
     fn movetime_gives_its_time_less_the_overhead() {
-        let budget = time_budget(&GoCommand::parse("movetime 500"), Color::Black, 10);
+        let budget = time_budget(
+            &GoCommand::parse("movetime 500"),
+            Color::Black,
+            Millis::new(10),
+        );
 
-        assert_eq!(budget, Some(TimeBudget::fixed(490)));
+        assert_eq!(budget, Some(TimeBudget::fixed(Millis::new(490))));
     }
 }

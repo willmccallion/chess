@@ -3,11 +3,11 @@ use crate::board::Board;
 use crate::game_runner::{GameClock, GameEndReason, GameResult, position_outcome, win_for};
 use crate::notation::{line_in_san, parse_typed_move};
 use crate::search::{Depth, IterationInfo, Score};
-use crate::time::{TimeBudget, TimeControl};
+use crate::time::{Millis, TimeBudget, TimeControl};
 use crate::types::{Color, Move, MoveList, PieceKind, Square};
 use std::time::Instant;
 
-const ENGINE_MOVE_OVERHEAD_MS: i64 = 50;
+const ENGINE_MOVE_OVERHEAD: Millis = Millis::new(50);
 
 /// How a session is played.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,7 +23,7 @@ pub enum Mode {
 /// How long the engine thinks: a fixed time per move, or a game clock for both sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimeSetting {
-    PerMove { ms: u64 },
+    PerMove(Millis),
     Clock(GameClock),
 }
 
@@ -54,8 +54,8 @@ pub fn parse_clock(text: &str) -> Result<GameClock, String> {
         ));
     }
     Ok(GameClock {
-        base_ms: (minutes * 60_000.0).round() as u64,
-        increment_ms: (increment * 1000.0).round() as u64,
+        base: Millis::new((minutes * 60_000.0).round() as i64),
+        increment: Millis::new((increment * 1000.0).round() as i64),
     })
 }
 
@@ -121,42 +121,44 @@ pub struct Panels {
 /// Both players' remaining time; the side to move's clock runs from `running_since`.
 #[derive(Clone, Copy, Debug)]
 pub struct Clocks {
-    remaining_ms: [i64; 2],
-    increment_ms: i64,
+    remaining: [Millis; 2],
+    increment: Millis,
     running_since: Option<Instant>,
 }
 
 impl Clocks {
     const fn new(clock: GameClock, now: Instant) -> Self {
         Self {
-            remaining_ms: [clock.base_ms as i64; 2],
-            increment_ms: clock.increment_ms as i64,
+            remaining: [clock.base; 2],
+            increment: clock.increment,
             running_since: Some(now),
         }
     }
 
-    pub fn remaining_ms(&self, color: Color, to_move: Color, now: Instant) -> i64 {
-        let stored = self.remaining_ms[color as usize];
+    pub fn remaining(&self, color: Color, to_move: Color, now: Instant) -> Millis {
+        let stored = self.remaining[color as usize];
         match self.running_since {
-            Some(since) if color == to_move => stored - since_ms(since, now),
+            Some(since) if color == to_move => {
+                stored - Millis::from_duration(now.saturating_duration_since(since))
+            }
             _ => stored,
         }
     }
 
     /// Charges the mover's thinking time and adds the increment; false if they flagged.
     fn complete_move(&mut self, mover: Color, now: Instant) -> bool {
-        let remaining = self.remaining_ms(mover, mover, now);
-        if remaining <= 0 {
-            self.remaining_ms[mover as usize] = 0;
+        let remaining = self.remaining(mover, mover, now);
+        if remaining <= Millis::ZERO {
+            self.remaining[mover as usize] = Millis::ZERO;
             return false;
         }
-        self.remaining_ms[mover as usize] = remaining + self.increment_ms;
+        self.remaining[mover as usize] = remaining + self.increment;
         self.running_since = self.running_since.map(|_| now);
         true
     }
 
     fn pause(&mut self, to_move: Color, now: Instant) {
-        self.remaining_ms[to_move as usize] = self.remaining_ms(to_move, to_move, now);
+        self.remaining[to_move as usize] = self.remaining(to_move, to_move, now);
         self.running_since = None;
     }
 
@@ -166,18 +168,14 @@ impl Clocks {
 
     fn time_control(&self, to_move: Color, now: Instant) -> TimeControl {
         TimeControl {
-            wtime: self.remaining_ms(Color::White, to_move, now),
-            btime: self.remaining_ms(Color::Black, to_move, now),
-            winc: self.increment_ms,
-            binc: self.increment_ms,
+            wtime: self.remaining(Color::White, to_move, now),
+            btime: self.remaining(Color::Black, to_move, now),
+            winc: self.increment,
+            binc: self.increment,
             movestogo: 0,
-            move_overhead_ms: ENGINE_MOVE_OVERHEAD_MS,
+            move_overhead: ENGINE_MOVE_OVERHEAD,
         }
     }
-}
-
-fn since_ms(since: Instant, now: Instant) -> i64 {
-    now.saturating_duration_since(since).as_millis() as i64
 }
 
 #[allow(
@@ -352,7 +350,7 @@ impl App {
         self.history.clear();
         self.clocks = match self.config.time {
             TimeSetting::Clock(clock) => Some(Clocks::new(clock, now)),
-            TimeSetting::PerMove { .. } => None,
+            TimeSetting::PerMove(_) => None,
         };
         self.paused = false;
         self.engine_line = None;
@@ -402,8 +400,8 @@ impl App {
             (Some(clocks), _) => clocks
                 .time_control(self.board.turn(), now)
                 .budget(self.board.turn()),
-            (None, TimeSetting::PerMove { ms }) => TimeBudget::fixed(ms),
-            (None, TimeSetting::Clock(clock)) => TimeBudget::fixed(clock.base_ms / 40),
+            (None, TimeSetting::PerMove(time)) => TimeBudget::fixed(time),
+            (None, TimeSetting::Clock(clock)) => TimeBudget::fixed(clock.base / 40),
         }
     }
 
@@ -463,7 +461,7 @@ impl App {
         }
         let to_move = self.board.turn();
         if let Some(clocks) = &self.clocks
-            && clocks.remaining_ms(to_move, to_move, now) <= 0
+            && clocks.remaining(to_move, to_move, now) <= Millis::ZERO
         {
             self.flag(to_move);
         }
@@ -640,7 +638,7 @@ mod tests {
             fen,
             Mode::Casual,
             Color::White,
-            TimeSetting::PerMove { ms: 100 },
+            TimeSetting::PerMove(Millis::new(100)),
         )
     }
 
@@ -650,11 +648,11 @@ mod tests {
         assert_eq!(
             clock,
             GameClock {
-                base_ms: 300_000,
-                increment_ms: 3_000
+                base: Millis::new(300_000),
+                increment: Millis::new(3_000)
             }
         );
-        assert_eq!(parse_clock("0.5+0").unwrap().base_ms, 30_000);
+        assert_eq!(parse_clock("0.5+0").unwrap().base, Millis::new(30_000));
         assert!(parse_clock("5").is_err());
         assert!(parse_clock("0+1").is_err());
         assert!(parse_clock("5+-1").is_err());
@@ -785,7 +783,7 @@ mod tests {
             START_FEN,
             Mode::Game,
             Color::White,
-            TimeSetting::PerMove { ms: 100 },
+            TimeSetting::PerMove(Millis::new(100)),
         );
         let now = Instant::now();
         app.typed = Some("e4".into());
@@ -818,7 +816,7 @@ mod tests {
             START_FEN,
             Mode::Game,
             Color::White,
-            TimeSetting::PerMove { ms: 100 },
+            TimeSetting::PerMove(Millis::new(100)),
         );
 
         assert_eq!(
@@ -852,8 +850,8 @@ mod tests {
     #[test]
     fn running_out_of_time_loses() {
         let clock = GameClock {
-            base_ms: 1_000,
-            increment_ms: 0,
+            base: Millis::new(1_000),
+            increment: Millis::new(0),
         };
         let mut app = app(
             START_FEN,
@@ -878,8 +876,8 @@ mod tests {
     #[test]
     fn a_move_adds_the_increment_to_the_movers_clock() {
         let clock = GameClock {
-            base_ms: 10_000,
-            increment_ms: 2_000,
+            base: Millis::new(10_000),
+            increment: Millis::new(2_000),
         };
         let start = Instant::now();
         let mut app = app_at(
@@ -896,8 +894,8 @@ mod tests {
 
         let clocks = app.clocks().unwrap();
         assert_eq!(
-            clocks.remaining_ms(Color::White, Color::Black, moved_at),
-            9_000
+            clocks.remaining(Color::White, Color::Black, moved_at),
+            Millis::new(9_000)
         );
     }
 }

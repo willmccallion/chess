@@ -68,8 +68,7 @@ pub struct SpsaConfig {
     pub openings: Vec<StartPosition>,
     /// Planned number of game pairs (SPSA iterations).
     pub pairs: usize,
-    pub base_time_ms: u64,
-    pub increment_ms: u64,
+    pub clock: GameClock,
     pub workers: Vec<WorkerGroup>,
     pub seed: u64,
     /// Where the current estimate is written; also accepted by `resume`.
@@ -203,10 +202,7 @@ fn play_pair(
 ) -> Result<Option<(i32, [GameResult; 2])>, EngineError> {
     set_params(plus, &job.plus)?;
     set_params(minus, &job.minus)?;
-    let clock = GameClock {
-        base_ms: config.base_time_ms,
-        increment_ms: config.increment_ms,
-    };
+    let clock = config.clock;
     let game = GameConfig {
         white_clock: clock,
         black_clock: clock,
@@ -315,8 +311,8 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
         "SPSA: {} parameters, {} pairs at {}+{}ms, {} workers, writing {}",
         PARAM_SPECS.len(),
         config.pairs,
-        config.base_time_ms,
-        config.increment_ms,
+        config.clock.base,
+        config.clock.increment,
         total_workers,
         config.output.display()
     );
@@ -345,6 +341,7 @@ pub fn run(config: SpsaConfig) -> Result<Vec<f64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::Millis;
 
     #[test]
     fn worker_groups_parse_cpu_lists_and_counts() {
@@ -401,8 +398,10 @@ mod tests {
             engine_options: Vec::new(),
             openings: vec![StartPosition::parse(crate::types::START_FEN).unwrap()],
             pairs: 100,
-            base_time_ms: 0,
-            increment_ms: 0,
+            clock: GameClock {
+                base: Millis::ZERO,
+                increment: Millis::ZERO,
+            },
             workers: Vec::new(),
             seed: 3,
             output: PathBuf::new(),

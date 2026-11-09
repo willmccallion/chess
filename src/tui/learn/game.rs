@@ -22,9 +22,8 @@ use crate::coach::store::{Ending, GameId, GameRecord};
 use crate::game_runner::{GameClock, GameResult, position_outcome, win_for};
 use crate::opening_book::legal_book_moves;
 use crate::search::Score;
-use crate::time::TimeBudget;
-use crate::types::Centipawns;
-use crate::types::{Color, Move, PieceKind, START_FEN};
+use crate::time::{Millis, TimeBudget};
+use crate::types::{Centipawns, Color, Move, PieceKind, START_FEN};
 use rand::Rng;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -39,7 +38,7 @@ const BOT_MIN_THINK: Duration = Duration::from_millis(600);
 /// Extra random thinking time, up to this, so the bot's pace feels human.
 const BOT_EXTRA_THINK_MS: u64 = 900;
 /// Search time for each blunder-check evaluation.
-const GUARD_SEARCH_MS: u64 = 400;
+const GUARD_SEARCH_TIME: Millis = Millis::new(400);
 /// Tags for the blunder check's searches, kept apart from the bot's (which use the ply).
 const BASELINE_TAG: u64 = 1 << 40;
 const PROPOSAL_TAG: u64 = 1 << 41;
@@ -127,7 +126,7 @@ impl CoachGame {
             human: settings.human,
             time: settings
                 .clock
-                .map_or(TimeSetting::PerMove { ms: 0 }, TimeSetting::Clock),
+                .map_or(TimeSetting::PerMove(Millis::ZERO), TimeSetting::Clock),
         };
         let mut app = App::new(config, Instant::now());
         app.set_hold_moves(settings.blunder_check);
@@ -170,7 +169,7 @@ impl CoachGame {
         let remaining = self
             .app
             .clocks()
-            .map(|c| c.remaining_ms(bot, self.app.board().turn(), Instant::now()));
+            .map(|c| c.remaining(bot, self.app.board().turn(), Instant::now()));
         self.settings.level.spec().nodes_for_clock(remaining)
     }
 
@@ -184,7 +183,9 @@ impl CoachGame {
     fn guard_search(tag: u64, board: Board) -> Job {
         Job {
             tag,
-            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(GUARD_SEARCH_MS)))),
+            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(
+                GUARD_SEARCH_TIME,
+            )))),
             board,
         }
     }
@@ -312,8 +313,8 @@ impl CoachGame {
                 Span::styled(format!("{rating:<7}"), Style::new().fg(DIM)),
             ];
             if let Some(clocks) = self.app.clocks() {
-                let ms = clocks.remaining_ms(color, board.turn(), now);
-                spans.push(clock_span(ms, to_move, Style::new().fg(TEXT)));
+                let left = clocks.remaining(color, board.turn(), now);
+                spans.push(clock_span(left, to_move, Style::new().fg(TEXT)));
             }
             lines.push(Line::from(spans));
         }

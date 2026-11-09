@@ -9,8 +9,7 @@ use crate::search::{
 use crate::search_params::SearchParams;
 use crate::time::TimeBudget;
 use crate::tt::SharedTransTable;
-use crate::types::Centipawns;
-use crate::types::{Move, MoveList};
+use crate::types::{Centipawns, Move, MoveList};
 use std::sync::Arc;
 
 const MAX_DEPTH: Depth = Depth::new(64);

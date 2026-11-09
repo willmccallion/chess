@@ -14,6 +14,7 @@ use chess::search::Depth;
 use chess::search_params::PARAM_SPECS;
 use chess::sprt::SprtConfig;
 use chess::spsa;
+use chess::time::Millis;
 use chess::tournament::{self, EngineSpec, TournamentConfig};
 use chess::tui;
 use chess::types::{Color, START_FEN};
@@ -191,8 +192,8 @@ struct PlayArgs {
     #[arg(long, value_parser = tui::parse_clock)]
     clock: Option<GameClock>,
     /// Engine thinking time per move in milliseconds when there is no clock
-    #[arg(long, default_value_t = 3000)]
-    movetime: u64,
+    #[arg(long, default_value_t = Millis::new(3000), value_parser = parse_millis)]
+    movetime: Millis,
     #[arg(long)]
     fen: Option<String>,
     #[arg(long, default_value_t = 4)]
@@ -233,10 +234,7 @@ impl PlayArgs {
             start,
             mode: board_mode,
             human: side.color(),
-            time: clock.map_or(
-                tui::TimeSetting::PerMove { ms: movetime },
-                tui::TimeSetting::Clock,
-            ),
+            time: clock.map_or(tui::TimeSetting::PerMove(movetime), tui::TimeSetting::Clock),
         };
         match tui::run(config, engine) {
             Ok(record) => println!("{record}"),
@@ -377,17 +375,17 @@ struct ChallengeArgs {
     #[arg(long = "e2-name")]
     e2_name: Option<String>,
     /// Base time in milliseconds per side
-    #[arg(long, default_value_t = 5000)]
-    time: u64,
+    #[arg(long, default_value_t = Millis::new(5000), value_parser = parse_millis)]
+    time: Millis,
     /// Increment in milliseconds per move
-    #[arg(long, default_value_t = 50)]
-    inc: u64,
+    #[arg(long, default_value_t = Millis::new(50), value_parser = parse_millis)]
+    inc: Millis,
     /// Base time for engine 2 when it gets a different clock (time odds); defaults to --time
-    #[arg(long = "e2-time")]
-    e2_time: Option<u64>,
+    #[arg(long = "e2-time", value_parser = parse_millis)]
+    e2_time: Option<Millis>,
     /// Increment for engine 2; defaults to --inc
-    #[arg(long = "e2-inc")]
-    e2_inc: Option<u64>,
+    #[arg(long = "e2-inc", value_parser = parse_millis)]
+    e2_inc: Option<Millis>,
     /// Number of games to play
     #[arg(long, default_value_t = 10)]
     rounds: usize,
@@ -442,8 +440,8 @@ impl ChallengeArgs {
                 path: engine1,
                 options: parse_options(&e1_options),
                 clock: GameClock {
-                    base_ms: time,
-                    increment_ms: inc,
+                    base: time,
+                    increment: inc,
                 },
             },
             engine2: EngineSpec {
@@ -451,8 +449,8 @@ impl ChallengeArgs {
                 path: engine2,
                 options: parse_options(&e2_options),
                 clock: GameClock {
-                    base_ms: e2_time.unwrap_or(time),
-                    increment_ms: e2_inc.unwrap_or(inc),
+                    base: e2_time.unwrap_or(time),
+                    increment: e2_inc.unwrap_or(inc),
                 },
             },
             rounds,
@@ -564,11 +562,11 @@ struct TuneArgs {
     #[arg(long, default_value_t = 10_000)]
     pairs: usize,
     /// Base time per game in milliseconds
-    #[arg(long, default_value_t = 5000)]
-    time: u64,
+    #[arg(long, default_value_t = Millis::new(5000), value_parser = parse_millis)]
+    time: Millis,
     /// Increment per move in milliseconds
-    #[arg(long, default_value_t = 50)]
-    inc: u64,
+    #[arg(long, default_value_t = Millis::new(50), value_parser = parse_millis)]
+    inc: Millis,
     /// Unpinned workers, used when --workers is not given
     #[arg(long, default_value_t = 8)]
     concurrency: usize,
@@ -629,8 +627,10 @@ impl TuneArgs {
             engine_options: options_without_book(&tune_options),
             openings,
             pairs,
-            base_time_ms: time,
-            increment_ms: inc,
+            clock: GameClock {
+                base: time,
+                increment: inc,
+            },
             workers,
             seed,
             output,
@@ -797,6 +797,16 @@ fn print_params() {
 fn exit_with_error(message: &str) -> ! {
     eprintln!("{message}");
     std::process::exit(1);
+}
+
+/// A time in milliseconds from the command line, which cannot be negative.
+fn parse_millis(text: &str) -> Result<Millis, String> {
+    match text.parse::<i64>() {
+        Ok(ms) if ms >= 0 => Ok(Millis::new(ms)),
+        _ => Err(format!(
+            "expected milliseconds, a whole number from 0, got '{text}'"
+        )),
+    }
 }
 
 fn parse_options(options: &[String]) -> Vec<(String, String)> {

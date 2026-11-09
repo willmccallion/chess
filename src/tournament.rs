@@ -353,7 +353,7 @@ fn print_game_lengths(standings: &Standings) {
 }
 
 fn format_clock(clock: GameClock) -> String {
-    format!("{}ms + {}ms/move", clock.base_ms, clock.increment_ms)
+    format!("{}ms + {}ms/move", clock.base, clock.increment)
 }
 
 /// Plays the tournament and prints its results, or says why it cannot start.
@@ -609,6 +609,7 @@ fn start_engines(config: &TournamentConfig) -> Result<(UciEngine, UciEngine), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::Millis;
 
     const OPENING_A: &str = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
     const OPENING_B: &str = "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1";
@@ -628,8 +629,8 @@ mod tests {
 
     fn config_with(openings: &[&str], start: &str) -> TournamentConfig {
         let clock = GameClock {
-            base_ms: 1000,
-            increment_ms: 10,
+            base: Millis::new(1000),
+            increment: Millis::new(10),
         };
         TournamentConfig {
             engine1: engine("one", clock),

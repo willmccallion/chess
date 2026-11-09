@@ -3,8 +3,8 @@
 use super::judgement::Eval;
 use super::rating::Elo;
 use crate::search::Score;
-use crate::types::Centipawns;
-use crate::types::Move;
+use crate::time::Millis;
+use crate::types::{Centipawns, Move};
 use rand::Rng;
 
 /// Deliberate mistakes give away between these many win-chance points: real errors, but
@@ -165,15 +165,15 @@ fn utility(score: Score) -> f64 {
 }
 
 /// Below this much time left the bot searches less, in proportion, so it never loses on time.
-const RELAXED_CLOCK_MS: i64 = 60_000;
+const RELAXED_CLOCK: Millis = Millis::new(60_000);
 const MIN_NODES_PER_MOVE: u64 = 200;
 
 impl LevelSpec {
-    /// Nodes per move with `remaining_ms` on the bot's clock, if it has one.
-    pub fn nodes_for_clock(&self, remaining_ms: Option<i64>) -> u64 {
-        match remaining_ms {
-            Some(ms) if ms < RELAXED_CLOCK_MS => {
-                let share = ms.max(0) as f64 / RELAXED_CLOCK_MS as f64;
+    /// Nodes per move with `remaining` on the bot's clock, if it has one.
+    pub fn nodes_for_clock(&self, remaining: Option<Millis>) -> u64 {
+        match remaining {
+            Some(left) if left < RELAXED_CLOCK => {
+                let share = left.left() as f64 / RELAXED_CLOCK.left() as f64;
                 ((self.nodes_per_move as f64 * share) as u64).max(MIN_NODES_PER_MOVE)
             }
             _ => self.nodes_per_move,
@@ -343,9 +343,15 @@ mod tests {
         let spec = Level::STRONGEST.spec();
 
         assert_eq!(spec.nodes_for_clock(None), spec.nodes_per_move);
-        assert_eq!(spec.nodes_for_clock(Some(300_000)), spec.nodes_per_move);
-        assert_eq!(spec.nodes_for_clock(Some(30_000)), spec.nodes_per_move / 2);
-        assert_eq!(spec.nodes_for_clock(Some(0)), MIN_NODES_PER_MOVE);
+        assert_eq!(
+            spec.nodes_for_clock(Some(Millis::new(300_000))),
+            spec.nodes_per_move
+        );
+        assert_eq!(
+            spec.nodes_for_clock(Some(Millis::new(30_000))),
+            spec.nodes_per_move / 2
+        );
+        assert_eq!(spec.nodes_for_clock(Some(Millis::ZERO)), MIN_NODES_PER_MOVE);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::coach::puzzles::{Attempt, AttemptState, PuzzleId, Verdict, describe_t
 use crate::coach::rating::Elo;
 use crate::coach::store::TrainingItem;
 use crate::notation::{numbered, san_of};
-use crate::time::TimeBudget;
+use crate::time::{Millis, TimeBudget};
 use crate::types::{Color, Move, Square};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -26,7 +26,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use std::time::Instant;
 
 /// How long the engine looks at an answer that differs from the stored one.
-const JUDGE_MS: u64 = 600;
+const JUDGE_TIME: Millis = Millis::new(600);
 /// An answer from your own game passes if it keeps this close (in win-chance points) to
 /// the engine's best.
 const GOOD_ENOUGH_DROP: f64 = 5.0;
@@ -421,7 +421,7 @@ impl Screen for Puzzles {
         board.make_move(m);
         Some(Job {
             tag: u64::from(u8::from(m.from)) << 8 | u64::from(u8::from(m.to)),
-            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(JUDGE_MS)))),
+            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(JUDGE_TIME)))),
             board,
         })
     }

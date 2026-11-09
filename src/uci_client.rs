@@ -1,3 +1,4 @@
+use crate::time::Millis;
 use crate::types::Centipawns;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
@@ -308,15 +309,16 @@ impl UciEngine {
 
     pub fn go(
         &mut self,
-        wtime: i64,
-        btime: i64,
-        winc: u64,
-        binc: u64,
+        wtime: Millis,
+        btime: Millis,
+        winc: Millis,
+        binc: Millis,
     ) -> Result<String, EngineError> {
+        let least = Millis::new(1);
         self.send(&format!(
             "go wtime {} btime {} winc {} binc {}",
-            wtime.max(1),
-            btime.max(1),
+            wtime.max(least),
+            btime.max(least),
             winc,
             binc
         ))?;

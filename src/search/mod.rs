@@ -63,7 +63,9 @@ pub struct SearchControl {
 
 impl SearchControl {
     pub fn new(budget: Option<TimeBudget>) -> Arc<Self> {
-        let (soft, hard) = budget.map_or((NO_DEADLINE, NO_DEADLINE), |b| (b.soft_ms, b.hard_ms));
+        let (soft, hard) = budget.map_or((NO_DEADLINE, NO_DEADLINE), |b| {
+            (b.soft.left(), b.hard.left())
+        });
         Arc::new(Self {
             stop: AtomicBool::new(false),
             start: Instant::now(),
@@ -87,11 +89,11 @@ impl SearchControl {
         let now = self.elapsed_ms();
         self.clock_start_ms.store(now, Ordering::Relaxed);
         self.soft_deadline_ms
-            .store(now + budget.soft_ms, Ordering::Relaxed);
+            .store(now + budget.soft.left(), Ordering::Relaxed);
         // Release: a search that sees the deadline sees the start and soft
         // deadline stored before it.
         self.hard_deadline_ms
-            .store(now + budget.hard_ms, Ordering::Release);
+            .store(now + budget.hard.left(), Ordering::Release);
     }
 
     fn is_timed(&self) -> bool {
@@ -2268,6 +2270,7 @@ pub fn search_reporting(
 #[cfg(test)]
 mod time_tests {
     use super::*;
+    use crate::time::Millis;
     use crate::types::Square;
 
     /// An untimed search's control whose clock read `ms` when it began.
@@ -2290,8 +2293,8 @@ mod time_tests {
     }
 
     const BUDGET: TimeBudget = TimeBudget {
-        soft_ms: 1000,
-        hard_ms: 4000,
+        soft: Millis::new(1000),
+        hard: Millis::new(4000),
     };
     const PONDER_MS: u64 = 8000;
 
@@ -2324,7 +2327,7 @@ mod time_tests {
     fn a_search_stops_iterating_three_soft_budgets_after_ponderhit() {
         let mut control = untimed_control_started_ms_ago(PONDER_MS);
         control.set_budget_from_now(BUDGET);
-        control.start -= Duration::from_millis(3 * BUDGET.soft_ms);
+        control.start -= Duration::from_millis(3 * BUDGET.soft.left());
         let mut time = TimeManager::new(Arc::new(control), true, None);
 
         let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.0, SCORE_DROP_CAP));

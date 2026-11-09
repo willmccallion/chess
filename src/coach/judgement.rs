@@ -2,8 +2,7 @@
 
 use crate::board::Board;
 use crate::search::Score;
-use crate::types::Centipawns;
-use crate::types::{Color, PieceKind};
+use crate::types::{Centipawns, Color, PieceKind};
 
 /// Lichess's fit of expected score to centipawns.
 const WIN_CHANCE_SLOPE: f64 = 0.003_682_08;

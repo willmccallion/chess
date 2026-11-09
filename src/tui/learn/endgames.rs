@@ -13,9 +13,8 @@ use crate::coach::store::TrainingItem;
 use crate::game_runner::{GameEndReason, GameResult, position_outcome, win_for};
 use crate::notation::{numbered, san_of};
 use crate::search::Score;
-use crate::time::TimeBudget;
-use crate::types::Centipawns;
-use crate::types::{Color, Move};
+use crate::time::{Millis, TimeBudget};
+use crate::types::{Centipawns, Color, Move};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -24,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use std::time::Instant;
 
-const ENGINE_MOVE_MS: u64 = 700;
+const ENGINE_MOVE_TIME: Millis = Millis::new(700);
 /// In a drill to win, giving up after this many of your moves.
 const MOVE_LIMIT: usize = 60;
 /// While holding a draw, the drill is lost once the engine thinks it is this far ahead.
@@ -418,7 +417,7 @@ impl Screen for EndgameDrill {
         }
         Some(Job {
             tag: self.your_moves as u64,
-            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(ENGINE_MOVE_MS)))),
+            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(ENGINE_MOVE_TIME)))),
             board: self.panel.board().clone(),
         })
     }

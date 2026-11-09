@@ -18,7 +18,7 @@ use crate::coach::store::{GameId, GameRecord};
 use crate::game_runner::position_outcome;
 use crate::notation::{numbered, san_of};
 use crate::search::Score;
-use crate::time::TimeBudget;
+use crate::time::{Millis, TimeBudget};
 use crate::types::{Color, Move};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -29,7 +29,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use std::time::Instant;
 
 /// Engine time per position when analysing a game.
-const ANALYSIS_MS: u64 = 300;
+const ANALYSIS_TIME: Millis = Millis::new(300);
 const SUMMARY_HEIGHT: u16 = 8;
 
 const KEYS: &[(&str, &str)] = &[
@@ -712,7 +712,7 @@ impl Screen for ReviewScreen {
         }
         Some(Job {
             tag: next as u64,
-            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(ANALYSIS_MS)))),
+            kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(ANALYSIS_TIME)))),
             board: board.clone(),
         })
     }
