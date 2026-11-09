@@ -1,7 +1,7 @@
 //! Move-ordering statistics updated from search results.
 
 use crate::search_params::SearchParams;
-use crate::types::{Color, Move, Piece, PieceKind};
+use crate::types::{Color, Move, Piece, PieceKind, Square};
 
 pub const HISTORY_MAX: i32 = 16_384;
 
@@ -36,8 +36,8 @@ fn apply_gravity(entry: &mut i16, bonus: i32) {
 pub struct ContinuationKey(usize);
 
 impl ContinuationKey {
-    pub fn new(piece: Piece, to: u8) -> Self {
-        Self(piece.index() * 64 + to as usize)
+    pub fn new(piece: Piece, to: Square) -> Self {
+        Self(piece.index() * 64 + to.index())
     }
 }
 
@@ -61,17 +61,17 @@ impl Histories {
 
     #[inline(always)]
     pub fn butterfly(&self, color: Color, m: Move) -> i32 {
-        i32::from(self.butterfly[color as usize][m.from as usize][m.to as usize])
+        i32::from(self.butterfly[color as usize][m.from.index()][m.to.index()])
     }
 
     #[inline(always)]
-    pub fn continuation(&self, key: ContinuationKey, piece: Piece, to: u8) -> i32 {
-        i32::from(self.continuation[key.0][piece.index()][to as usize])
+    pub fn continuation(&self, key: ContinuationKey, piece: Piece, to: Square) -> i32 {
+        i32::from(self.continuation[key.0][piece.index()][to.index()])
     }
 
     #[inline(always)]
-    pub fn capture(&self, piece: Piece, to: u8, victim: PieceKind) -> i32 {
-        i32::from(self.capture[piece.index()][to as usize][victim as usize])
+    pub fn capture(&self, piece: Piece, to: Square, victim: PieceKind) -> i32 {
+        i32::from(self.capture[piece.index()][to.index()][victim as usize])
     }
 
     pub fn update_quiet(
@@ -83,20 +83,20 @@ impl Histories {
         bonus: i32,
     ) {
         apply_gravity(
-            &mut self.butterfly[color as usize][m.from as usize][m.to as usize],
+            &mut self.butterfly[color as usize][m.from.index()][m.to.index()],
             bonus,
         );
         for key in continuations.iter().flatten() {
             apply_gravity(
-                &mut self.continuation[key.0][piece.index()][m.to as usize],
+                &mut self.continuation[key.0][piece.index()][m.to.index()],
                 bonus,
             );
         }
     }
 
-    pub fn update_capture(&mut self, piece: Piece, to: u8, victim: PieceKind, bonus: i32) {
+    pub fn update_capture(&mut self, piece: Piece, to: Square, victim: PieceKind, bonus: i32) {
         apply_gravity(
-            &mut self.capture[piece.index()][to as usize][victim as usize],
+            &mut self.capture[piece.index()][to.index()][victim as usize],
             bonus,
         );
     }
@@ -219,13 +219,13 @@ mod tests {
     #[test]
     fn quiet_update_touches_butterfly_and_continuation_tables() {
         let mut histories = Histories::new();
-        let m = Move::quiet(12, 28);
-        let key = ContinuationKey::new(Piece::BN, 45);
+        let m = Move::quiet(Square::new(12), Square::new(28));
+        let key = ContinuationKey::new(Piece::BN, Square::new(45));
 
         histories.update_quiet(Color::White, m, Piece::WP, &[Some(key), None], 400);
 
         assert_eq!(histories.butterfly(Color::White, m), 400);
-        assert_eq!(histories.continuation(key, Piece::WP, 28), 400);
+        assert_eq!(histories.continuation(key, Piece::WP, Square::new(28)), 400);
         assert_eq!(histories.butterfly(Color::Black, m), 0);
     }
 }

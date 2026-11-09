@@ -1,7 +1,7 @@
 //! Reading and writing moves the way people do: SAN lines and typed moves.
 
 use crate::board::Board;
-use crate::types::{Color, Move, MoveList, PieceKind};
+use crate::types::{Color, Move, MoveList, PieceKind, Square};
 use crate::uci_io::parse_uci_move;
 
 /// Reads a move typed in UCI (`e7e8q`) or SAN (`Nf3`, `exd5`, `O-O`), ignoring check marks.
@@ -24,7 +24,7 @@ struct SanParts {
     kind: PieceKind,
     from_file: Option<u8>,
     from_rank: Option<u8>,
-    to: u8,
+    to: Square,
     promotion: Option<PieceKind>,
 }
 
@@ -33,12 +33,12 @@ struct SanParts {
 fn parse_san_loosely(board: &Board, legal: &[Move], san: &str) -> Option<Move> {
     let parts = san_parts(san)?;
     let mut matching = legal.iter().copied().filter(|m| {
-        board.piece_on[usize::from(m.from)].kind() == Some(parts.kind)
+        board.piece_on[m.from.index()].kind() == Some(parts.kind)
             && m.to == parts.to
             && !m.castle
             && m.promotion == parts.promotion
-            && parts.from_file.is_none_or(|file| m.from % 8 == file)
-            && parts.from_rank.is_none_or(|rank| m.from / 8 == rank)
+            && parts.from_file.is_none_or(|file| m.from.file() == file)
+            && parts.from_rank.is_none_or(|rank| m.from.rank() == rank)
     });
     let found = matching.next()?;
     matching.next().is_none().then_some(found)
@@ -60,8 +60,8 @@ fn san_parts(san: &str) -> Option<SanParts> {
     if chars.len() < 2 {
         return None;
     }
-    let target = chars.split_off(chars.len() - 2);
-    let to = square_of(target[0], target[1])?;
+    let target: String = chars.split_off(chars.len() - 2).into_iter().collect();
+    let to = Square::parse(&target)?;
     let mut parts = SanParts {
         kind,
         from_file: None,
@@ -88,12 +88,6 @@ fn piece_kind_of(letter: char) -> Option<PieceKind> {
         'K' => Some(PieceKind::King),
         _ => None,
     }
-}
-
-fn square_of(file: char, rank: char) -> Option<u8> {
-    let file = ('a'..='h').contains(&file).then(|| file as u8 - b'a')?;
-    let rank = ('1'..='8').contains(&rank).then(|| rank as u8 - b'1')?;
-    Some(rank * 8 + file)
 }
 
 fn normalize_san(san: &str) -> String {

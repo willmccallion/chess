@@ -318,14 +318,21 @@ impl Board {
                 if promoting {
                     if kinds != MoveKinds::Quiet {
                         for kind in PROMOTION_KINDS {
-                            out.push(Move::promotion(from as u8, to as u8, kind));
+                            out.push(Move::promotion(
+                                Square::new(from as u8),
+                                Square::new(to as u8),
+                                kind,
+                            ));
                         }
                     }
                 } else if kinds != MoveKinds::Tactical {
-                    out.push(Move::quiet(from as u8, to as u8));
+                    out.push(Move::quiet(Square::new(from as u8), Square::new(to as u8)));
                     let to2 = from + 2 * dir;
                     if rank_of(from) == start_rank && (self.all_pieces & (1u64 << to2)) == 0 {
-                        out.push(Move::double_push(from as u8, to2 as u8));
+                        out.push(Move::double_push(
+                            Square::new(from as u8),
+                            Square::new(to2 as u8),
+                        ));
                     }
                 }
             }
@@ -344,14 +351,24 @@ impl Board {
                 if (enemy & (1u64 << cap)) != 0 {
                     if promoting {
                         for kind in PROMOTION_KINDS {
-                            out.push(Move::promotion_capture(from as u8, cap as u8, kind));
+                            out.push(Move::promotion_capture(
+                                Square::new(from as u8),
+                                Square::new(cap as u8),
+                                kind,
+                            ));
                         }
                     } else {
-                        out.push(Move::capture(from as u8, cap as u8));
+                        out.push(Move::capture(
+                            Square::new(from as u8),
+                            Square::new(cap as u8),
+                        ));
                     }
                 }
                 if self.en_passant_sq == cap {
-                    out.push(Move::en_passant(from as u8, cap as u8));
+                    out.push(Move::en_passant(
+                        Square::new(from as u8),
+                        Square::new(cap as u8),
+                    ));
                 }
             }
         }
@@ -404,9 +421,9 @@ impl Board {
                 let target = moves.trailing_zeros() as u8;
                 moves &= moves - 1;
                 out.push(if (to.enemy & (1u64 << target)) != 0 {
-                    Move::capture(from as u8, target)
+                    Move::capture(Square::new(from as u8), Square::new(target))
                 } else {
-                    Move::quiet(from as u8, target)
+                    Move::quiet(Square::new(from as u8), Square::new(target))
                 });
             }
         }
@@ -443,8 +460,8 @@ impl Board {
     /// Check if a move is pseudo-legal in the current position.
     /// Must match every assumption that `make_move` relies on.
     pub fn is_pseudo_legal(&self, m: Move) -> bool {
-        let from = m.from as usize;
-        let to = m.to as usize;
+        let from = m.from.index();
+        let to = m.to.index();
         if from >= 64 || to >= 64 || from == to {
             return false;
         }
@@ -572,8 +589,8 @@ impl Board {
         };
         self.plies_from_null += 1;
 
-        let from = m.from as usize;
-        let to = m.to as usize;
+        let from = m.from.index();
+        let to = m.to.index();
         let moving = self.piece_on[from];
 
         let position = PositionView {
@@ -741,8 +758,8 @@ impl Board {
 
     #[inline]
     pub fn unmake_move(&mut self, m: Move, u: Undo) {
-        let from = m.from as usize;
-        let to = m.to as usize;
+        let from = m.from.index();
+        let to = m.to.index();
 
         let piece_on_to = self.piece_on[to];
         let moving_piece = if m.promotion.is_some() {
@@ -849,8 +866,7 @@ impl Board {
             return if m.to > m.from { "O-O" } else { "O-O-O" }.to_string();
         }
 
-        let from = m.from as usize;
-        let to = m.to as usize;
+        let from = m.from.index();
         let moving_piece = self.piece_on[from];
         let mut san = String::new();
 
@@ -858,14 +874,14 @@ impl Board {
             match pk {
                 PieceKind::Pawn => {
                     if m.capture {
-                        san.push(file_char(from));
+                        san.push(m.from.file_char());
                     }
                 }
                 _ => {
                     san.push(pk.to_char_upper());
                     let mut ambiguous_moves = Vec::new();
                     for other_move in legal_moves {
-                        let other_from = other_move.from as usize;
+                        let other_from = other_move.from.index();
                         if self.piece_on[other_from].kind() == Some(pk)
                             && other_from != from
                             && other_move.to == m.to
@@ -879,20 +895,20 @@ impl Board {
                         let mut rank_is_unique = true;
 
                         for amb_move in &ambiguous_moves {
-                            if file_char(amb_move.from as usize) == file_char(from) {
+                            if amb_move.from.file() == m.from.file() {
                                 file_is_unique = false;
                             }
-                            if rank_char(amb_move.from as usize) == rank_char(from) {
+                            if amb_move.from.rank() == m.from.rank() {
                                 rank_is_unique = false;
                             }
                         }
 
                         if file_is_unique {
-                            san.push(file_char(from));
+                            san.push(m.from.file_char());
                         } else if rank_is_unique {
-                            san.push(rank_char(from));
+                            san.push(m.from.rank_char());
                         } else {
-                            san.push_str(&sq_to_str(from));
+                            san.push_str(&m.from.to_string());
                         }
                     }
                 }
@@ -903,7 +919,7 @@ impl Board {
             san.push('x');
         }
 
-        san.push_str(&sq_to_str(to));
+        san.push_str(&m.to.to_string());
 
         if let Some(promo) = m.promotion {
             san.push('=');
@@ -1114,7 +1130,7 @@ mod tests {
         }
     }
 
-    fn move_key(m: &Move) -> (u8, u8, bool, bool, bool, bool, Option<PieceKind>) {
+    fn move_key(m: &Move) -> (Square, Square, bool, bool, bool, bool, Option<PieceKind>) {
         (
             m.from,
             m.to,

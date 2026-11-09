@@ -201,8 +201,8 @@ fn delta(attacker: Piece, from: usize, attacked: Piece, to: usize, add: bool) ->
 /// Fills `out` with the threat changes `m` makes; `position` is the position before `m`.
 pub fn record_move(position: PositionView, m: Move, out: &mut ThreatDeltas) {
     out.clear();
-    let from = m.from as usize;
-    let to = m.to as usize;
+    let from = m.from.index();
+    let to = m.to.index();
     let moving = position.piece_on[from];
     let turn = position.turn;
     let mut replay = Replay::new(position);

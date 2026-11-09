@@ -6,7 +6,7 @@ use super::judgement::{
 use crate::board::Board;
 use crate::notation::{line_in_san, numbered, san_of};
 use crate::see::see;
-use crate::types::{Color, Move, MoveList, PieceKind, sq_to_str};
+use crate::types::{Color, Move, MoveList, PieceKind, Square};
 
 /// A capture whose exchange nets at least this much (centipawns) wins material outright.
 const WINNING_CAPTURE_SEE: i32 = 150;
@@ -31,19 +31,19 @@ pub enum Cause {
     /// The moved piece went to a square where it can be won.
     MovedIntoCapture {
         piece: PieceKind,
-        square: u8,
+        square: Square,
         capture: String,
     },
     /// Another piece lost its defence and can be won.
     LeftHanging {
         piece: PieceKind,
-        square: u8,
+        square: Square,
         capture: String,
     },
     /// A piece that was already attacked stayed attacked.
     IgnoredThreat {
         piece: PieceKind,
-        square: u8,
+        square: Square,
         capture: String,
     },
     /// The opponent gets a combination (a fork, pin or the like) that wins material.
@@ -160,7 +160,7 @@ impl Cause {
             } => format!(
                 "Your {} on {} can be taken: {capture} wins it.",
                 piece_name(*piece),
-                sq_to_str(usize::from(*square))
+                square
             ),
             Self::LeftHanging {
                 piece,
@@ -169,7 +169,7 @@ impl Cause {
             } => format!(
                 "This left your {} on {} without enough defence: {capture} wins it.",
                 piece_name(*piece),
-                sq_to_str(usize::from(*square))
+                square
             ),
             Self::IgnoredThreat {
                 piece,
@@ -178,7 +178,7 @@ impl Cause {
             } => format!(
                 "Your {} on {} was already attacked and is still in danger: {capture} wins it.",
                 piece_name(*piece),
-                sq_to_str(usize::from(*square))
+                square
             ),
             Self::AllowedTactic { points, first_move } => format!(
                 "This allows {first_move}, a tactic that wins {} for your opponent.",
@@ -386,7 +386,7 @@ fn lost_material_cause(
     };
     let capture = first_move_text(after_board, reply_line);
     let target = reply.to;
-    let piece = after_board.piece_on[usize::from(target)].kind();
+    let piece = after_board.piece_on[target.index()].kind();
     let wins_outright =
         reply.capture && !reply.en_passant && see(after_board, reply) >= WINNING_CAPTURE_SEE;
     let Some(piece) = piece.filter(|_| wins_outright) else {
@@ -417,7 +417,7 @@ fn lost_material_cause(
 }
 
 /// Whether the opponent could already have won the piece on `square` had it been their move.
-fn was_already_attacked(board: &Board, square: u8) -> bool {
+fn was_already_attacked(board: &Board, square: Square) -> bool {
     if board.in_check() {
         return false;
     }
@@ -544,7 +544,7 @@ mod tests {
             review.cause,
             Some(Cause::MovedIntoCapture {
                 piece: PieceKind::Knight,
-                square: 21,
+                square: Square::new(21),
                 capture: "4... exf3".into()
             })
         );
@@ -563,7 +563,7 @@ mod tests {
             review.cause,
             Some(Cause::IgnoredThreat {
                 piece: PieceKind::Bishop,
-                square: 27,
+                square: Square::new(27),
                 capture: "4... exd4".into()
             })
         );

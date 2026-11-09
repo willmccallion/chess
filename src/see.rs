@@ -106,8 +106,8 @@ pub fn see(b: &Board, mov: Move) -> i32 {
         return 0;
     }
 
-    let from_sq = mov.from as usize;
-    let to_sq = mov.to as usize;
+    let from_sq = mov.from.index();
+    let to_sq = mov.to.index();
 
     let mut gain = [0; 32];
     let mut gain_idx = 1;
@@ -190,8 +190,8 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
     if m.castle || m.promotion.is_some() {
         return 0 >= threshold;
     }
-    let from = m.from as usize;
-    let to = m.to as usize;
+    let from = m.from.index();
+    let to = m.to.index();
     let Some(mover_kind) = b.piece_on[from].kind() else {
         return 0 >= threshold;
     };

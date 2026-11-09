@@ -36,14 +36,7 @@ pub fn divide(b: &mut Board, depth: usize) {
         b.unmake_move(m, u);
         total += n;
 
-        let from_file = (m.from % 8) + b'a';
-        let from_rank = (m.from / 8) + b'1';
-        let to_file = (m.to % 8) + b'a';
-        let to_rank = (m.to / 8) + b'1';
-        println!(
-            "{}{}{}{}: {}",
-            from_file as char, from_rank as char, to_file as char, to_rank as char, n
-        );
+        println!("{}{}: {n}", m.from, m.to);
     }
     println!("Total: {total}");
 }

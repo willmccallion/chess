@@ -12,7 +12,7 @@ use crate::board::Board;
 use crate::coach::repertoire::{CHAPTERS, Line as RepLine, start_board};
 use crate::coach::store::TrainingItem;
 use crate::notation::numbered;
-use crate::types::{Color, Move};
+use crate::types::{Color, Move, Square};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::Rect;
@@ -191,7 +191,7 @@ impl LineScreen {
         self.mode = Mode::Done { misses, saved };
     }
 
-    fn marks(&self) -> Vec<(u8, ratatui::style::Color)> {
+    fn marks(&self) -> Vec<(Square, ratatui::style::Color)> {
         match self.mode {
             Mode::Drill {
                 ply, shown: true, ..

@@ -72,7 +72,7 @@ impl QuietThreats {
     /// Rewards moving a piece out of attack by a cheaper one and giving check;
     /// penalizes moving into such an attack.
     fn adjustment(&self, kind: PieceKind, m: Move) -> i32 {
-        let (from, to) = (1u64 << m.from, 1u64 << m.to);
+        let (from, to) = (m.from.bb(), m.to.bb());
         let (danger, bonus) = match kind {
             PieceKind::Queen => (self.by_rook, QUEEN_THREAT_BONUS),
             PieceKind::Rook => (self.by_minor, ROOK_THREAT_BONUS),
@@ -125,7 +125,7 @@ pub struct OrderingContext<'a> {
 
 impl OrderingContext<'_> {
     fn quiet_score(&self, board: &Board, threats: &QuietThreats, m: Move) -> i32 {
-        let piece = board.piece_on[m.from as usize];
+        let piece = board.piece_on[m.from.index()];
         let threat = piece.kind().map_or(0, |kind| threats.adjustment(kind, m));
         let continuation: i32 = self
             .continuations
@@ -141,8 +141,8 @@ impl OrderingContext<'_> {
             Some(PieceKind::Queen) => PIECE_VALUES[PieceKind::Queen as usize],
             _ => 0,
         };
-        let piece = board.piece_on[m.from as usize];
-        let victim_score = captured_kind(board.piece_on[m.to as usize], m).map_or(0, |victim| {
+        let piece = board.piece_on[m.from.index()];
+        let victim_score = captured_kind(board.piece_on[m.to.index()], m).map_or(0, |victim| {
             MVV_SCALE * PIECE_VALUES[victim as usize] + self.histories.capture(piece, m.to, victim)
         });
         victim_score + MVV_SCALE * promotion_value
@@ -410,6 +410,7 @@ impl Default for QMovePicker {
 mod tests {
     use super::*;
     use crate::test_support::random_game_positions;
+    use crate::types::Square;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
@@ -501,11 +502,8 @@ mod tests {
             .find(|m| !m.capture)
             .unwrap();
 
-        assert_eq!(first_quiet.from, 27, "{first_quiet:?}");
-        assert_eq!(
-            QuietThreats::new(&board).by_pawn & (1u64 << first_quiet.to),
-            0
-        );
+        assert_eq!(first_quiet.from, Square::new(27), "{first_quiet:?}");
+        assert_eq!(QuietThreats::new(&board).by_pawn & first_quiet.to.bb(), 0);
     }
 
     #[test]
@@ -513,8 +511,14 @@ mod tests {
         let board = Board::from_fen("4k3/8/8/3n4/8/R7/8/4K3 w - - 0 1").unwrap();
         let threats = QuietThreats::new(&board);
 
-        let into_attack = threats.adjustment(PieceKind::Rook, Move::quiet(16, 18));
-        let safe = threats.adjustment(PieceKind::Rook, Move::quiet(16, 17));
+        let into_attack = threats.adjustment(
+            PieceKind::Rook,
+            Move::quiet(Square::new(16), Square::new(18)),
+        );
+        let safe = threats.adjustment(
+            PieceKind::Rook,
+            Move::quiet(Square::new(16), Square::new(17)),
+        );
 
         assert!(into_attack < safe, "{into_attack} {safe}");
     }

@@ -1,7 +1,7 @@
 //! Opening habits that cost beginners games: checked against the basic principles of development.
 
 use crate::board::Board;
-use crate::types::{Color, Move, Piece, PieceKind, START_FEN};
+use crate::types::{Color, Move, Piece, PieceKind, START_FEN, Square};
 
 const EARLY_QUEEN_MOVES: usize = 6;
 const REPEAT_PIECE_MOVES: usize = 6;
@@ -82,7 +82,7 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
         }
     };
     let mut board = start.without_eval_state();
-    let mut moved_from_home: Vec<u8> = Vec::new();
+    let mut moved_from_home: Vec<Square> = Vec::new();
     let mut own_moves = 0;
     let mut castled = false;
     for (ply, &m) in moves.iter().enumerate() {
@@ -91,7 +91,7 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
             continue;
         }
         own_moves += 1;
-        let kind = board.piece_on[usize::from(m.from)].kind();
+        let kind = board.piece_on[m.from.index()].kind();
         let undeveloped = undeveloped_minors(&board, side);
         if kind == Some(PieceKind::Queen)
             && !m.capture
@@ -107,7 +107,7 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
             && !m.capture
             && own_moves <= REPEAT_PIECE_MOVES
             && undeveloped >= 1
-            && !board.is_square_attacked(i32::from(m.from), side.other())
+            && !board.is_square_attacked(m.from.index() as i32, side.other())
         {
             note(Habit::SamePieceTwice, ply);
         }

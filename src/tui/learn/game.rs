@@ -667,8 +667,8 @@ impl Screen for CoachGame {
         after.make_move(proposed);
         let tag = PROPOSAL_TAG
             | (ply as u64) << 16
-            | u64::from(proposed.from) << 8
-            | u64::from(proposed.to);
+            | u64::from(u8::from(proposed.from)) << 8
+            | u64::from(u8::from(proposed.to));
         Some(self.guard_search(tag, after))
     }
 

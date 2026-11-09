@@ -4,7 +4,7 @@ use super::sprites::{self, Pixel};
 use crate::board::Board;
 use crate::game_runner::GameResult;
 use crate::search::Score;
-use crate::types::{Color, Move, Piece, PieceKind};
+use crate::types::{Color, Move, Piece, PieceKind, Square};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -69,8 +69,8 @@ impl BoardGeometry {
         8 * self.square_height
     }
 
-    fn square_rect(self, square: u8, flipped: bool) -> Rect {
-        let (file, rank) = (u16::from(square % 8), u16::from(square / 8));
+    fn square_rect(self, square: Square, flipped: bool) -> Rect {
+        let (file, rank) = (u16::from(square.file()), u16::from(square.rank()));
         let (column, row) = if flipped {
             (7 - file, rank)
         } else {
@@ -85,7 +85,7 @@ impl BoardGeometry {
     }
 
     /// The square under a screen cell.
-    pub fn square_at(self, column: u16, row: u16, flipped: bool) -> Option<u8> {
+    pub fn square_at(self, column: u16, row: u16, flipped: bool) -> Option<Square> {
         let column = column.checked_sub(self.x)? / self.square_width;
         let row = row.checked_sub(self.y)? / self.square_height;
         if column >= 8 || row >= 8 {
@@ -96,7 +96,7 @@ impl BoardGeometry {
         } else {
             (column, 7 - row)
         };
-        Some((rank * 8 + file) as u8)
+        Some(Square::from_file_rank(file as u8, rank as u8))
     }
 
     fn promotion_rects(self) -> [Rect; 4] {
@@ -135,11 +135,11 @@ pub struct BoardScene<'a> {
     pub board: &'a Board,
     pub flipped: bool,
     pub piece_style: PieceStyle,
-    pub selected: Option<u8>,
-    pub targets: Vec<u8>,
+    pub selected: Option<Square>,
+    pub targets: Vec<Square>,
     pub last_move: Option<Move>,
     /// Squares tinted to point something out, drawn over the last-move colours.
-    pub marks: Vec<(u8, Rgb)>,
+    pub marks: Vec<(Square, Rgb)>,
     pub promotion_open: bool,
 }
 
@@ -257,9 +257,9 @@ pub fn draw_board(buf: &mut Buffer, scene: &BoardScene, geometry: BoardGeometry)
     let targets = &scene.targets;
     let last_move = scene.last_move;
     let checked_king = in_check_king_square(board);
-    for square in 0..64u8 {
-        let piece = board.piece_on[square as usize];
-        let is_light = (square / 8 + square % 8) % 2 == 1;
+    for square in (0..64).map(Square::new) {
+        let piece = board.piece_on[square.index()];
+        let is_light = (square.rank() + square.file()) % 2 == 1;
         let mark = scene
             .marks
             .iter()
@@ -298,7 +298,7 @@ pub fn draw_board(buf: &mut Buffer, scene: &BoardScene, geometry: BoardGeometry)
 fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
     let label = Style::new().fg(LABEL);
     for i in 0..8u8 {
-        let rank_square = geometry.square_rect(i * 8, flipped);
+        let rank_square = geometry.square_rect(Square::from_file_rank(0, i), flipped);
         let rank_row = rank_square.y + rank_square.height / 2;
         buf.set_string(
             geometry.x - RANK_LABEL_WIDTH,
@@ -306,7 +306,7 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
             ((b'1' + i) as char).to_string(),
             label,
         );
-        let file_square = geometry.square_rect(i, flipped);
+        let file_square = geometry.square_rect(Square::from_file_rank(i, 0), flipped);
         let file_column = file_square.x + file_square.width / 2;
         buf.set_string(
             file_column,
@@ -317,10 +317,10 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
     }
 }
 
-fn in_check_king_square(board: &Board) -> Option<u8> {
+fn in_check_king_square(board: &Board) -> Option<Square> {
     board
         .in_check()
-        .then(|| board.king_square(board.turn) as u8)
+        .then(|| Square::new(board.king_square(board.turn) as u8))
 }
 
 /// A dot a third of the square across, centred, drawn in half-block pixels.
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn every_square_is_found_where_it_is_drawn() {
         for flipped in [false, true] {
-            for square in 0..64u8 {
+            for square in (0..64).map(Square::new) {
                 let rect = GEOMETRY.square_rect(square, flipped);
                 let corners = [(rect.x, rect.y), (rect.right() - 1, rect.bottom() - 1)];
                 for (column, row) in corners {
@@ -825,11 +825,11 @@ mod tests {
 
         assert_eq!(
             GEOMETRY.square_at(bottom_left.0, bottom_left.1, false),
-            Some(0)
+            Some(Square::new(0))
         );
         assert_eq!(
             GEOMETRY.square_at(bottom_left.0, bottom_left.1, true),
-            Some(63)
+            Some(Square::new(63))
         );
     }
 
@@ -896,8 +896,8 @@ mod tests {
     #[test]
     fn draws_at_any_terminal_size() {
         let mut promoting = app_with(Mode::Casual, "8/4P3/8/8/8/8/k7/4K3 w - - 0 1");
-        promoting.press_square(52, Instant::now());
-        promoting.release_square(60, Instant::now());
+        promoting.press_square(Square::new(52), Instant::now());
+        promoting.release_square(Square::new(60), Instant::now());
         let mut help = app_with(Mode::Watch, crate::types::START_FEN);
         help.panels.help = true;
         let apps = [

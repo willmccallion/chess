@@ -4,7 +4,7 @@ use crate::game_runner::{GameClock, GameEndReason, GameResult, position_outcome,
 use crate::notation::{line_in_san, parse_typed_move};
 use crate::search::{IterationInfo, Score};
 use crate::time::{TimeBudget, TimeControl};
-use crate::types::{Color, Move, MoveList, PieceKind};
+use crate::types::{Color, Move, MoveList, PieceKind, Square};
 use std::time::Instant;
 
 const ENGINE_MOVE_OVERHEAD_MS: i64 = 50;
@@ -270,7 +270,7 @@ impl App {
         self.clocks.as_ref()
     }
 
-    pub fn selected(&self) -> Option<u8> {
+    pub fn selected(&self) -> Option<Square> {
         self.input.selected()
     }
 
@@ -339,7 +339,7 @@ impl App {
     }
 
     /// Squares the selected piece can move to.
-    pub fn targets(&self) -> Vec<u8> {
+    pub fn targets(&self) -> Vec<Square> {
         self.input.targets(self.legal.as_slice())
     }
 
@@ -543,7 +543,7 @@ impl App {
     }
 
     /// A press of the left mouse button on `square`.
-    pub fn press_square(&mut self, square: u8, now: Instant) {
+    pub fn press_square(&mut self, square: Square, now: Instant) {
         if !self.is_human_turn() || self.proposed.is_some() {
             return;
         }
@@ -553,7 +553,7 @@ impl App {
     }
 
     /// A release of the left mouse button on `square`; completes a drag.
-    pub fn release_square(&mut self, square: u8, now: Instant) {
+    pub fn release_square(&mut self, square: Square, now: Instant) {
         if !self.is_human_turn() || self.proposed.is_some() {
             self.input.release_off_board();
             return;
@@ -612,9 +612,8 @@ mod tests {
     use crate::types::START_FEN;
     use std::time::Duration;
 
-    fn square(name: &str) -> u8 {
-        let bytes = name.as_bytes();
-        (bytes[1] - b'1') * 8 + (bytes[0] - b'a')
+    fn square(name: &str) -> Square {
+        Square::parse(name).unwrap()
     }
 
     fn app_at(fen: &str, mode: Mode, human: Color, time: TimeSetting, now: Instant) -> App {
@@ -740,7 +739,7 @@ mod tests {
         assert_eq!(targets, vec![square("d6"), square("e6")]);
         assert_eq!(app.history()[0].1, "exd6");
         assert_eq!(
-            app.board().piece_on[square("d5") as usize],
+            app.board().piece_on[square("d5").index()],
             crate::types::Piece::Empty
         );
     }

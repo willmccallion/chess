@@ -129,8 +129,8 @@ impl Board {
 
     /// Whether a pseudo-legal move of the side to move leaves its king safe.
     pub fn is_legal(&self, m: Move, info: &LegalityInfo) -> bool {
-        let from = m.from as usize;
-        let to = m.to as usize;
+        let from = m.from.index();
+        let to = m.to.index();
         let them = self.turn.other();
 
         if from == info.king_sq {

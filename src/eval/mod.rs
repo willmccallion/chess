@@ -34,8 +34,8 @@ pub fn record_piece_changes(
     m: Move,
     out: &mut StackVec<UpdateBody, MAX_PIECE_CHANGES>,
 ) {
-    let from = m.from as usize;
-    let to = m.to as usize;
+    let from = m.from.index();
+    let to = m.to.index();
     let moving = position.piece_on[from];
     out.push(UpdateBody {
         piece: moving,

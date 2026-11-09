@@ -8,7 +8,7 @@ use super::super::view::{
 use crate::board::Board;
 use crate::coach::judgement::MoveClass;
 use crate::notation::parse_typed_move;
-use crate::types::{Move, MoveList, PieceKind};
+use crate::types::{Move, MoveList, PieceKind, Square};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -48,7 +48,7 @@ pub const fn class_mark(class: MoveClass) -> Option<Rgb> {
 }
 
 /// The squares a move goes from and to, tinted `color`.
-pub fn move_marks(m: Move, color: Rgb) -> Vec<(u8, Rgb)> {
+pub fn move_marks(m: Move, color: Rgb) -> Vec<(Square, Rgb)> {
     vec![(m.from, color), (m.to, color)]
 }
 
@@ -108,7 +108,7 @@ impl BoardPanel {
         self.set_position(next, Some(m));
     }
 
-    pub fn scene(&self, piece_style: PieceStyle, marks: Vec<(u8, Rgb)>) -> BoardScene<'_> {
+    pub fn scene(&self, piece_style: PieceStyle, marks: Vec<(Square, Rgb)>) -> BoardScene<'_> {
         BoardScene {
             board: &self.board,
             flipped: self.flipped,

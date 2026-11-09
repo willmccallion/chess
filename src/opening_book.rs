@@ -1,6 +1,6 @@
 use crate::board::Board;
 use crate::polyglot_zobrist;
-use crate::types::{Move, MoveList, Piece, PieceKind};
+use crate::types::{Move, MoveList, Piece, PieceKind, Square};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -40,8 +40,8 @@ impl BookEntry {
     /// The legal move in `b` this entry names, if `b` has one: Polyglot
     /// writes castling as the king moving onto its own rook.
     fn legal_move(self, b: &Board, legal: &[Move]) -> Option<Move> {
-        let from = ((self.raw_move >> 6) & 0x3F) as u8;
-        let to = (self.raw_move & 0x3F) as u8;
+        let from = Square::new(((self.raw_move >> 6) & 0x3F) as u8);
+        let to = Square::new((self.raw_move & 0x3F) as u8);
         let promotion = match (self.raw_move >> 12) & 0x7 {
             1 => Some(PieceKind::Knight),
             2 => Some(PieceKind::Bishop),
@@ -49,13 +49,13 @@ impl BookEntry {
             4 => Some(PieceKind::Queen),
             _ => None,
         };
-        let castles = b.piece_on[from as usize] == Piece::from_kind(PieceKind::King, b.turn)
-            && b.piece_on[to as usize] == Piece::from_kind(PieceKind::Rook, b.turn);
+        let castles = b.piece_on[from.index()] == Piece::from_kind(PieceKind::King, b.turn)
+            && b.piece_on[to.index()] == Piece::from_kind(PieceKind::Rook, b.turn);
         let to = match (castles, to > from) {
-            (false, _) => to,
-            (true, true) => from + 2,
-            (true, false) => from - 2,
-        };
+            (false, _) => Some(to),
+            (true, true) => from.offset(2),
+            (true, false) => from.offset(-2),
+        }?;
         legal
             .iter()
             .find(|m| m.from == from && m.to == to && m.promotion == promotion)
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn the_roll_picks_the_move_whose_weight_covers_it() {
         let moves = [1, 3].map(|weight| WeightedMove {
-            m: Move::quiet(12, 28),
+            m: Move::quiet(Square::new(12), Square::new(28)),
             weight,
         });
 

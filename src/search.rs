@@ -454,8 +454,8 @@ fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
 fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
     (
         prev.capture as usize,
-        board.piece_on[prev.to as usize].index(),
-        prev.to as usize,
+        board.piece_on[prev.to.index()].index(),
+        prev.to.index(),
     )
 }
 
@@ -610,7 +610,7 @@ impl Search<'_> {
         if !self.board.is_legal(m, legality) {
             return None;
         }
-        let moved_piece = self.board.piece_on[m.from as usize];
+        let moved_piece = self.board.piece_on[m.from.index()];
         let undo = self.board.make_move(m);
         self.tt.prefetch(self.board.zobrist);
         self.stack[self.ply].current_move = Some(m);
@@ -652,7 +652,7 @@ impl Search<'_> {
         if !m.is_quiet() || !self.board.is_pseudo_legal(m) {
             return;
         }
-        let piece = self.board.piece_on[m.from as usize];
+        let piece = self.board.piece_on[m.from.index()];
         let continuations = self.continuation_keys();
         self.td.histories.update_quiet(
             self.board.turn,
@@ -691,8 +691,8 @@ impl Search<'_> {
     }
 
     fn update_capture_history(&mut self, m: Move, bonus: i32) {
-        let piece = self.board.piece_on[m.from as usize];
-        if let Some(victim) = captured_kind(self.board.piece_on[m.to as usize], m) {
+        let piece = self.board.piece_on[m.from.index()];
+        if let Some(victim) = captured_kind(self.board.piece_on[m.to.index()], m) {
             self.td.histories.update_capture(piece, m.to, victim, bonus);
         }
     }
@@ -721,12 +721,12 @@ impl Search<'_> {
                 let (capture, piece, to) = counter_move_slot(&self.board, prev);
                 self.td.counter_moves[capture][piece][to] = Some(best);
             }
-            let piece = self.board.piece_on[best.from as usize];
+            let piece = self.board.piece_on[best.from.index()];
             self.td
                 .histories
                 .update_quiet(color, best, piece, &continuations, bonus);
             for &quiet in tried_quiets {
-                let piece = self.board.piece_on[quiet.from as usize];
+                let piece = self.board.piece_on[quiet.from.index()];
                 self.td
                     .histories
                     .update_quiet(color, quiet, piece, &continuations, -bonus);
@@ -809,7 +809,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     let mut picker = QMovePicker::new();
     while let Some(m) = picker.next(&s.board) {
         if m.capture && m.promotion.is_none() {
-            let captured = s.board.piece_on[m.to as usize];
+            let captured = s.board.piece_on[m.to.index()];
             if let Some(kind) = captured.kind()
                 && stand_pat + PIECE_VALUES[kind as usize] + s.params.delta_margin < alpha
             {
@@ -1207,7 +1207,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
 
         let quiet_history = if is_quiet {
-            let piece = s.board.piece_on[m.from as usize];
+            let piece = s.board.piece_on[m.from.index()];
             s.td.histories.butterfly(s.board.turn, m)
                 + continuations
                     .iter()
@@ -1746,6 +1746,7 @@ pub fn search_reporting(
 #[cfg(test)]
 mod time_tests {
     use super::*;
+    use crate::types::Square;
 
     /// An untimed search's control whose clock read `ms` when it began.
     fn untimed_control_started_ms_ago(ms: u64) -> SearchControl {
@@ -1760,7 +1761,7 @@ mod time_tests {
 
     fn iteration(best_move_node_share: f64, score_drop: i32) -> IterationSummary {
         IterationSummary {
-            best_move: Some(Move::quiet(12, 28)),
+            best_move: Some(Move::quiet(Square::new(12), Square::new(28))),
             best_move_node_share,
             score_drop,
         }

@@ -6,6 +6,114 @@ pub type ZKey = u64;
 
 pub const NO_SQ: i32 = -1;
 
+/// A square of the board, numbered from a1 = 0 along each rank to h8 = 63.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
+#[repr(transparent)]
+pub struct Square(u8);
+
+impl Square {
+    /// The square numbered `index`; numbers past 63 wrap around.
+    #[inline(always)]
+    pub const fn new(index: u8) -> Self {
+        Self(index & 63)
+    }
+
+    /// The square on `file` (0 is the a-file) and `rank` (0 is the first).
+    #[inline(always)]
+    pub const fn from_file_rank(file: u8, rank: u8) -> Self {
+        Self::new((rank & 7) * 8 + (file & 7))
+    }
+
+    /// The lowest-numbered square in `bb`, if it holds any.
+    #[inline(always)]
+    pub const fn first_in(bb: Bitboard) -> Option<Self> {
+        if bb == 0 {
+            None
+        } else {
+            Some(Self(bb.trailing_zeros() as u8))
+        }
+    }
+
+    /// The square's number, for indexing per-square tables.
+    #[inline(always)]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The square's file, 0 for the a-file.
+    #[inline(always)]
+    pub const fn file(self) -> u8 {
+        self.0 & 7
+    }
+
+    /// The square's rank, 0 for the first.
+    #[inline(always)]
+    pub const fn rank(self) -> u8 {
+        self.0 >> 3
+    }
+
+    /// A bitboard holding only this square.
+    #[inline(always)]
+    pub const fn bb(self) -> Bitboard {
+        1 << self.0
+    }
+
+    /// The square `delta` numbers away, if that is on the board. Moving
+    /// off one side of a rank lands on the other side of the next.
+    #[inline(always)]
+    pub const fn offset(self, delta: i8) -> Option<Self> {
+        let index = self.0 as i16 + delta as i16;
+        if 0 <= index && index < 64 {
+            Some(Self(index as u8))
+        } else {
+            None
+        }
+    }
+
+    /// The square written as a file letter and rank digit, like `e4`, in
+    /// either case.
+    pub fn parse(text: &str) -> Option<Self> {
+        let &[file, rank] = text.as_bytes() else {
+            return None;
+        };
+        let file = file.to_ascii_lowercase().checked_sub(b'a')?;
+        let rank = rank.checked_sub(b'1')?;
+        (file < 8 && rank < 8).then(|| Self::from_file_rank(file, rank))
+    }
+
+    /// The square's file letter.
+    pub const fn file_char(self) -> char {
+        (b'a' + self.file()) as char
+    }
+
+    /// The square's rank digit.
+    pub const fn rank_char(self) -> char {
+        (b'1' + self.rank()) as char
+    }
+}
+
+impl From<Square> for u8 {
+    fn from(square: Square) -> Self {
+        square.0
+    }
+}
+
+impl fmt::Display for Square {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.file_char(), self.rank_char())
+    }
+}
+
+/// The squares in `bb`, lowest first.
+#[inline(always)]
+pub fn squares(mut bb: Bitboard) -> impl Iterator<Item = Square> {
+    std::iter::from_fn(move || {
+        let square = Square::first_in(bb)?;
+        bb &= bb - 1;
+        Some(square)
+    })
+}
+
 pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 #[derive(Copy, Clone, Debug)]
@@ -180,8 +288,8 @@ const MOVE_FLAG_PROMO_CAPTURE: u16 = 0b1100;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct Move {
-    pub from: u8,
-    pub to: u8,
+    pub from: Square,
+    pub to: Square,
     pub capture: bool,
     pub en_passant: bool,
     pub double_push: bool,
@@ -194,7 +302,7 @@ impl Move {
     /// beside the destination for en passant, the destination otherwise.
     #[inline(always)]
     pub const fn captured_square(self, mover: Color) -> usize {
-        let to = self.to as usize;
+        let to = self.to.index();
         match (self.en_passant, mover) {
             (true, Color::White) => to - 8,
             (true, Color::Black) => to + 8,
@@ -209,7 +317,7 @@ impl Move {
     }
 
     #[inline(always)]
-    pub const fn quiet(from: u8, to: u8) -> Self {
+    pub const fn quiet(from: Square, to: Square) -> Self {
         Self {
             from,
             to,
@@ -223,7 +331,7 @@ impl Move {
 
     /// A capture of the piece on `to`.
     #[inline(always)]
-    pub const fn capture(from: u8, to: u8) -> Self {
+    pub const fn capture(from: Square, to: Square) -> Self {
         Self {
             capture: true,
             ..Self::quiet(from, to)
@@ -232,7 +340,7 @@ impl Move {
 
     /// A pawn's two-square advance.
     #[inline(always)]
-    pub const fn double_push(from: u8, to: u8) -> Self {
+    pub const fn double_push(from: Square, to: Square) -> Self {
         Self {
             double_push: true,
             ..Self::quiet(from, to)
@@ -241,7 +349,7 @@ impl Move {
 
     /// A pawn's advance to the last rank, promoting to `kind`.
     #[inline(always)]
-    pub const fn promotion(from: u8, to: u8, kind: PieceKind) -> Self {
+    pub const fn promotion(from: Square, to: Square, kind: PieceKind) -> Self {
         Self {
             promotion: Some(kind),
             ..Self::quiet(from, to)
@@ -250,7 +358,7 @@ impl Move {
 
     /// A pawn's capture onto the last rank, promoting to `kind`.
     #[inline(always)]
-    pub const fn promotion_capture(from: u8, to: u8, kind: PieceKind) -> Self {
+    pub const fn promotion_capture(from: Square, to: Square, kind: PieceKind) -> Self {
         Self {
             promotion: Some(kind),
             ..Self::capture(from, to)
@@ -259,7 +367,7 @@ impl Move {
 
     /// A pawn's en-passant capture onto `to`.
     #[inline(always)]
-    pub const fn en_passant(from: u8, to: u8) -> Self {
+    pub const fn en_passant(from: Square, to: Square) -> Self {
         Self {
             en_passant: true,
             ..Self::capture(from, to)
@@ -268,7 +376,7 @@ impl Move {
 
     /// The king's castling move.
     #[inline(always)]
-    pub const fn castling(from: u8, to: u8) -> Self {
+    pub const fn castling(from: Square, to: Square) -> Self {
         Self {
             castle: true,
             ..Self::quiet(from, to)
@@ -287,8 +395,8 @@ pub const PROMOTION_KINDS: [PieceKind; 4] = [
 impl From<Move> for u16 {
     #[inline(always)]
     fn from(m: Move) -> Self {
-        let from_u16 = m.from as u16;
-        let to_u16 = (m.to as u16) << 6;
+        let from_u16 = m.from.index() as u16;
+        let to_u16 = (m.to.index() as u16) << 6;
         let mut flags = 0u16;
 
         if let Some(pk) = m.promotion {
@@ -309,7 +417,7 @@ impl From<Move> for u16 {
         } else if m.capture {
             flags = MOVE_FLAG_CAPTURE;
         } else if m.castle {
-            flags = if file_of(m.to as i32) > file_of(m.from as i32) {
+            flags = if m.to.file() > m.from.file() {
                 MOVE_FLAG_KING_CASTLE
             } else {
                 MOVE_FLAG_QUEEN_CASTLE
@@ -329,8 +437,8 @@ impl From<u16> for Move {
             return Move::default();
         }
 
-        let from = (m & 0x3F) as u8;
-        let to = ((m >> 6) & 0x3F) as u8;
+        let from = Square::new((m & 0x3F) as u8);
+        let to = Square::new(((m >> 6) & 0x3F) as u8);
         let flags = m >> 12;
 
         let mut mov = Move::quiet(from, to);
@@ -500,8 +608,8 @@ pub const fn castling_rook_squares(king_from: usize, king_to: usize) -> (usize, 
 /// One of the four castlings: the right it needs and the squares it uses.
 pub struct Castling {
     pub right: u8,
-    pub king_from: u8,
-    pub king_to: u8,
+    pub king_from: Square,
+    pub king_to: Square,
     pub rook: Piece,
     /// The squares between the king and the rook, which must be empty.
     pub between: Bitboard,
@@ -513,7 +621,7 @@ impl Castling {
     /// Where the castling rook starts.
     #[inline(always)]
     pub const fn rook_from(&self) -> usize {
-        castling_rook_squares(self.king_from as usize, self.king_to as usize).0
+        castling_rook_squares(self.king_from.index(), self.king_to.index()).0
     }
 }
 
@@ -522,16 +630,16 @@ pub const CASTLINGS: [[Castling; 2]; 2] = [
     [
         Castling {
             right: WK_CASTLE,
-            king_from: 4,
-            king_to: 6,
+            king_from: Square::new(4),
+            king_to: Square::new(6),
             rook: Piece::WR,
             between: (1 << 5) | (1 << 6),
             king_path: [5, 6],
         },
         Castling {
             right: WQ_CASTLE,
-            king_from: 4,
-            king_to: 2,
+            king_from: Square::new(4),
+            king_to: Square::new(2),
             rook: Piece::WR,
             between: (1 << 1) | (1 << 2) | (1 << 3),
             king_path: [3, 2],
@@ -540,16 +648,16 @@ pub const CASTLINGS: [[Castling; 2]; 2] = [
     [
         Castling {
             right: BK_CASTLE,
-            king_from: 60,
-            king_to: 62,
+            king_from: Square::new(60),
+            king_to: Square::new(62),
             rook: Piece::BR,
             between: (1 << 61) | (1 << 62),
             king_path: [61, 62],
         },
         Castling {
             right: BQ_CASTLE,
-            king_from: 60,
-            king_to: 58,
+            king_from: Square::new(60),
+            king_to: Square::new(58),
             rook: Piece::BR,
             between: (1 << 57) | (1 << 58) | (1 << 59),
             king_path: [59, 58],
@@ -573,18 +681,4 @@ pub fn rank_of(sq: i32) -> i32 {
 #[inline(always)]
 pub fn in_board(sq: i32) -> bool {
     (0..64).contains(&sq)
-}
-#[inline(always)]
-pub fn sq_to_str(sq: usize) -> String {
-    let f = (sq % 8) as u8;
-    let r = (sq / 8) as u8;
-    format!("{}{}", (b'a' + f) as char, (b'1' + r) as char)
-}
-#[inline(always)]
-pub fn file_char(sq: usize) -> char {
-    ((sq % 8) as u8 + b'a') as char
-}
-#[inline(always)]
-pub fn rank_char(sq: usize) -> char {
-    ((sq / 8) as u8 + b'1') as char
 }

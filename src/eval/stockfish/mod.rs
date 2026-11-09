@@ -184,8 +184,8 @@ impl IncrementalState for AccumulatorStack {
         let mut record = self.push();
         threat_delta::record_move(before, m, record.threats);
         super::record_piece_changes(before, m, record.psq_updates);
-        if before.piece_on[m.from as usize].kind() == Some(PieceKind::King) {
-            record.king_moved(before.turn, m.from as usize, m.to as usize);
+        if before.piece_on[m.from.index()].kind() == Some(PieceKind::King) {
+            record.king_moved(before.turn, m.from.index(), m.to.index());
         }
     }
 

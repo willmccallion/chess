@@ -16,7 +16,7 @@ use crate::coach::rating::Elo;
 use crate::coach::store::TrainingItem;
 use crate::notation::{numbered, san_of};
 use crate::time::TimeBudget;
-use crate::types::{Color, Move};
+use crate::types::{Color, Move, Square};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::Rect;
@@ -288,7 +288,7 @@ impl Puzzles {
         lines
     }
 
-    fn marks(&self) -> Vec<(u8, ratatui::style::Color)> {
+    fn marks(&self) -> Vec<(Square, ratatui::style::Color)> {
         let Some(current) = &self.current else {
             return Vec::new();
         };
@@ -419,7 +419,7 @@ impl Screen for Puzzles {
         let mut board = current.attempt.board.clone();
         board.make_move(m);
         Some(Job {
-            tag: u64::from(m.from) << 8 | u64::from(m.to),
+            tag: u64::from(u8::from(m.from)) << 8 | u64::from(u8::from(m.to)),
             kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(JUDGE_MS)))),
             board,
         })

@@ -241,11 +241,14 @@ fn softmax_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Square;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
     fn moves(n: u8) -> Vec<Move> {
-        (0..n).map(|i| Move::quiet(i, i + 8)).collect()
+        (0..n)
+            .map(|i| Move::quiet(Square::new(i), Square::new(i + 8)))
+            .collect()
     }
 
     fn picks(scores: &[(Move, Score)], level: Level, games: usize) -> Vec<Move> {

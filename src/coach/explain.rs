@@ -193,9 +193,10 @@ fn isolated_pawns(board: &Board, color: Color) -> u32 {
 
 /// Whether `m` moves a knight or bishop off its starting square.
 fn develops(board: &Board, m: Move) -> bool {
-    let piece = board.piece_on[usize::from(m.from)];
+    let piece = board.piece_on[m.from.index()];
     let home_rank = if board.turn == Color::White { 0 } else { 7 };
-    matches!(piece.kind(), Some(PieceKind::Knight | PieceKind::Bishop)) && m.from / 8 == home_rank
+    matches!(piece.kind(), Some(PieceKind::Knight | PieceKind::Bishop))
+        && m.from.rank() == home_rank
 }
 
 /// How many moves `color`'s pieces would have if it were their turn.

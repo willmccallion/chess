@@ -323,11 +323,12 @@ impl SharedTransTable {
 mod tests {
     use super::*;
     use crate::types::Move;
+    use crate::types::Square;
 
     #[test]
     fn stored_entry_round_trips_all_fields() {
         let tt = SharedTransTable::new(1);
-        let mv = Move::quiet(12, 28);
+        let mv = Move::quiet(Square::new(12), Square::new(28));
 
         tt.store(
             0xDEAD_BEEF_1234_5678,
@@ -353,7 +354,7 @@ mod tests {
     #[test]
     fn storing_without_a_move_keeps_the_previous_move() {
         let tt = SharedTransTable::new(1);
-        let mv = Move::quiet(12, 28);
+        let mv = Move::quiet(Square::new(12), Square::new(28));
 
         tt.store(
             5,
