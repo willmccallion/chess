@@ -824,17 +824,17 @@ impl Search<'_> {
     }
 }
 
-fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
+fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
     use crate::movepicker::QMovePicker;
 
     s.seldepth = s.seldepth.max(s.ply);
     s.tm.count_node();
 
     if s.tm.check_hard_limit() {
-        return 0;
+        return Err(Aborted);
     }
     if s.ply >= MAX_PLY - 1 {
-        return cp_to_search_units(evaluate(&mut s.board));
+        return Ok(cp_to_search_units(evaluate(&mut s.board)));
     }
 
     let is_pv = beta - alpha > 1;
@@ -845,13 +845,13 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
     if let Some(entry) = tt_entry {
         let tt_score = score_from_tt(entry.score(), s.ply);
         if !is_pv && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
-            return tt_score;
+            return Ok(tt_score);
         }
     }
 
     let Some(legality) = s.board.legality_info() else {
         // Unreachable from a parsed FEN: every position has both kings.
-        return DRAW_SCORE;
+        return Ok(DRAW_SCORE);
     };
     if legality.in_check() {
         return quiesce_evasions(s, alpha, beta, &legality);
@@ -873,7 +873,7 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
                 },
             );
         }
-        return stand_pat;
+        return Ok(stand_pat);
     }
     alpha = alpha.max(stand_pat);
 
@@ -887,11 +887,12 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
         let Some(undo) = s.make_move(m, &legality) else {
             continue;
         };
-        let score = -quiesce(s, -beta, -alpha);
+        let score = quiesce(s, -beta, -alpha);
         s.unmake_move(m, undo);
+        let score = -score?;
 
         if s.tm.check_hard_limit() {
-            return 0;
+            return Err(Aborted);
         }
 
         if score > best_score {
@@ -918,11 +919,16 @@ fn quiesce(s: &mut Search, mut alpha: i32, beta: i32) -> i32 {
             is_pv: tt_pv,
         },
     );
-    best_score
+    Ok(best_score)
 }
 
 /// Quiescence when in check: every evasion is searched so mates are found.
-fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &LegalityInfo) -> i32 {
+fn quiesce_evasions(
+    s: &mut Search,
+    mut alpha: i32,
+    beta: i32,
+    legality: &LegalityInfo,
+) -> Result<i32, Aborted> {
     let mut evasions = ScoredMoves::new();
     evasions.fill(
         |moves| s.board.generate_pseudo_legal_moves(moves),
@@ -934,11 +940,12 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &Legali
         let Some(undo) = s.make_move(m, legality) else {
             continue;
         };
-        let score = -quiesce(s, -beta, -alpha);
+        let score = quiesce(s, -beta, -alpha);
         s.unmake_move(m, undo);
+        let score = -score?;
 
         if s.tm.check_hard_limit() {
-            return 0;
+            return Err(Aborted);
         }
 
         if score > best_score {
@@ -951,7 +958,7 @@ fn quiesce_evasions(s: &mut Search, mut alpha: i32, beta: i32, legality: &Legali
             }
         }
     }
-    best_score
+    Ok(best_score)
 }
 
 /// What razoring, reverse futility and null-move pruning weigh about a
@@ -970,25 +977,25 @@ struct NodePruning {
 
 /// The score a node returns without searching its moves, when its static
 /// evaluation is far enough outside the window.
-fn prune_node(s: &mut Search, n: NodePruning) -> Option<i32> {
+fn prune_node(s: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
     let razor_margin = s.params.razor_margin + s.params.razor_depth_sq_margin * n.depth * n.depth;
     if n.eval < n.alpha - razor_margin {
-        let q_score = quiesce(s, n.alpha, n.beta);
+        let q_score = quiesce(s, n.alpha, n.beta)?;
         if q_score < n.alpha {
-            return Some(q_score);
+            return Ok(Some(q_score));
         }
     }
     if n.depth <= s.params.rfp_max_depth
         && n.eval - s.params.rfp_margin * (n.depth - i32::from(n.improving)) >= n.beta
     {
-        return Some(n.eval);
+        return Ok(Some(n.eval));
     }
     null_move_cutoff(s, n)
 }
 
 /// Passes the move and searches the reply shallower; a side that still fails
 /// high after giving its opponent a free move fails high here too.
-fn null_move_cutoff(s: &mut Search, n: NodePruning) -> Option<i32> {
+fn null_move_cutoff(s: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
     let previous_was_null = s.ply > 0 && s.stack[s.ply - 1].current_move.is_none();
     if n.depth < s.params.nmp_min_depth
         || n.is_singular_search
@@ -996,32 +1003,27 @@ fn null_move_cutoff(s: &mut Search, n: NodePruning) -> Option<i32> {
         || previous_was_null
         || !has_non_pawn_material(&s.board)
     {
-        return None;
+        return Ok(None);
     }
     let r = s.params.nmp_base_reduction
         + n.depth / s.params.nmp_depth_divisor
         + ((n.eval - n.beta) / s.params.nmp_eval_divisor).min(s.params.nmp_eval_max);
     let undo = s.make_null_move();
-    let null_score = -negamax(s, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
+    let null_score = negamax(s, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
     s.unmake_null_move(undo);
+    let null_score = -null_score?;
     if s.tm.check_hard_limit() {
-        return Some(0);
+        return Err(Aborted);
     }
     if null_score < n.beta {
-        return None;
+        return Ok(None);
     }
     // A mate found after passing proves nothing about the real moves.
-    Some(if null_score > MATE_THRESHOLD {
+    Ok(Some(if null_score > MATE_THRESHOLD {
         n.beta
     } else {
         null_score
-    })
-}
-
-enum ProbCut {
-    Cutoff(i32),
-    NoCutoff,
-    Aborted,
+    }))
 }
 
 /// What ProbCut weighs about a non-PV node not in check.
@@ -1037,11 +1039,15 @@ struct ProbCutNode {
 /// Looks for a capture that beats beta by a margin in quiescence and then in a
 /// reduced search; if one exists the node almost certainly fails high at full
 /// depth too. Skipped near mate scores and where the TT entry already falls short.
-fn probcut(s: &mut Search, legality: &LegalityInfo, n: ProbCutNode) -> ProbCut {
+fn probcut(
+    s: &mut Search,
+    legality: &LegalityInfo,
+    n: ProbCutNode,
+) -> Result<Option<i32>, Aborted> {
     use crate::movepicker::QMovePicker;
 
     if n.depth < s.params.probcut_min_depth || n.beta.abs() >= MATE_THRESHOLD {
-        return ProbCut::NoCutoff;
+        return Ok(None);
     }
     let probcut_beta = n.beta + s.params.probcut_margin;
     let tt_rules_out_probcut = n.tt_entry.is_some_and(|entry| {
@@ -1049,7 +1055,7 @@ fn probcut(s: &mut Search, legality: &LegalityInfo, n: ProbCutNode) -> ProbCut {
             && score_from_tt(entry.score(), s.ply) < probcut_beta
     });
     if tt_rules_out_probcut {
-        return ProbCut::NoCutoff;
+        return Ok(None);
     }
     let probe_depth = n.depth - s.params.probcut_reduction;
     let mut picker = QMovePicker::new();
@@ -1060,20 +1066,12 @@ fn probcut(s: &mut Search, legality: &LegalityInfo, n: ProbCutNode) -> ProbCut {
         let Some(undo) = s.make_move(m, legality) else {
             continue;
         };
-        let mut score = -quiesce(s, -probcut_beta, -probcut_beta + 1);
-        if score >= probcut_beta {
-            score = -negamax(
-                s,
-                -probcut_beta,
-                -probcut_beta + 1,
-                probe_depth,
-                n.node.opposite(),
-            );
-        }
+        let score = probe_capture(s, probcut_beta, probe_depth, n.node);
         s.unmake_move(m, undo);
+        let score = score?;
 
         if s.tm.check_hard_limit() {
-            return ProbCut::Aborted;
+            return Err(Aborted);
         }
         if score >= probcut_beta {
             s.tt.store(
@@ -1087,10 +1085,31 @@ fn probcut(s: &mut Search, legality: &LegalityInfo, n: ProbCutNode) -> ProbCut {
                     is_pv: s.stack[s.ply].tt_pv,
                 },
             );
-            return ProbCut::Cutoff(score);
+            return Ok(Some(score));
         }
     }
-    ProbCut::NoCutoff
+    Ok(None)
+}
+
+/// The score of a ProbCut capture already made: its quiescence score, and if
+/// that beats `probcut_beta`, a reduced search's.
+fn probe_capture(
+    s: &mut Search,
+    probcut_beta: i32,
+    probe_depth: i32,
+    node: NodeKind,
+) -> Result<i32, Aborted> {
+    let q_score = -quiesce(s, -probcut_beta, -probcut_beta + 1)?;
+    if q_score < probcut_beta {
+        return Ok(q_score);
+    }
+    Ok(-negamax(
+        s,
+        -probcut_beta,
+        -probcut_beta + 1,
+        probe_depth,
+        node.opposite(),
+    )?)
 }
 
 enum Singularity {
@@ -1098,7 +1117,6 @@ enum Singularity {
     Extend(i32),
     /// Even without the TT move the node fails high; return this score.
     MultiCut(i32),
-    Aborted,
 }
 
 /// Verifies whether the TT move is singular by searching the node without it.
@@ -1110,9 +1128,9 @@ fn singular_extension(
     beta: i32,
     is_pv: bool,
     node: NodeKind,
-) -> Singularity {
+) -> Result<Singularity, Aborted> {
     let Some(entry) = tt_entry else {
-        return Singularity::Extend(0);
+        return Ok(Singularity::Extend(0));
     };
     let tt_score = score_from_tt(entry.score(), s.ply);
     let reliable = depth >= s.params.singular_min_depth
@@ -1120,7 +1138,7 @@ fn singular_extension(
         && entry.bound() != Bound::Upper
         && tt_score.abs() < MATE_THRESHOLD;
     if !reliable {
-        return Singularity::Extend(0);
+        return Ok(Singularity::Extend(0));
     }
 
     let singular_beta = tt_score - s.params.singular_beta_per_depth_x16 * depth / 16;
@@ -1128,11 +1146,12 @@ fn singular_extension(
     s.stack[s.ply].excluded_move = Some(tt_move);
     let singular_score = negamax(s, singular_beta - 1, singular_beta, singular_depth, node);
     s.stack[s.ply].excluded_move = None;
+    let singular_score = singular_score?;
     if s.tm.check_hard_limit() {
-        return Singularity::Aborted;
+        return Err(Aborted);
     }
 
-    if singular_score < singular_beta {
+    Ok(if singular_score < singular_beta {
         let double = !is_pv
             && singular_score < singular_beta - s.params.double_extension_margin
             && s.stack[s.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
@@ -1143,7 +1162,7 @@ fn singular_extension(
         Singularity::Extend(-1)
     } else {
         Singularity::Extend(0)
-    }
+    })
 }
 
 /// What the move loop does with a move before searching it.
@@ -1250,7 +1269,12 @@ struct NodeBounds {
 /// Searches a move after the first, already made on the board: with a null
 /// window at reduced depth, again at full depth if it beats alpha, and with
 /// the full window if it then lands inside a PV node's window.
-fn search_late_move(s: &mut Search, node_ply: usize, m: LateMove, bounds: NodeBounds) -> i32 {
+fn search_late_move(
+    s: &mut Search,
+    node_ply: usize,
+    m: LateMove,
+    bounds: NodeBounds,
+) -> Result<i32, Aborted> {
     let NodeBounds {
         alpha,
         beta,
@@ -1258,19 +1282,19 @@ fn search_late_move(s: &mut Search, node_ply: usize, m: LateMove, bounds: NodeBo
     } = bounds;
     let reduction = s.late_move_reduction(node_ply, m);
     let reduced_depth = m.new_depth - reduction;
-    let mut score = -negamax(s, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut);
+    let mut score = -negamax(s, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut)?;
     if score > alpha && reduction > 0 {
         let deeper = score > best_score + s.params.deeper_margin + 2 * m.new_depth;
         let shallower = score < best_score + s.params.shallower_margin;
         let research_depth = m.new_depth + i32::from(deeper) - i32::from(shallower);
         if research_depth > reduced_depth {
-            score = -negamax(s, -alpha - 1, -alpha, research_depth, m.node.opposite());
+            score = -negamax(s, -alpha - 1, -alpha, research_depth, m.node.opposite())?;
         }
     }
     if m.is_pv && score > alpha && score < beta {
-        score = -negamax(s, -beta, -alpha, m.new_depth, NodeKind::All);
+        score = -negamax(s, -beta, -alpha, m.new_depth, NodeKind::All)?;
     }
-    score
+    Ok(score)
 }
 
 /// What a late move's reduction weighs about the move and its node.
@@ -1342,6 +1366,10 @@ impl Search<'_> {
     }
 }
 
+/// A search stopped by the clock, a node limit or `stop` before it finished;
+/// whatever it had found is not a score.
+struct Aborted;
+
 /// What a node is expected to do, as Stockfish's cut and all nodes; a PV
 /// node, told apart by its open window, counts as an all node.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1371,16 +1399,22 @@ impl NodeKind {
     }
 }
 
-fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: NodeKind) -> i32 {
+fn negamax(
+    s: &mut Search,
+    mut alpha: i32,
+    mut beta: i32,
+    mut depth: i32,
+    node: NodeKind,
+) -> Result<i32, Aborted> {
     s.seldepth = s.seldepth.max(s.ply);
     if s.tm.check_hard_limit() {
-        return 0;
+        return Err(Aborted);
     }
 
     let is_root = s.ply == 0;
     if !is_root {
         match s.window_below_root(alpha, beta) {
-            ControlFlow::Break(score) => return score,
+            ControlFlow::Break(score) => return Ok(score),
             ControlFlow::Continue(window) => (alpha, beta) = window,
         }
     }
@@ -1409,12 +1443,12 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         && let Some(entry) = tt_entry
         && let Some(score) = s.tt_cutoff(entry, depth, alpha, beta)
     {
-        return score;
+        return Ok(score);
     }
 
     let Some(legality) = s.board.legality_info() else {
         // Unreachable from a parsed FEN: every position has both kings.
-        return DRAW_SCORE;
+        return Ok(DRAW_SCORE);
     };
     let in_check = legality.in_check();
     if in_check {
@@ -1443,8 +1477,8 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
             node,
             is_singular_search: excluded_move.is_some(),
         };
-        if let Some(score) = prune_node(s, candidate) {
-            return score;
+        if let Some(score) = prune_node(s, candidate)? {
+            return Ok(score);
         }
     }
 
@@ -1459,10 +1493,8 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
             node,
             tt_entry,
         };
-        match probcut(s, &legality, candidate) {
-            ProbCut::Cutoff(score) => return score,
-            ProbCut::Aborted => return 0,
-            ProbCut::NoCutoff => {}
+        if let Some(score) = probcut(s, &legality, candidate)? {
+            return Ok(score);
         }
     }
 
@@ -1533,10 +1565,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
             Some(m) == killer1 || Some(m) == killer2 || Some(m) == counter_move;
 
         let extension = if Some(m) == tt_move && !is_root && excluded_move.is_none() {
-            match singular_extension(s, m, tt_entry, depth, beta, is_pv, node) {
+            match singular_extension(s, m, tt_entry, depth, beta, is_pv, node)? {
                 Singularity::Extend(plies) => plies,
-                Singularity::MultiCut(score) => return score,
-                Singularity::Aborted => return 0,
+                Singularity::MultiCut(score) => return Ok(score),
             }
         } else {
             0
@@ -1553,7 +1584,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         }
 
         let score = if moves_searched == 1 {
-            -negamax(s, -beta, -alpha, new_depth, node.first_child(is_pv))
+            negamax(s, -beta, -alpha, new_depth, node.first_child(is_pv)).map(|score| -score)
         } else {
             let late_move = LateMove {
                 depth,
@@ -1584,9 +1615,10 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         if is_root {
             s.record_root_move_nodes(m, s.tm.nodes - nodes_before);
         }
+        let score = score?;
 
         if s.tm.check_hard_limit() {
-            return 0;
+            return Err(Aborted);
         }
 
         if is_root && (s.root_best.is_none() || score > alpha) {
@@ -1613,16 +1645,16 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
     }
 
     if moves_searched == 0 {
-        return if excluded_move.is_some() {
+        return Ok(if excluded_move.is_some() {
             alpha
         } else if in_check {
             -MATE_SCORE + s.ply as i32
         } else {
             DRAW_SCORE
-        };
+        });
     }
     if excluded_move.is_some() {
-        return best_score;
+        return Ok(best_score);
     }
 
     let bound = bound_for(best_score, alpha_orig, beta);
@@ -1649,7 +1681,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
             is_pv: tt_pv,
         },
     );
-    best_score
+    Ok(best_score)
 }
 
 /// Follows TT best moves from `pos`, stopping at the first move that is not legal there.
@@ -1802,11 +1834,11 @@ fn iterative_deepening(
         let mut fail_highs = 0;
         loop {
             let search_depth = (depth as i32 - fail_highs).max(1);
-            let iteration_score = negamax(&mut search, alpha, beta, search_depth, NodeKind::All);
-            if search.tm.check_hard_limit() {
+            let iteration = negamax(&mut search, alpha, beta, search_depth, NodeKind::All);
+            let (Ok(iteration_score), false) = (iteration, search.tm.check_hard_limit()) else {
                 aborted = true;
                 break;
-            }
+            };
             score = iteration_score;
             if score <= alpha {
                 beta = (alpha + beta) / 2;
