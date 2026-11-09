@@ -3,24 +3,13 @@ use crate::types::{Move, MoveList, PieceKind};
 
 pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
     let bytes = s.as_bytes();
-    if bytes.len() < 4 {
-        return None;
-    }
-
+    let promo = match bytes.len() {
+        4 => None,
+        5 => Some(promotion_kind(bytes[4])?),
+        _ => return None,
+    };
     let from = square_index(bytes[0], bytes[1])?;
     let to = square_index(bytes[2], bytes[3])?;
-
-    let promo = if bytes.len() >= 5 {
-        match (bytes[4] as char).to_ascii_lowercase() {
-            'q' => Some(PieceKind::Queen),
-            'r' => Some(PieceKind::Rook),
-            'b' => Some(PieceKind::Bishop),
-            'n' => Some(PieceKind::Knight),
-            _ => None,
-        }
-    } else {
-        None
-    };
 
     let mut moves = MoveList::new();
     b.generate_legal_moves(&mut moves);
@@ -29,6 +18,17 @@ pub fn parse_uci_move(b: &mut Board, s: &str) -> Option<Move> {
         .iter()
         .find(|m| m.from == from && m.to == to && m.promotion == promo)
         .copied()
+}
+
+/// The piece a promotion letter names, in either case.
+fn promotion_kind(letter: u8) -> Option<PieceKind> {
+    match letter.to_ascii_lowercase() {
+        b'q' => Some(PieceKind::Queen),
+        b'r' => Some(PieceKind::Rook),
+        b'b' => Some(PieceKind::Bishop),
+        b'n' => Some(PieceKind::Knight),
+        _ => None,
+    }
 }
 
 /// The 0..64 index of a square written as a file letter and rank digit, like `e` `4`.
@@ -88,5 +88,11 @@ mod tests {
         assert_eq!(parsed(fen, "e7e8x"), None);
         assert_eq!(parsed(fen, "e7e8N"), Some("e7e8n".to_string()));
         assert_eq!(parsed(fen, "e7e8q"), Some("e7e8q".to_string()));
+    }
+
+    #[test]
+    fn a_letter_after_a_move_that_is_not_a_promotion_makes_it_no_move() {
+        assert_eq!(parsed(START_FEN, "g1f3q"), None);
+        assert_eq!(parsed(START_FEN, "g1f3x"), None);
     }
 }
