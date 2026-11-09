@@ -1616,11 +1616,32 @@ impl Board {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    /// Every position of `games` random games from the start, up to
+    /// `plies` moves each.
+    fn random_game_positions(seed: u64, games: usize, plies: usize) -> Vec<Board> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut positions = Vec::new();
+        for _ in 0..games {
+            let mut board = Board::from_fen(crate::types::START_FEN).unwrap();
+            for _ in 0..plies {
+                let mut legal = MoveList::new();
+                board.generate_legal_moves(&mut legal);
+                if legal.is_empty() {
+                    break;
+                }
+                board.make_move(legal.get(rng.gen_range(0..legal.len())));
+                positions.push(board.clone());
+            }
+        }
+        positions
+    }
 
     #[test]
     fn played_games_keep_the_same_legal_moves_as_a_board_read_from_their_fen() {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
         let mut rng = StdRng::seed_from_u64(7);
         for _ in 0..300 {
             let mut board = Board::from_fen(crate::types::START_FEN).unwrap();
@@ -1652,7 +1673,35 @@ mod tests {
             }
         }
     }
-    use super::*;
+
+    #[test]
+    fn making_a_move_keeps_the_keys_incremental_and_unmaking_restores_them() {
+        for before in random_game_positions(13, 60, 100) {
+            let mut moves = MoveList::new();
+            before.generate_legal_moves(&mut moves);
+            for &m in moves.as_slice() {
+                let mut board = before.clone();
+                let undo = board.make_move(m);
+                let mut recomputed = board.clone();
+                recomputed.recompute_zobrist();
+                assert_eq!(
+                    board.zobrist,
+                    recomputed.zobrist,
+                    "{m:?} from {}",
+                    before.to_fen()
+                );
+                assert_eq!(board.all_pieces, board.w_pieces | board.b_pieces);
+
+                board.unmake_move(m, undo);
+                assert_eq!(
+                    (board.zobrist, board.to_fen(), board.all_pieces),
+                    (before.zobrist, before.to_fen(), before.all_pieces),
+                    "{m:?} from {}",
+                    before.to_fen()
+                );
+            }
+        }
+    }
 
     #[test]
     fn insufficient_material_covers_lone_minors_and_same_colored_bishops() {

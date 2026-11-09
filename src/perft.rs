@@ -51,6 +51,7 @@ pub fn divide(b: &mut Board, depth: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Move;
 
     /// Published node counts (chessprogramming.org "Perft Results").
     const SUITE: [(&str, usize, u64); 6] = [
@@ -81,6 +82,25 @@ mod tests {
             3_894_594,
         ),
     ];
+
+    #[test]
+    fn every_move_two_plies_into_the_suite_survives_the_u16_encoding() {
+        for (fen, _, _) in SUITE {
+            let root = Board::from_fen(fen).unwrap();
+            let mut first = MoveList::new();
+            root.generate_legal_moves(&mut first);
+            for &m in first.as_slice() {
+                assert_eq!(Move::from(u16::from(m)), m, "{fen}");
+                let mut child = root.clone();
+                child.make_move(m);
+                let mut second = MoveList::new();
+                child.generate_legal_moves(&mut second);
+                for &reply in second.as_slice() {
+                    assert_eq!(Move::from(u16::from(reply)), reply, "{}", child.to_fen());
+                }
+            }
+        }
+    }
 
     #[test]
     fn perft_matches_published_node_counts() {
