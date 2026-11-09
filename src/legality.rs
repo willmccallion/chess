@@ -61,7 +61,7 @@ pub struct LegalityInfo {
 }
 
 impl LegalityInfo {
-    pub fn in_check(&self) -> bool {
+    pub const fn in_check(&self) -> bool {
         self.checkers != 0
     }
 }

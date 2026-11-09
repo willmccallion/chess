@@ -207,7 +207,7 @@ impl SearchThreads {
         }
     }
 
-    pub fn count(&self) -> usize {
+    pub const fn count(&self) -> usize {
         self.data.len()
     }
 
@@ -271,7 +271,7 @@ struct TimeManager {
 }
 
 impl TimeManager {
-    fn new(
+    const fn new(
         control: Arc<SearchControl>,
         is_main_thread: bool,
         node_limit: Option<NodeLimit>,
@@ -448,7 +448,7 @@ fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
 
 /// Piece-index for the counter-move table: the piece that made `prev` now stands on `prev.to`.
 #[inline(always)]
-fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
+const fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
     (
         prev.is_capture() as usize,
         board.piece_on[prev.to.index()].index(),
@@ -458,7 +458,7 @@ fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
 
 /// Mate scores are stored relative to the node, not the root.
 #[inline(always)]
-fn score_to_tt(score: i32, ply: usize) -> i32 {
+const fn score_to_tt(score: i32, ply: usize) -> i32 {
     if score > MATE_THRESHOLD {
         score + ply as i32
     } else if score < -MATE_THRESHOLD {
@@ -469,7 +469,7 @@ fn score_to_tt(score: i32, ply: usize) -> i32 {
 }
 
 #[inline(always)]
-fn score_from_tt(score: i32, ply: usize) -> i32 {
+const fn score_from_tt(score: i32, ply: usize) -> i32 {
     if score > MATE_THRESHOLD {
         score - ply as i32
     } else if score < -MATE_THRESHOLD {
@@ -480,7 +480,7 @@ fn score_from_tt(score: i32, ply: usize) -> i32 {
 }
 
 #[inline(always)]
-fn tt_cutoff_allowed(bound: Bound, score: i32, alpha: i32, beta: i32) -> bool {
+const fn tt_cutoff_allowed(bound: Bound, score: i32, alpha: i32, beta: i32) -> bool {
     match bound {
         Bound::Exact => true,
         Bound::Lower => score >= beta,
@@ -492,7 +492,7 @@ fn tt_cutoff_allowed(bound: Bound, score: i32, alpha: i32, beta: i32) -> bool {
 /// side the bound looks: anywhere when exact, above for a lower bound,
 /// below for an upper one.
 #[inline(always)]
-fn bound_beyond(bound: Bound, score: i32, eval: i32) -> bool {
+const fn bound_beyond(bound: Bound, score: i32, eval: i32) -> bool {
     match bound {
         Bound::Exact => true,
         Bound::Lower => score > eval,
@@ -513,7 +513,7 @@ fn refined_eval(entry: Option<TTEntry>, eval: i32, ply: usize) -> i32 {
 }
 
 #[inline(always)]
-fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
+const fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
     if best_score <= alpha_orig {
         Bound::Upper
     } else if best_score >= beta {
@@ -523,7 +523,7 @@ fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
     }
 }
 
-fn has_non_pawn_material(board: &Board) -> bool {
+const fn has_non_pawn_material(board: &Board) -> bool {
     let our_pieces = board.pieces_of(board.turn);
     let pawns_and_kings = board.piece_bb[Piece::WP.index()]
         | board.piece_bb[Piece::BP.index()]
@@ -583,7 +583,7 @@ impl Search<'_> {
         }
     }
 
-    fn previous_move(&self) -> Option<Move> {
+    const fn previous_move(&self) -> Option<Move> {
         if self.ply == 0 {
             None
         } else {
@@ -1256,7 +1256,7 @@ struct TriedMoves {
 }
 
 impl TriedMoves {
-    fn record(&mut self, m: Move) {
+    const fn record(&mut self, m: Move) {
         let list = if m.is_quiet() {
             &mut self.quiets
         } else if m.is_capture() {

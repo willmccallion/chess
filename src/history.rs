@@ -36,13 +36,13 @@ fn apply_gravity(entry: &mut i16, bonus: i32) {
 pub struct ContinuationKey(usize);
 
 impl ContinuationKey {
-    pub fn new(piece: Piece, to: Square) -> Self {
+    pub const fn new(piece: Piece, to: Square) -> Self {
         Self(piece.index() * 64 + to.index())
     }
 }
 
 /// The victim of a capture, or `None` for a quiet promotion.
-pub fn captured_kind(board_piece_on_to: Piece, m: Move) -> Option<PieceKind> {
+pub const fn captured_kind(board_piece_on_to: Piece, m: Move) -> Option<PieceKind> {
     if m.is_en_passant() {
         Some(PieceKind::Pawn)
     } else {
@@ -147,7 +147,7 @@ impl CorrectionHistory {
     }
 
     /// The top bits, since the key's low bits ignore pawns on the far ranks.
-    fn slot(pawn_key: u64) -> usize {
+    const fn slot(pawn_key: u64) -> usize {
         (pawn_key >> (64 - CORRECTION_BITS)) as usize
     }
 

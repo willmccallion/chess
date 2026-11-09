@@ -144,7 +144,7 @@ fn undeveloped_minors(board: &Board, side: Color) -> usize {
         .count()
 }
 
-fn queens_on(board: &Board) -> bool {
+const fn queens_on(board: &Board) -> bool {
     board.piece_bb[Piece::WQ.index()] | board.piece_bb[Piece::BQ.index()] != 0
 }
 

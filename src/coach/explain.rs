@@ -131,7 +131,7 @@ pub fn positional_differences(
     notes
 }
 
-fn castling_rights(board: &Board, color: Color) -> u32 {
+const fn castling_rights(board: &Board, color: Color) -> u32 {
     let mask = match color {
         Color::White => WK_CASTLE | WQ_CASTLE,
         Color::Black => BK_CASTLE | BQ_CASTLE,

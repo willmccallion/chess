@@ -100,11 +100,11 @@ impl ReviewScreen {
         );
     }
 
-    fn total_positions(&self) -> usize {
+    const fn total_positions(&self) -> usize {
         self.positions.len()
     }
 
-    fn is_analysed(&self) -> bool {
+    const fn is_analysed(&self) -> bool {
         self.analysis.len() >= self.total_positions()
     }
 

@@ -78,7 +78,7 @@ fn san_parts(san: &str) -> Option<SanParts> {
     Some(parts)
 }
 
-fn piece_kind_of(letter: char) -> Option<PieceKind> {
+const fn piece_kind_of(letter: char) -> Option<PieceKind> {
     match letter {
         'N' => Some(PieceKind::Knight),
         'B' => Some(PieceKind::Bishop),

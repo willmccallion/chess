@@ -16,7 +16,7 @@ pub struct Zobrist {
 
 impl Zobrist {
     #[inline]
-    pub fn piece_key(&self, pc: Piece, sq: usize) -> ZKey {
+    pub const fn piece_key(&self, pc: Piece, sq: usize) -> ZKey {
         self.piece[pc.index()][sq]
     }
 }

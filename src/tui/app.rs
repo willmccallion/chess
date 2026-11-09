@@ -127,7 +127,7 @@ pub struct Clocks {
 }
 
 impl Clocks {
-    fn new(clock: GameClock, now: Instant) -> Self {
+    const fn new(clock: GameClock, now: Instant) -> Self {
         Self {
             remaining_ms: [clock.base_ms as i64; 2],
             increment_ms: clock.increment_ms as i64,
@@ -160,7 +160,7 @@ impl Clocks {
         self.running_since = None;
     }
 
-    fn resume(&mut self, now: Instant) {
+    const fn resume(&mut self, now: Instant) {
         self.running_since = Some(now);
     }
 
@@ -238,23 +238,23 @@ impl App {
         app
     }
 
-    pub fn board(&self) -> &Board {
+    pub const fn board(&self) -> &Board {
         &self.board
     }
 
-    pub fn mode(&self) -> Mode {
+    pub const fn mode(&self) -> Mode {
         self.config.mode
     }
 
-    pub fn human(&self) -> Color {
+    pub const fn human(&self) -> Color {
         self.human
     }
 
-    pub fn time_setting(&self) -> TimeSetting {
+    pub const fn time_setting(&self) -> TimeSetting {
         self.config.time
     }
 
-    pub fn start_position(&self) -> &Board {
+    pub const fn start_position(&self) -> &Board {
         &self.config.start
     }
 
@@ -262,34 +262,34 @@ impl App {
         &self.history
     }
 
-    pub fn outcome(&self) -> Option<GameEnd> {
+    pub const fn outcome(&self) -> Option<GameEnd> {
         self.outcome
     }
 
-    pub fn clocks(&self) -> Option<&Clocks> {
+    pub const fn clocks(&self) -> Option<&Clocks> {
         self.clocks.as_ref()
     }
 
-    pub fn selected(&self) -> Option<Square> {
+    pub const fn selected(&self) -> Option<Square> {
         self.input.selected()
     }
 
-    pub fn pending_promotion(&self) -> Option<PendingPromotion> {
+    pub const fn pending_promotion(&self) -> Option<PendingPromotion> {
         self.input.pending_promotion()
     }
 
-    pub fn legal_moves(&self) -> &[Move] {
+    pub const fn legal_moves(&self) -> &[Move] {
         self.legal.as_slice()
     }
 
     /// Holds your moves for confirmation instead of playing them at once.
-    pub fn set_hold_moves(&mut self, hold: bool) {
+    pub const fn set_hold_moves(&mut self, hold: bool) {
         self.hold_moves = hold;
         self.proposed = None;
     }
 
     /// Your move waiting for confirmation.
-    pub fn proposed(&self) -> Option<Move> {
+    pub const fn proposed(&self) -> Option<Move> {
         self.proposed
     }
 
@@ -302,11 +302,11 @@ impl App {
         }
     }
 
-    pub fn discard_proposed(&mut self) {
+    pub const fn discard_proposed(&mut self) {
         self.proposed = None;
     }
 
-    pub fn is_paused(&self) -> bool {
+    pub const fn is_paused(&self) -> bool {
         self.paused
     }
 
@@ -566,7 +566,7 @@ impl App {
         }
     }
 
-    pub fn release_off_board(&mut self) {
+    pub const fn release_off_board(&mut self) {
         self.input.release_off_board();
     }
 

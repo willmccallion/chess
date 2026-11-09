@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 type Bitboard = u64;
 
-fn file_of(sq: i32) -> i32 {
+const fn file_of(sq: i32) -> i32 {
     sq & 7
 }
 fn in_board(sq: i32) -> bool {
@@ -14,16 +14,16 @@ fn in_board(sq: i32) -> bool {
 
 struct Rng(u64);
 impl Rng {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self(0x1234_5678_9ABC_DEF0)
     }
-    fn rand(&mut self) -> u64 {
+    const fn rand(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
-    fn rand_sparse(&mut self) -> u64 {
+    const fn rand_sparse(&mut self) -> u64 {
         self.rand() & self.rand() & self.rand()
     }
 }
@@ -245,7 +245,7 @@ fn generate_zobrist_keys(out_dir: &Path) -> io::Result<()> {
     )?;
     writeln!(f, "use crate::types::ZKey;")?;
 
-    fn splitmix64(state: &mut u64) -> u64 {
+    const fn splitmix64(state: &mut u64) -> u64 {
         *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut x = *state;
         x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

@@ -800,11 +800,11 @@ pub fn get_bishop_attacks(sq: usize, occupied: Bitboard) -> Bitboard {
 }
 
 #[inline(always)]
-pub fn knight_attacks_from(sq: usize) -> Bitboard {
+pub const fn knight_attacks_from(sq: usize) -> Bitboard {
     KNIGHT_ATTACKS[sq]
 }
 
 #[inline(always)]
-pub fn king_attacks_from(sq: usize) -> Bitboard {
+pub const fn king_attacks_from(sq: usize) -> Bitboard {
     KING_ATTACKS[sq]
 }

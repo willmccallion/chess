@@ -63,7 +63,7 @@ impl Board {
 
     /// Hash of the pawn structure (both colors).
     #[inline(always)]
-    pub fn pawn_key(&self) -> u64 {
+    pub const fn pawn_key(&self) -> u64 {
         let white = self.piece_bb[Piece::WP.index()].wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let black = self.piece_bb[Piece::BP.index()].wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
         let mixed = (white ^ black.rotate_left(31)) ^ ((white ^ black) >> 29);
@@ -148,7 +148,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn place_piece(&mut self, p: Piece, sq: usize) {
+    pub const fn place_piece(&mut self, p: Piece, sq: usize) {
         self.piece_on[sq] = p;
     }
 
@@ -209,7 +209,7 @@ impl Board {
 
     /// Neither side can ever mate: bare kings plus at most one minor piece, or only
     /// bishops that all stand on squares of one color.
-    pub fn has_insufficient_material(&self) -> bool {
+    pub const fn has_insufficient_material(&self) -> bool {
         const LIGHT_SQUARES: u64 = 0x55AA_55AA_55AA_55AA;
         let mating_material = self.kind_bb(PieceKind::Pawn)
             | self.kind_bb(PieceKind::Rook)
@@ -700,7 +700,7 @@ impl Board {
         undo
     }
 
-    pub fn position_view(&self) -> PositionView<'_> {
+    pub const fn position_view(&self) -> PositionView<'_> {
         PositionView {
             piece_on: &self.piece_on,
             piece_bb: &self.piece_bb,
@@ -736,7 +736,7 @@ impl Board {
     }
 
     /// The evaluation state and the position it describes, borrowed together.
-    pub fn eval_state_and_view(&mut self) -> (&mut EvalState, PositionView<'_>) {
+    pub const fn eval_state_and_view(&mut self) -> (&mut EvalState, PositionView<'_>) {
         let position = PositionView {
             piece_on: &self.piece_on,
             piece_bb: &self.piece_bb,

@@ -37,7 +37,7 @@ pub fn focus_title(focus: Focus) -> String {
     }
 }
 
-fn focus_advice(focus: Focus) -> &'static str {
+const fn focus_advice(focus: Focus) -> &'static str {
     match focus {
         Focus::Mistakes { kind, .. } => kind.advice(),
         Focus::Habit { habit, .. } => habit.advice(),

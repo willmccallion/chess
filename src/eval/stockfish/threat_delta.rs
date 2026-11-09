@@ -29,12 +29,12 @@ pub struct ThreatDeltas {
 }
 
 impl ThreatDeltas {
-    pub fn clear(&mut self) {
+    pub const fn clear(&mut self) {
         self.list.clear();
         self.overflowed = false;
     }
 
-    fn push(&mut self, delta: ThreatDelta) {
+    const fn push(&mut self, delta: ThreatDelta) {
         if self.list.len() < MAX_THREAT_DELTAS {
             self.list.push(delta);
         } else {
@@ -54,7 +54,7 @@ struct Replay<'b> {
     overlay_len: usize,
 }
 
-fn is_slider(piece: Piece) -> bool {
+const fn is_slider(piece: Piece) -> bool {
     matches!(
         piece.kind(),
         Some(PieceKind::Bishop | PieceKind::Rook | PieceKind::Queen)
@@ -77,7 +77,7 @@ fn attacks_of(piece: Piece, sq: usize, occupied: Bitboard) -> Bitboard {
 }
 
 impl<'b> Replay<'b> {
-    fn new(position: PositionView<'b>) -> Self {
+    const fn new(position: PositionView<'b>) -> Self {
         Self {
             position,
             piece_bb: *position.piece_bb,
@@ -188,7 +188,7 @@ impl<'b> Replay<'b> {
     }
 }
 
-fn delta(attacker: Piece, from: usize, attacked: Piece, to: usize, add: bool) -> ThreatDelta {
+const fn delta(attacker: Piece, from: usize, attacked: Piece, to: usize, add: bool) -> ThreatDelta {
     ThreatDelta {
         attacker,
         from: from as u8,

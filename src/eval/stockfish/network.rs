@@ -195,7 +195,7 @@ pub struct NetOutput {
 }
 
 /// Layer stack chosen by the number of pieces on the board.
-pub fn bucket_for(position: PositionView) -> usize {
+pub const fn bucket_for(position: PositionView) -> usize {
     (position.occupied.count_ones() as usize - 1) / 4
 }
 

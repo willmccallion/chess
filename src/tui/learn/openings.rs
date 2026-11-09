@@ -146,7 +146,7 @@ fn layout(area: Rect) -> (Rect, Rect) {
     (intro, list)
 }
 
-fn visible_skip(selected: usize, rows: usize) -> usize {
+const fn visible_skip(selected: usize, rows: usize) -> usize {
     (selected + 2).saturating_sub(rows)
 }
 

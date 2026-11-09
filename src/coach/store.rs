@@ -114,12 +114,12 @@ impl GameRecord {
         Board::from_fen(&self.start_fen).map(|b| b.without_eval_state())
     }
 
-    pub fn is_fully_analysed(&self) -> bool {
+    pub const fn is_fully_analysed(&self) -> bool {
         self.analysis.len() == self.moves.len() + 1
     }
 
     /// The result from your side.
-    pub fn outcome(&self) -> super::rating::Outcome {
+    pub const fn outcome(&self) -> super::rating::Outcome {
         use super::rating::Outcome;
         match (self.result, self.human) {
             (GameResult::Draw, _) => Outcome::Draw,
@@ -317,7 +317,7 @@ fn color_from_token(token: &str) -> Option<Color> {
     }
 }
 
-fn result_token(result: GameResult) -> &'static str {
+const fn result_token(result: GameResult) -> &'static str {
     match result {
         GameResult::WhiteWin => "1-0",
         GameResult::BlackWin => "0-1",

@@ -85,11 +85,11 @@ impl BoardPanel {
         panel
     }
 
-    pub fn board(&self) -> &Board {
+    pub const fn board(&self) -> &Board {
         &self.board
     }
 
-    pub fn legal(&self) -> &[Move] {
+    pub const fn legal(&self) -> &[Move] {
         self.legal.as_slice()
     }
 

@@ -29,14 +29,14 @@ impl<const N: usize> Accumulator<N> {
         psqt: [0; PSQT_BUCKETS],
     };
 
-    fn view(&self) -> SumsView<'_> {
+    const fn view(&self) -> SumsView<'_> {
         SumsView {
             values: &self.values,
             psqt: &self.psqt,
         }
     }
 
-    fn reset_to(&mut self, biases: &[i16]) {
+    const fn reset_to(&mut self, biases: &[i16]) {
         self.values.copy_from_slice(biases);
         self.psqt = [0; PSQT_BUCKETS];
     }
@@ -106,12 +106,12 @@ struct FeatureChanges<const N: usize> {
 }
 
 impl<const N: usize> FeatureChanges<N> {
-    fn clear(&mut self) {
+    const fn clear(&mut self) {
         self.adds.clear();
         self.subs.clear();
     }
 
-    fn push(&mut self, feature: usize, add: bool) {
+    const fn push(&mut self, feature: usize, add: bool) {
         if add {
             self.adds.push(feature);
         } else {
@@ -286,7 +286,7 @@ pub struct PlyRecord<'a> {
 
 impl PlyRecord<'_> {
     /// Notes that `color`'s king moved between `from` and `to`.
-    pub fn king_moved(&mut self, color: Color, from: usize, to: usize) {
+    pub const fn king_moved(&mut self, color: Color, from: usize, to: usize) {
         *self.king_mover = Some(color);
         if (from % 8 < 4) != (to % 8 < 4) {
             self.threat_refresh[color as usize] = true;

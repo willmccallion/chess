@@ -166,7 +166,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    pub fn games(&self) -> usize {
+    pub const fn games(&self) -> usize {
         self.wins + self.draws + self.losses
     }
 

@@ -61,11 +61,11 @@ pub struct BoardGeometry {
 }
 
 impl BoardGeometry {
-    fn width(self) -> u16 {
+    const fn width(self) -> u16 {
         8 * self.square_width
     }
 
-    fn height(self) -> u16 {
+    const fn height(self) -> u16 {
         8 * self.square_height
     }
 
@@ -145,7 +145,7 @@ pub struct BoardScene<'a> {
 
 impl<'a> BoardScene<'a> {
     /// A board with nothing selected or marked.
-    pub fn plain(board: &'a Board, flipped: bool, piece_style: PieceStyle) -> Self {
+    pub const fn plain(board: &'a Board, flipped: bool, piece_style: PieceStyle) -> Self {
         Self {
             board,
             flipped,

@@ -20,7 +20,7 @@ pub enum Bound {
 
 impl Bound {
     #[inline(always)]
-    fn from_bits(bits: u64) -> Self {
+    const fn from_bits(bits: u64) -> Self {
         match bits {
             0 => Self::Exact,
             1 => Self::Lower,
@@ -111,18 +111,18 @@ impl TTEntry {
     }
 
     #[inline(always)]
-    pub fn bound(&self) -> Bound {
+    pub const fn bound(&self) -> Bound {
         Bound::from_bits((self.data >> BOUND_SHIFT) & BOUND_MASK)
     }
 
     /// Whether the position was on a principal variation when stored.
     #[inline(always)]
-    pub fn is_pv(&self) -> bool {
+    pub const fn is_pv(&self) -> bool {
         (self.data >> PV_SHIFT) & 1 == 1
     }
 
     #[inline(always)]
-    fn age(&self) -> u8 {
+    const fn age(&self) -> u8 {
         ((self.data >> AGE_SHIFT) & AGE_MASK) as u8
     }
 }

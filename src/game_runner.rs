@@ -69,7 +69,7 @@ pub(crate) struct Wdl {
 }
 
 impl Wdl {
-    pub(crate) fn add(&mut self, result: EngineResult) {
+    pub(crate) const fn add(&mut self, result: EngineResult) {
         match result {
             EngineResult::Win => self.wins += 1,
             EngineResult::Loss => self.losses += 1,
@@ -227,7 +227,7 @@ struct Clocks {
 }
 
 impl Clocks {
-    fn new(config: &GameConfig) -> Self {
+    const fn new(config: &GameConfig) -> Self {
         Self {
             white_ms: config.white_clock.base_ms as i64,
             black_ms: config.black_clock.base_ms as i64,
@@ -238,7 +238,7 @@ impl Clocks {
 
     /// Charges `side` for a move that took `elapsed_ms`, then adds its
     /// increment, unless its flag fell first.
-    fn charge(&mut self, side: Color, elapsed_ms: i64) -> Result<(), GameEndReason> {
+    const fn charge(&mut self, side: Color, elapsed_ms: i64) -> Result<(), GameEndReason> {
         let (left_ms, increment_ms) = match side {
             Color::White => (&mut self.white_ms, self.white_increment_ms),
             Color::Black => (&mut self.black_ms, self.black_increment_ms),
@@ -279,7 +279,7 @@ impl<'a> Game<'a> {
         position_outcome(&self.board)
     }
 
-    fn outcome(&self, result: GameResult, reason: GameEndReason) -> GameOutcome {
+    const fn outcome(&self, result: GameResult, reason: GameEndReason) -> GameOutcome {
         GameOutcome {
             result,
             reason,

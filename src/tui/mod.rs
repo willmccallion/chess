@@ -179,7 +179,7 @@ fn handle_typing(app: &mut App, code: KeyCode, now: Instant) {
     }
 }
 
-fn promotion_kind(c: char) -> Option<crate::types::PieceKind> {
+const fn promotion_kind(c: char) -> Option<crate::types::PieceKind> {
     use crate::types::PieceKind;
     match c.to_ascii_lowercase() {
         'q' => Some(PieceKind::Queen),

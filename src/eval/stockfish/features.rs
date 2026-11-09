@@ -217,7 +217,7 @@ pub fn attacks_from(piece: SfPiece, from: usize, occupied: Bitboard) -> Bitboard
     }
 }
 
-pub fn king_square(position: PositionView, color: Color) -> usize {
+pub const fn king_square(position: PositionView, color: Color) -> usize {
     position.piece_bb[Piece::from_kind(PieceKind::King, color).index()].trailing_zeros() as usize
 }
 

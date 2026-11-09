@@ -124,7 +124,7 @@ pub enum Pixel {
     Outline,
 }
 
-fn silhouette(kind: PieceKind) -> &'static [&'static str; GRID] {
+const fn silhouette(kind: PieceKind) -> &'static [&'static str; GRID] {
     match kind {
         PieceKind::Pawn => &PAWN,
         PieceKind::Knight => &KNIGHT,

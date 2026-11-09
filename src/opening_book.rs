@@ -10,10 +10,10 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 // A simple random number generator
 struct Rng(u64);
 impl Rng {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self(0x1234_5678_9ABC_DEF0)
     }
-    fn rand(&mut self) -> u64 {
+    const fn rand(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;

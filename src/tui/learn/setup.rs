@@ -67,7 +67,7 @@ pub struct Setup {
 }
 
 impl Setup {
-    pub fn new(data: &CoachData) -> Self {
+    pub const fn new(data: &CoachData) -> Self {
         Self {
             row: ROWS.len() - 1,
             level: None,

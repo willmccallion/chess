@@ -19,7 +19,7 @@ use network::{NetOutput, PerspectiveSums, bucket_for, transform};
 use std::path::{Path, PathBuf};
 
 /// Network path baked in at build time from the dev shell's `CHESS_NNUE_BIG`/`CHESS_NNUE_SMALL`.
-pub fn default_net_path(kind: NetKind) -> Option<&'static str> {
+pub const fn default_net_path(kind: NetKind) -> Option<&'static str> {
     match kind {
         NetKind::Big => option_env!("CHESS_NNUE_BIG"),
         NetKind::Small => option_env!("CHESS_NNUE_SMALL"),
@@ -94,7 +94,7 @@ const NON_PAWN_VALUES: [(Piece, Piece, i32); 4] = [
     (Piece::WQ, Piece::BQ, 2538),
 ];
 
-fn count(position: PositionView, piece: Piece) -> i32 {
+const fn count(position: PositionView, piece: Piece) -> i32 {
     position.piece_bb[piece.index()].count_ones() as i32
 }
 

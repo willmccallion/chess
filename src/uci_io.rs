@@ -21,7 +21,7 @@ pub fn parse_uci_move(b: &Board, s: &str) -> Option<Move> {
 }
 
 /// The piece a promotion letter names, in either case.
-fn promotion_kind(letter: u8) -> Option<PieceKind> {
+const fn promotion_kind(letter: u8) -> Option<PieceKind> {
     match letter.to_ascii_lowercase() {
         b'q' => Some(PieceKind::Queen),
         b'r' => Some(PieceKind::Rook),

@@ -142,7 +142,7 @@ pub enum PieceKind {
 }
 
 impl PieceKind {
-    pub fn to_char_upper(&self) -> char {
+    pub const fn to_char_upper(&self) -> char {
         match self {
             Self::Pawn => 'P',
             Self::Knight => 'N',
@@ -173,12 +173,12 @@ pub enum Piece {
 
 impl Piece {
     #[inline(always)]
-    pub fn is_empty(self) -> bool {
+    pub const fn is_empty(self) -> bool {
         matches!(self, Self::Empty)
     }
 
     #[inline(always)]
-    pub fn color(self) -> Option<Color> {
+    pub const fn color(self) -> Option<Color> {
         match self {
             Self::WP | Self::WN | Self::WB | Self::WR | Self::WQ | Self::WK => Some(Color::White),
             Self::BP | Self::BN | Self::BB | Self::BR | Self::BQ | Self::BK => Some(Color::Black),
@@ -187,7 +187,7 @@ impl Piece {
     }
 
     #[inline(always)]
-    pub fn kind(self) -> Option<PieceKind> {
+    pub const fn kind(self) -> Option<PieceKind> {
         match self {
             Self::WP | Self::BP => Some(PieceKind::Pawn),
             Self::WN | Self::BN => Some(PieceKind::Knight),
@@ -543,13 +543,13 @@ impl<T: Copy, const N: usize> Default for StackVec<T, N> {
 impl<T: Copy, const N: usize> StackVec<T, N> {
     /// Panics if the capacity `N` is exceeded.
     #[inline(always)]
-    pub fn push(&mut self, item: T) {
+    pub const fn push(&mut self, item: T) {
         self.items[self.len] = MaybeUninit::new(item);
         self.len += 1;
     }
 
     #[inline(always)]
-    pub fn clear(&mut self) {
+    pub const fn clear(&mut self) {
         self.len = 0;
     }
 
@@ -560,23 +560,23 @@ impl<T: Copy, const N: usize> StackVec<T, N> {
     }
 
     #[inline(always)]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
     #[inline(always)]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     #[inline(always)]
-    pub fn as_slice(&self) -> &[T] {
+    pub const fn as_slice(&self) -> &[T] {
         // SAFETY: slots 0..len were written by `push` and len <= N.
         unsafe { std::slice::from_raw_parts(self.items.as_ptr().cast::<T>(), self.len) }
     }
 
     #[inline(always)]
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    pub const fn as_mut_slice(&mut self) -> &mut [T] {
         // SAFETY: slots 0..len were written by `push` and len <= N.
         unsafe { std::slice::from_raw_parts_mut(self.items.as_mut_ptr().cast::<T>(), self.len) }
     }
@@ -594,37 +594,37 @@ impl MoveList {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, m: Move) {
+    pub const fn push(&mut self, m: Move) {
         self.moves.push(m);
     }
 
     #[inline(always)]
-    pub fn clear(&mut self) {
+    pub const fn clear(&mut self) {
         self.moves.clear();
     }
 
     #[inline(always)]
-    pub fn as_slice(&self) -> &[Move] {
+    pub const fn as_slice(&self) -> &[Move] {
         self.moves.as_slice()
     }
 
     #[inline(always)]
-    pub fn get(&self, index: usize) -> Move {
+    pub const fn get(&self, index: usize) -> Move {
         self.moves.as_slice()[index]
     }
 
     #[inline(always)]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.moves.len()
     }
 
     #[inline(always)]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.moves.is_empty()
     }
 
     #[inline(always)]
-    pub fn swap(&mut self, a: usize, b: usize) {
+    pub const fn swap(&mut self, a: usize, b: usize) {
         self.moves.as_mut_slice().swap(a, b);
     }
 }

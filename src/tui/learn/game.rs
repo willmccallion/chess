@@ -151,7 +151,7 @@ impl CoachGame {
         self.app.history().len()
     }
 
-    fn is_over(&self) -> bool {
+    const fn is_over(&self) -> bool {
         self.finished.is_some() || self.app.outcome().is_some()
     }
 

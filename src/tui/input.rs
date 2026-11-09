@@ -18,11 +18,11 @@ pub struct MoveInput {
 }
 
 impl MoveInput {
-    pub fn selected(&self) -> Option<Square> {
+    pub const fn selected(&self) -> Option<Square> {
         self.selected
     }
 
-    pub fn pending_promotion(&self) -> Option<PendingPromotion> {
+    pub const fn pending_promotion(&self) -> Option<PendingPromotion> {
         self.pending_promotion
     }
 
@@ -72,7 +72,7 @@ impl MoveInput {
         None
     }
 
-    pub fn release_off_board(&mut self) {
+    pub const fn release_off_board(&mut self) {
         self.dragging = false;
     }
 

@@ -29,7 +29,7 @@ macro_rules! search_params {
         ];
 
         impl SearchParams {
-            fn slot_mut(&mut self, name: &str) -> Option<&mut i32> {
+            const fn slot_mut(&mut self, name: &str) -> Option<&mut i32> {
                 $(if name.eq_ignore_ascii_case($name) {
                     return Some(&mut self.$field);
                 })*
@@ -37,7 +37,7 @@ macro_rules! search_params {
             }
 
             /// The value of the parameter called `name` (case-insensitive).
-            pub fn get(&self, name: &str) -> Option<i32> {
+            pub const fn get(&self, name: &str) -> Option<i32> {
                 $(if name.eq_ignore_ascii_case($name) {
                     return Some(self.$field);
                 })*

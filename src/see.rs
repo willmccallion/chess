@@ -98,7 +98,7 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     gain[0]
 }
 
-fn kind_value(kind: PieceKind) -> i32 {
+const fn kind_value(kind: PieceKind) -> i32 {
     PIECE_VALUES[kind as usize]
 }
 

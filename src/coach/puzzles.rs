@@ -55,7 +55,7 @@ pub struct Puzzle {
 }
 
 impl Puzzle {
-    pub fn is_from_your_games(&self) -> bool {
+    pub const fn is_from_your_games(&self) -> bool {
         matches!(self.id, PuzzleId::Game { .. })
     }
 }
@@ -202,7 +202,7 @@ impl Attempt {
         }
     }
 
-    fn is_final_move(&self) -> bool {
+    const fn is_final_move(&self) -> bool {
         self.progress + 1 >= self.puzzle.solution.len()
     }
 

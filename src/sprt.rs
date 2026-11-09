@@ -20,11 +20,11 @@ pub struct Pentanomial {
 }
 
 impl Pentanomial {
-    pub fn add(&mut self, pair: PairScore) {
+    pub const fn add(&mut self, pair: PairScore) {
         self.counts[pair.0 as usize] += 1;
     }
 
-    pub fn counts(&self) -> [u64; 5] {
+    pub const fn counts(&self) -> [u64; 5] {
         self.counts
     }
 

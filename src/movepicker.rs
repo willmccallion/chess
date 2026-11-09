@@ -82,7 +82,7 @@ impl QuietThreats {
 
     /// Rewards moving a piece out of attack by a cheaper one and giving check;
     /// penalizes moving into such an attack.
-    fn adjustment(&self, kind: PieceKind, m: Move) -> i32 {
+    const fn adjustment(&self, kind: PieceKind, m: Move) -> i32 {
         let (from, to) = (m.from.bb(), m.to.bb());
         let (danger, bonus) = match kind {
             PieceKind::Queen => (self.by_rook, QUEEN_THREAT_BONUS),
@@ -120,7 +120,7 @@ enum Stage {
 }
 
 impl Stage {
-    fn is_quiet_stage(self) -> bool {
+    const fn is_quiet_stage(self) -> bool {
         matches!(
             self,
             Self::Killer1 | Self::Killer2 | Self::CounterMove | Self::GenQuiets | Self::Quiets
@@ -257,7 +257,7 @@ impl MovePicker {
     }
 
     /// Stops yielding quiet moves (killers and counter-move included); captures continue.
-    pub fn skip_quiets(&mut self) {
+    pub const fn skip_quiets(&mut self) {
         self.skip_quiets = true;
     }
 

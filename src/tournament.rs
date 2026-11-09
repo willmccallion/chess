@@ -112,7 +112,7 @@ impl Standings {
         self.record_pair_game(game_idx, e1_result.points())
     }
 
-    fn completed(&self) -> usize {
+    const fn completed(&self) -> usize {
         self.e1.games()
     }
 

@@ -129,7 +129,7 @@ fn play_training_games(
     }
 }
 
-fn result_text(result: GameResult) -> &'static str {
+const fn result_text(result: GameResult) -> &'static str {
     match result {
         GameResult::WhiteWin => "1.0",
         GameResult::Draw => "0.5",
@@ -284,7 +284,7 @@ struct Tally {
 }
 
 impl Tally {
-    fn add(&mut self, game: &GameRecord) {
+    const fn add(&mut self, game: &GameRecord) {
         self.games += 1;
         self.positions += game.positions.len() as u64;
         match game.result {
