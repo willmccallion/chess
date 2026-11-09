@@ -382,3 +382,24 @@ fn an_eval_file_that_cannot_load_is_reported_and_the_engine_keeps_its_networks()
         "replies {reply:?}"
     );
 }
+
+#[test]
+fn an_engine_left_with_no_evaluator_reports_it_and_exits_with_an_error() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chess"))
+        .args(["--eval", "own", "--own-net", "/nonexistent/net.bin", "uci"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("engine starts");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    writeln!(stdin, "isready").expect("engine reads stdin");
+    drop(stdin);
+
+    let output = child.wait_with_output().expect("engine exits");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{stdout}");
+    assert!(stdout.contains("info string ERROR"), "{stdout}");
+    assert!(!stdout.contains("readyok"), "{stdout}");
+}

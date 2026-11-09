@@ -9,7 +9,7 @@ use crate::time::{TimeBudget, TimeControl};
 use crate::tt::SharedTransTable;
 use crate::types::{Color, Move, MoveList, START_FEN};
 use crate::uci_io::{format_uci, parse_uci_move};
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -62,11 +62,19 @@ enum ActiveGo {
     Holding(Move),
 }
 
-fn send_bestmove(m: Option<Move>) {
-    send(&format!(
-        "bestmove {}",
-        m.map_or_else(|| "0000".to_string(), format_uci)
-    ));
+fn send_bestmove(best: Option<Move>, ponder: Option<Move>) {
+    let line = match (best, ponder) {
+        (Some(best), Some(ponder)) => {
+            format!(
+                "bestmove {} ponder {}",
+                format_uci(best),
+                format_uci(ponder)
+            )
+        }
+        (Some(best), None) => format!("bestmove {}", format_uci(best)),
+        (None, _) => "bestmove 0000".to_string(),
+    };
+    send(&line);
 }
 
 /// Answers any `go` in progress: stops its search, which returns its thread
@@ -77,7 +85,7 @@ fn stop_search(active: &mut Option<ActiveGo>, threads: &mut Option<SearchThreads
             search.control.stop();
             *threads = search.handle.join().ok();
         }
-        Some(ActiveGo::Holding(m)) => send_bestmove(Some(m)),
+        Some(ActiveGo::Holding(m)) => send_bestmove(Some(m), None),
         None => {}
     }
     if threads.as_ref().is_none_or(|t| t.count() != count) {
@@ -112,55 +120,21 @@ impl Options {
 }
 
 /// Makes the evaluator the options name the one in use and returns whether
-/// it replaced another. A failure is reported and keeps the one in use, or
-/// exits when there is none: the engine cannot play without an evaluator.
-fn load_evaluator(options: &Options) -> bool {
+/// it replaced another. A failure is reported and keeps the one in use, or is
+/// an error when there is none: the engine cannot play without an evaluator.
+fn load_evaluator(options: &Options) -> Result<bool, String> {
     match options.eval.load() {
-        Ok(replaced) => replaced,
+        Ok(replaced) => Ok(replaced),
         Err(e) if eval::is_loaded() => {
             send(&format!(
                 "info string ERROR: {e}; keeping the evaluator in use"
             ));
-            false
+            Ok(false)
         }
         Err(e) => {
             send(&format!("info string ERROR: {e}"));
-            std::process::exit(1);
+            Err(format!("no evaluator to play with: {e}"))
         }
-    }
-}
-
-/// What the engine has learnt during a game: the hash tables and histories.
-struct SearchState<'s> {
-    tt: &'s SharedTransTable,
-    threads: &'s mut Option<SearchThreads>,
-    coach_searcher: &'s mut Option<Searcher>,
-}
-
-impl SearchState<'_> {
-    fn clear(self) {
-        self.tt.clear();
-        if let Some(threads) = self.threads.as_mut() {
-            threads.clear();
-        }
-        if let Some(searcher) = self.coach_searcher.as_mut() {
-            searcher.clear();
-        }
-    }
-}
-
-/// Forgets what the replaced evaluator computed: evaluations cached in the
-/// search state and the board's incremental state.
-fn forget_evaluations(board: &mut Board, state: SearchState<'_>) {
-    state.clear();
-    *board = board.without_eval_state();
-}
-
-/// Loads the options' evaluator, forgetting the old one's work if it was
-/// replaced.
-fn ensure_evaluator(options: &Options, board: &mut Board, state: SearchState<'_>) {
-    if load_evaluator(options) {
-        forget_evaluations(board, state);
     }
 }
 
@@ -368,15 +342,7 @@ fn start_search(
 
     let handle = thread::spawn(move || {
         let result = search(&board, &tt, limits, &mut threads, &worker_control);
-        match (result.best_move, result.ponder_move) {
-            (Some(best), Some(ponder)) => send(&format!(
-                "bestmove {} ponder {}",
-                format_uci(best),
-                format_uci(ponder)
-            )),
-            (Some(best), None) => send(&format!("bestmove {}", format_uci(best))),
-            (None, _) => send("bestmove 0000"),
-        }
+        send_bestmove(result.best_move, result.ponder_move);
         threads
     });
 
@@ -449,7 +415,7 @@ fn coach_move(
 fn answer_now_or_hold(chosen: Option<Move>, go: &GoCommand, active: &mut Option<ActiveGo>) {
     match chosen {
         Some(m) if go.waits_for_stop() => *active = Some(ActiveGo::Holding(m)),
-        _ => send_bestmove(chosen),
+        _ => send_bestmove(chosen, None),
     }
 }
 
@@ -461,117 +427,161 @@ fn print_eval(board: &mut Board) {
     send(&format!("info string fen: {}", board.to_fen()));
 }
 
-pub fn run_uci(eval: EvalOptions) {
-    let mut board = Board::from_fen(START_FEN).expect("valid startpos");
-    let mut options = Options::new(eval);
-    let mut tt = SharedTransTable::new(options.hash_mb);
-    let mut active: Option<ActiveGo> = None;
-    let mut threads = Some(SearchThreads::new(options.threads));
-    let mut coach_searcher: Option<Searcher> = None;
+/// Answers UCI commands from stdin until `quit` or the end of input, or until
+/// the engine is left with no evaluator.
+pub fn run_uci(eval: EvalOptions) -> Result<(), String> {
+    let mut session = Session::new(eval)?;
+    let served = session.serve(io::stdin().lock());
+    session.stop_search();
+    served
+}
 
-    let stdin = io::stdin();
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match stdin.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
+/// The engine between commands: the position, the options, what it has
+/// learnt and the `go` it is answering.
+struct Session {
+    board: Board,
+    options: Options,
+    tt: SharedTransTable,
+    active: Option<ActiveGo>,
+    threads: Option<SearchThreads>,
+    coach_searcher: Option<Searcher>,
+}
+
+impl Session {
+    fn new(eval: EvalOptions) -> Result<Self, String> {
+        let options = Options::new(eval);
+        Ok(Self {
+            board: Board::from_fen(START_FEN)?,
+            tt: SharedTransTable::new(options.hash_mb),
+            active: None,
+            threads: Some(SearchThreads::new(options.threads)),
+            coach_searcher: None,
+            options,
+        })
+    }
+
+    fn serve(&mut self, input: impl BufRead) -> Result<(), String> {
+        for line in input.lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let cmd = line.trim();
+            let (verb, rest) = cmd.split_once(' ').unwrap_or((cmd, ""));
+            if verb == "quit" {
+                break;
+            }
+            self.handle(verb, rest)?;
         }
-        let cmd = line.trim();
-        let (verb, rest) = cmd.split_once(' ').unwrap_or((cmd, ""));
+        Ok(())
+    }
 
+    fn handle(&mut self, verb: &str, rest: &str) -> Result<(), String> {
         match verb {
             "uci" => {
                 send("id name chess");
                 send("id author Will");
-                print_options(&options);
+                print_options(&self.options);
                 send("uciok");
             }
             "isready" => {
-                let state = SearchState {
-                    tt: &tt,
-                    threads: &mut threads,
-                    coach_searcher: &mut coach_searcher,
-                };
-                ensure_evaluator(&options, &mut board, state);
+                self.ensure_evaluator()?;
                 send("readyok");
             }
             "ucinewgame" => {
-                stop_search(&mut active, &mut threads, options.threads);
-                SearchState {
-                    tt: &tt,
-                    threads: &mut threads,
-                    coach_searcher: &mut coach_searcher,
-                }
-                .clear();
+                self.stop_search();
+                self.clear_learning();
             }
             "setoption" => {
-                stop_search(&mut active, &mut threads, options.threads);
+                self.stop_search();
                 if let Some((name, value)) = parse_setoption(rest) {
-                    apply_option(&name, &value, &mut options, &mut tt);
+                    apply_option(&name, &value, &mut self.options, &mut self.tt);
                 }
             }
             "position" => {
-                stop_search(&mut active, &mut threads, options.threads);
+                self.stop_search();
                 match parse_position(rest) {
-                    Ok(position) => board = position,
+                    Ok(position) => self.board = position,
                     Err(e) => send(&format!("info string ignoring position: {e}")),
                 }
             }
-            "go" => {
-                stop_search(&mut active, &mut threads, options.threads);
-                let state = SearchState {
-                    tt: &tt,
-                    threads: &mut threads,
-                    coach_searcher: &mut coach_searcher,
-                };
-                ensure_evaluator(&options, &mut board, state);
-                let go = GoCommand::parse(rest);
-                if let Some(level) = options.coach_level {
-                    let searcher =
-                        coach_searcher.get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
-                    let chosen = coach_move(&board, level, go.clock(board.turn), searcher);
-                    answer_now_or_hold(chosen, &go, &mut active);
-                    continue;
-                }
-                if options.own_book
-                    && !go.infinite
-                    && let Some(book_move) = get_book_move(&board)
-                {
-                    answer_now_or_hold(Some(book_move), &go, &mut active);
-                    continue;
-                }
-                let search_threads = threads
-                    .take()
-                    .unwrap_or_else(|| SearchThreads::new(options.threads));
-                let search = start_search(&board, &tt, &options, search_threads, &go);
-                active = Some(ActiveGo::Searching(search));
-            }
-            "ponderhit" => match &active {
-                Some(ActiveGo::Searching(search)) => match search.ponder_budget {
-                    Some(budget) => search.control.set_budget_from_now(budget),
-                    None => search.control.stop(),
-                },
-                Some(ActiveGo::Holding(_)) => {
-                    stop_search(&mut active, &mut threads, options.threads);
-                }
-                None => {}
-            },
-            "stop" => stop_search(&mut active, &mut threads, options.threads),
+            "go" => self.go(&GoCommand::parse(rest))?,
+            "ponderhit" => self.ponderhit(),
+            "stop" => self.stop_search(),
             "eval" => {
-                let state = SearchState {
-                    tt: &tt,
-                    threads: &mut threads,
-                    coach_searcher: &mut coach_searcher,
-                };
-                ensure_evaluator(&options, &mut board, state);
-                print_eval(&mut board);
+                self.ensure_evaluator()?;
+                print_eval(&mut self.board);
             }
-            "quit" => break,
             _ => {}
         }
+        Ok(())
     }
-    stop_search(&mut active, &mut threads, options.threads);
+
+    /// Answers `go`: with the coach's move, a book move, or a search.
+    fn go(&mut self, go: &GoCommand) -> Result<(), String> {
+        self.stop_search();
+        self.ensure_evaluator()?;
+        if let Some(level) = self.options.coach_level {
+            let searcher = self
+                .coach_searcher
+                .get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
+            let chosen = coach_move(&self.board, level, go.clock(self.board.turn), searcher);
+            answer_now_or_hold(chosen, go, &mut self.active);
+            return Ok(());
+        }
+        if self.options.own_book
+            && !go.infinite
+            && let Some(book_move) = get_book_move(&self.board)
+        {
+            answer_now_or_hold(Some(book_move), go, &mut self.active);
+            return Ok(());
+        }
+        let threads = self
+            .threads
+            .take()
+            .unwrap_or_else(|| SearchThreads::new(self.options.threads));
+        let search = start_search(&self.board, &self.tt, &self.options, threads, go);
+        self.active = Some(ActiveGo::Searching(search));
+        Ok(())
+    }
+
+    /// Starts the clock of a pondering search, or answers a held move.
+    fn ponderhit(&mut self) {
+        match &self.active {
+            Some(ActiveGo::Searching(search)) => match search.ponder_budget {
+                Some(budget) => search.control.set_budget_from_now(budget),
+                None => search.control.stop(),
+            },
+            Some(ActiveGo::Holding(_)) => self.stop_search(),
+            None => {}
+        }
+    }
+
+    fn stop_search(&mut self) {
+        stop_search(&mut self.active, &mut self.threads, self.options.threads);
+    }
+
+    /// Loads the options' evaluator, forgetting what the one it replaced
+    /// computed: evaluations cached by the searches and the board's
+    /// incremental state.
+    fn ensure_evaluator(&mut self) -> Result<(), String> {
+        if load_evaluator(&self.options)? {
+            self.clear_learning();
+            self.board = self.board.without_eval_state();
+        }
+        Ok(())
+    }
+
+    /// Forgets what the engine learnt during a game: the hash tables and
+    /// histories.
+    fn clear_learning(&mut self) {
+        self.tt.clear();
+        if let Some(threads) = self.threads.as_mut() {
+            threads.clear();
+        }
+        if let Some(searcher) = self.coach_searcher.as_mut() {
+            searcher.clear();
+        }
+    }
 }
 
 #[cfg(test)]

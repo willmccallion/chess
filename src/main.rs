@@ -762,7 +762,7 @@ fn main() {
         Cmd::Compare(args) => args.run(),
         Cmd::Params => print_params(),
         Cmd::Tune(args) => args.run(),
-        Cmd::Uci => uci::run_uci(cli.eval_options()),
+        Cmd::Uci => uci::run_uci(cli.eval_options()).unwrap_or_else(|e| exit_with_error(&e)),
     }
 }
 
