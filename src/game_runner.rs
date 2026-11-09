@@ -33,12 +33,16 @@ pub(crate) enum EngineResult {
 }
 
 impl EngineResult {
-    /// The result for the engine that played white when `is_white`, else black.
-    pub(crate) const fn of(result: GameResult, is_white: bool) -> Self {
-        match (result, is_white) {
+    /// The result for the engine that played `side`.
+    pub(crate) const fn of(result: GameResult, side: Color) -> Self {
+        match (result, side) {
             (GameResult::Draw, _) => Self::Draw,
-            (GameResult::WhiteWin, true) | (GameResult::BlackWin, false) => Self::Win,
-            (GameResult::WhiteWin, false) | (GameResult::BlackWin, true) => Self::Loss,
+            (GameResult::WhiteWin, Color::White) | (GameResult::BlackWin, Color::Black) => {
+                Self::Win
+            }
+            (GameResult::WhiteWin, Color::Black) | (GameResult::BlackWin, Color::White) => {
+                Self::Loss
+            }
         }
     }
 

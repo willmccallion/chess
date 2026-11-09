@@ -10,6 +10,7 @@ use crate::game_runner::{
 };
 use crate::search_params::{PARAM_SPECS, ParamSpec};
 use crate::tournament::start_match_engine;
+use crate::types::Color;
 use crate::uci_client::{EngineError, UciEngine};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -217,8 +218,8 @@ fn play_pair(
     if first.reason == GameEndReason::EngineCrash || second.reason == GameEndReason::EngineCrash {
         return Ok(None);
     }
-    let result = EngineResult::of(first.result, true).signed()
-        + EngineResult::of(second.result, false).signed();
+    let result = EngineResult::of(first.result, Color::White).signed()
+        + EngineResult::of(second.result, Color::Black).signed();
     Ok(Some((result, [first.result, second.result])))
 }
 
@@ -265,8 +266,8 @@ fn worker(
         {
             let mut state = estimate.lock().map_err(|_| "estimate lock poisoned")?;
             state.apply(&job, result, config.pairs);
-            state.score.add(EngineResult::of(games[0], true));
-            state.score.add(EngineResult::of(games[1], false));
+            state.score.add(EngineResult::of(games[0], Color::White));
+            state.score.add(EngineResult::of(games[1], Color::Black));
             if state.completed % REPORT_EVERY == 0 {
                 report(&state, config, started);
             }

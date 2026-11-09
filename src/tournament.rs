@@ -4,7 +4,7 @@ use crate::game_runner::{
     Wdl, play_game,
 };
 use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
-use crate::types::START_FEN;
+use crate::types::{Color, START_FEN};
 use crate::uci_client::{EngineError, UciEngine, engine_display_name};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -48,16 +48,19 @@ pub fn engine_name(name: Option<String>, path: &str) -> String {
 const MAX_GAME_MOVES: usize = 300;
 
 /// Engine 1 plays white in the first game of each pair and black in the second.
-const fn e1_plays_white(game_idx: usize) -> bool {
-    game_idx.is_multiple_of(2)
+const fn e1_color(game_idx: usize) -> Color {
+    if game_idx.is_multiple_of(2) {
+        Color::White
+    } else {
+        Color::Black
+    }
 }
 
 impl TournamentConfig {
     fn game_config(&self, game_idx: usize) -> GameConfig {
-        let (white_clock, black_clock) = if e1_plays_white(game_idx) {
-            (self.engine1.clock, self.engine2.clock)
-        } else {
-            (self.engine2.clock, self.engine1.clock)
+        let (white_clock, black_clock) = match e1_color(game_idx) {
+            Color::White => (self.engine1.clock, self.engine2.clock),
+            Color::Black => (self.engine2.clock, self.engine1.clock),
         };
         GameConfig {
             white_clock,
@@ -93,15 +96,14 @@ struct Standings {
 }
 
 impl Standings {
-    /// Counts game `game_idx`, played by engine 1 as white when `e1_is_white`;
-    /// returns true when it completes a pair.
-    fn record(&mut self, outcome: &GameOutcome, e1_is_white: bool, game_idx: usize) -> bool {
-        let e1_result = EngineResult::of(outcome.result, e1_is_white);
+    /// Counts game `game_idx`, played by engine 1 as `e1_color`; returns true
+    /// when it completes a pair.
+    fn record(&mut self, outcome: &GameOutcome, e1_color: Color, game_idx: usize) -> bool {
+        let e1_result = EngineResult::of(outcome.result, e1_color);
         self.e1.add(e1_result);
-        if e1_is_white {
-            self.e1_as_white.add(e1_result);
-        } else {
-            self.e1_as_black.add(e1_result);
+        match e1_color {
+            Color::White => self.e1_as_white.add(e1_result),
+            Color::Black => self.e1_as_black.add(e1_result),
         }
         *self.terminations.entry(outcome.reason).or_default() += 1;
         self.total_plies += outcome.move_count;
@@ -485,13 +487,13 @@ impl Tournament {
         reason = "holding the lock keeps each printed line in step with its standings"
     )]
     fn record(&self, game_idx: usize, outcome: &GameOutcome) {
-        let e1_is_white = e1_plays_white(game_idx);
+        let e1_color = e1_color(game_idx);
         let mut standings = self
             .standings
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let pair_completed = standings.record(outcome, e1_is_white, game_idx);
-        print_game_line(&self.config, &standings, e1_is_white, outcome);
+        let pair_completed = standings.record(outcome, e1_color, game_idx);
+        print_game_line(&self.config, &standings, e1_color, outcome);
         if pair_completed {
             self.check_sprt(&mut standings);
         }
@@ -525,14 +527,13 @@ impl Tournament {
 fn print_game_line(
     config: &TournamentConfig,
     standings: &Standings,
-    e1_is_white: bool,
+    e1_color: Color,
     outcome: &GameOutcome,
 ) {
     let (e1_name, e2_name) = (config.engine1.name.as_str(), config.engine2.name.as_str());
-    let (white_name, black_name) = if e1_is_white {
-        (e1_name, e2_name)
-    } else {
-        (e2_name, e1_name)
+    let (white_name, black_name) = match e1_color {
+        Color::White => (e1_name, e2_name),
+        Color::Black => (e2_name, e1_name),
     };
     let result_str = match outcome.result {
         GameResult::WhiteWin => "1-0",
@@ -570,10 +571,9 @@ fn run_worker(tournament: &Tournament) {
     };
 
     while let Some(game_idx) = tournament.claim_game() {
-        let (white, black) = if e1_plays_white(game_idx) {
-            (&mut e1, &mut e2)
-        } else {
-            (&mut e2, &mut e1)
+        let (white, black) = match e1_color(game_idx) {
+            Color::White => (&mut e1, &mut e2),
+            Color::Black => (&mut e2, &mut e1),
         };
         let outcome = play_game(white, black, &config.game_config(game_idx));
         tournament.record(game_idx, &outcome);
@@ -687,12 +687,12 @@ mod tests {
     fn a_game_result_reads_from_each_engines_side() {
         use EngineResult::{Draw, Loss, Win};
         let results = [
-            EngineResult::of(GameResult::WhiteWin, true),
-            EngineResult::of(GameResult::WhiteWin, false),
-            EngineResult::of(GameResult::BlackWin, true),
-            EngineResult::of(GameResult::BlackWin, false),
-            EngineResult::of(GameResult::Draw, true),
-            EngineResult::of(GameResult::Draw, false),
+            EngineResult::of(GameResult::WhiteWin, Color::White),
+            EngineResult::of(GameResult::WhiteWin, Color::Black),
+            EngineResult::of(GameResult::BlackWin, Color::White),
+            EngineResult::of(GameResult::BlackWin, Color::Black),
+            EngineResult::of(GameResult::Draw, Color::White),
+            EngineResult::of(GameResult::Draw, Color::Black),
         ];
 
         assert_eq!(results, [Win, Loss, Loss, Win, Draw, Draw]);
@@ -704,12 +704,12 @@ mod tests {
 
         let first = standings.record(
             &outcome(GameResult::WhiteWin, GameEndReason::Checkmate, 40),
-            true,
+            Color::White,
             0,
         );
         let second = standings.record(
             &outcome(GameResult::WhiteWin, GameEndReason::FlagFall, 10),
-            false,
+            Color::Black,
             1,
         );
 
