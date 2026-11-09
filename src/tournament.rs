@@ -222,6 +222,8 @@ fn elo_error_95(wins: usize, losses: usize, draws: usize) -> Option<f64> {
 
 fn format_elo(wins: usize, losses: usize, draws: usize) -> String {
     match elo_diff(wins, losses, draws) {
+        // `{:+.0}` would show an estimate that rounds to zero as "+0" or "-0".
+        Some(e) if e.round() == 0.0 => "0".to_string(),
         Some(e) => format!("{:+.0}", e),
         None if wins > losses => "+inf".to_string(),
         None if losses > wins => "-inf".to_string(),
@@ -725,6 +727,13 @@ mod tests {
         assert_eq!(elo_error_95(0, 0, 0), None);
         assert_eq!(elo_error_95(4, 0, 0), None);
         assert!(elo_error_95(10, 10, 0).is_some_and(|e| e.is_finite() && e > 0.0));
+    }
+
+    #[test]
+    fn an_even_or_nearly_even_score_formats_as_zero_elo() {
+        let shown = [format_elo(2, 2, 0), format_elo(1000, 1001, 0)];
+
+        assert_eq!(shown, ["0", "0"]);
     }
 
     #[test]
