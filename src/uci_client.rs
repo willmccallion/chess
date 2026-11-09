@@ -1,6 +1,6 @@
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -83,7 +83,7 @@ fn is_static_eval_line(line: &str) -> bool {
 #[derive(Debug)]
 pub enum EngineError {
     Spawn {
-        path: String,
+        path: PathBuf,
         source: io::Error,
     },
     Send {
@@ -107,7 +107,9 @@ pub enum EngineError {
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Spawn { path, source } => write!(f, "Failed to spawn '{path}': {source}"),
+            Self::Spawn { path, source } => {
+                write!(f, "Failed to spawn '{}': {source}", path.display())
+            }
             Self::Send { engine, source } => write!(f, "send to {engine}: {source}"),
             Self::TimedOut { engine } => write!(f, "{engine}: read timed out"),
             Self::Died { engine } => write!(f, "{engine}: engine process died"),
@@ -128,9 +130,9 @@ impl std::error::Error for EngineError {
 }
 
 /// The error for a pipe that `Stdio::piped` should have opened.
-fn missing_pipe(path: &str, pipe: &str) -> EngineError {
+fn missing_pipe(path: &Path, pipe: &str) -> EngineError {
     EngineError::Spawn {
-        path: path.to_string(),
+        path: path.to_path_buf(),
         source: io::Error::other(format!("no {pipe} pipe")),
     }
 }
@@ -143,18 +145,18 @@ pub struct UciEngine {
 }
 
 /// The name a tool shows for the engine binary at `path`: its file name.
-pub fn engine_display_name(path: &str) -> &str {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
+pub fn engine_display_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 impl UciEngine {
     /// Starts the engine at `path`, on the CPUs `cpus` lists (taskset
     /// syntax) if given, completes the UCI handshake and sets `options`.
     pub fn start(
-        path: &str,
+        path: &Path,
         options: &[(String, String)],
         cpus: Option<&str>,
     ) -> Result<Self, EngineError> {
@@ -165,11 +167,11 @@ impl UciEngine {
         Ok(engine)
     }
 
-    fn spawn_pinned(path: &str, cpus: Option<&str>) -> Result<Self, EngineError> {
+    fn spawn_pinned(path: &Path, cpus: Option<&str>) -> Result<Self, EngineError> {
         let mut command = match cpus {
             Some(cpus) => {
                 let mut taskset = Command::new("taskset");
-                taskset.args(["-c", cpus, path]);
+                taskset.args(["-c", cpus]).arg(path);
                 taskset
             }
             None => Command::new(path),
@@ -180,7 +182,7 @@ impl UciEngine {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|source| EngineError::Spawn {
-                path: path.to_string(),
+                path: path.to_path_buf(),
                 source,
             })?;
 
@@ -208,7 +210,7 @@ impl UciEngine {
             }
         });
 
-        let name = engine_display_name(path).to_string();
+        let name = engine_display_name(path);
         Ok(Self {
             name,
             child,

@@ -19,6 +19,7 @@ use chess::types::{Color, START_FEN};
 use chess::uci;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 
 /// The hash size SPSA's engines use unless `--option` says otherwise; many
 /// games run at once.
@@ -359,9 +360,9 @@ impl BenchArgs {
 #[derive(Args)]
 struct ChallengeArgs {
     /// Path to engine 1 binary
-    engine1: String,
+    engine1: PathBuf,
     /// Path to engine 2 binary
-    engine2: String,
+    engine2: PathBuf,
     /// UCI options for engine 1 (e.g. "Threads=4")
     #[arg(long = "e1-option")]
     e1_options: Vec<String>,
@@ -397,7 +398,7 @@ struct ChallengeArgs {
     fen: Option<String>,
     /// EPD opening suite; each sampled opening is played twice with colors swapped
     #[arg(long)]
-    openings: Option<String>,
+    openings: Option<PathBuf>,
     /// Seed for sampling and ordering openings
     #[arg(long, default_value_t = 1)]
     seed: u64,
@@ -471,7 +472,7 @@ struct CompareArgs {
     fen: Vec<String>,
     /// EPD file to sample positions from
     #[arg(long)]
-    epd: Option<String>,
+    epd: Option<PathBuf>,
     /// Number of positions sampled from --epd
     #[arg(long, default_value_t = 20)]
     count: usize,
@@ -489,10 +490,10 @@ struct CompareArgs {
     ref_depth: Option<u32>,
     /// Engine to evaluate (default: this binary)
     #[arg(long)]
-    engine: Option<String>,
+    engine: Option<PathBuf>,
     /// Reference engine (default: $STOCKFISH, else `stockfish` on PATH)
     #[arg(long)]
-    reference: Option<String>,
+    reference: Option<PathBuf>,
     /// UCI options for the engine; OwnBook=false is always sent first
     #[arg(long = "e1-option")]
     e1_options: Vec<String>,
@@ -533,8 +534,8 @@ impl CompareArgs {
         let reference_go = ref_depth.map_or_else(|| engine_go.clone(), |d| format!("depth {d}"));
         let engine_path = engine.unwrap_or_else(own_binary);
         let reference_path = reference
-            .or_else(|| std::env::var("STOCKFISH").ok())
-            .unwrap_or_else(|| "stockfish".to_string());
+            .or_else(|| std::env::var_os("STOCKFISH").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("stockfish"));
         let config = CompareConfig {
             engine_path,
             reference_path,
@@ -554,10 +555,10 @@ impl CompareArgs {
 struct TuneArgs {
     /// EPD opening suite (e.g. $CHESS_BOOK_UHO)
     #[arg(long)]
-    openings: String,
+    openings: PathBuf,
     /// Engine binary to tune; defaults to this executable
     #[arg(long)]
-    engine: Option<String>,
+    engine: Option<PathBuf>,
     /// Planned number of game pairs (SPSA iterations)
     #[arg(long, default_value_t = 10_000)]
     pairs: usize,
@@ -578,10 +579,10 @@ struct TuneArgs {
     seed: u64,
     /// File the current estimate is written to
     #[arg(long, default_value = "spsa.txt")]
-    output: String,
+    output: PathBuf,
     /// Start from an estimate file written by an earlier run
     #[arg(long)]
-    resume: Option<String>,
+    resume: Option<PathBuf>,
     /// Extra UCI options for both engines (e.g. "Hash=16")
     #[arg(long = "option")]
     options: Vec<String>,
@@ -612,7 +613,7 @@ impl TuneArgs {
         let engine = engine.unwrap_or_else(own_binary);
         let start = match resume {
             Some(path) => std::fs::read_to_string(&path)
-                .map_err(|e| format!("{path}: {e}"))
+                .map_err(|e| format!("{}: {e}", path.display()))
                 .and_then(|text| spsa::read_estimate(&text))
                 .unwrap_or_else(|e| exit_with_error(&e)),
             None => Vec::new(),
@@ -631,7 +632,7 @@ impl TuneArgs {
             increment_ms: inc,
             workers,
             seed,
-            output: output.into(),
+            output,
             start,
         };
         match spsa::run(config) {
@@ -813,9 +814,8 @@ fn options_without_book(extra: &[String]) -> Vec<(String, String)> {
 }
 
 /// The path of this executable, which plays when no engine is named.
-fn own_binary() -> String {
-    std::env::current_exe().map_or_else(
-        |e| exit_with_error(&format!("cannot locate this binary ({e}); pass --engine")),
-        |path| path.to_string_lossy().into_owned(),
-    )
+fn own_binary() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|e| {
+        exit_with_error(&format!("cannot locate this binary ({e}); pass --engine"))
+    })
 }

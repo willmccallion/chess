@@ -7,6 +7,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 
 /// Turns an EPD line into a FEN by keeping the four position fields.
 pub fn epd_to_fen(line: &str) -> Option<String> {
@@ -23,9 +24,10 @@ pub fn epd_to_fen(line: &str) -> Option<String> {
 
 /// Picks `count` openings from the EPD file at `path` uniformly at random
 /// (reservoir sampling) in shuffled order.
-pub fn sample_openings(path: &str, count: usize, seed: u64) -> Result<Vec<StartPosition>, String> {
-    let file = File::open(path).map_err(|e| format!("cannot open openings '{path}': {e}"))?;
-    sample_from(BufReader::new(file), path, count, seed)
+pub fn sample_openings(path: &Path, count: usize, seed: u64) -> Result<Vec<StartPosition>, String> {
+    let source = path.display().to_string();
+    let file = File::open(path).map_err(|e| format!("cannot open openings '{source}': {e}"))?;
+    sample_from(BufReader::new(file), &source, count, seed)
 }
 
 /// [`sample_openings`] from the EPD lines of `epd`, which `source` names in

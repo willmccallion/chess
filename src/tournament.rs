@@ -7,6 +7,7 @@ use crate::sprt::{PairScore, Pentanomial, SprtConfig, SprtDecision};
 use crate::types::{Color, START_FEN};
 use crate::uci_client::{EngineError, UciEngine, engine_display_name};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
@@ -15,7 +16,7 @@ use std::time::Instant;
 /// One side of a tournament: the engine binary, the UCI options it is given,
 /// the name it is shown under and its clock.
 pub struct EngineSpec {
-    pub path: String,
+    pub path: PathBuf,
     pub options: Vec<(String, String)>,
     pub name: String,
     pub clock: GameClock,
@@ -40,8 +41,8 @@ pub struct TournamentConfig {
 }
 
 /// The name a tournament shows for an engine: `name` if given, else the binary's file name.
-pub fn engine_name(name: Option<String>, path: &str) -> String {
-    name.unwrap_or_else(|| engine_display_name(path).to_string())
+pub fn engine_name(name: Option<String>, path: &Path) -> String {
+    name.unwrap_or_else(|| engine_display_name(path))
 }
 
 /// The moves after which a game is called a draw.
@@ -163,7 +164,7 @@ fn format_pct(n: usize, total: usize) -> String {
 /// Starts an engine to play match games: on one search thread unless
 /// `options` set Threads.
 pub(crate) fn start_match_engine(
-    path: &str,
+    path: &Path,
     options: &[(String, String)],
     cpus: Option<&str>,
 ) -> Result<UciEngine, EngineError> {
@@ -404,8 +405,8 @@ fn check_engine_paths(config: &TournamentConfig) -> Result<(), String> {
         ("engine1", &config.engine1.path),
         ("engine2", &config.engine2.path),
     ] {
-        if !std::path::Path::new(path).exists() {
-            return Err(format!("{engine} path '{path}' not found"));
+        if !path.exists() {
+            return Err(format!("{engine} path '{}' not found", path.display()));
         }
     }
     Ok(())
@@ -618,7 +619,7 @@ mod tests {
 
     fn engine(name: &str, clock: GameClock) -> EngineSpec {
         EngineSpec {
-            path: String::new(),
+            path: PathBuf::new(),
             options: Vec::new(),
             name: name.to_string(),
             clock,
@@ -807,12 +808,12 @@ done
 "#;
 
     #[cfg(unix)]
-    fn write_engine(dir: &std::path::Path, name: &str, script: &str) -> String {
+    fn write_engine(dir: &Path, name: &str, script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.to_string_lossy().into_owned()
+        path
     }
 
     #[cfg(unix)]

@@ -63,7 +63,7 @@ pub fn parse_worker_groups(spec: &str) -> Result<Vec<WorkerGroup>, String> {
 }
 
 pub struct SpsaConfig {
-    pub engine: String,
+    pub engine: PathBuf,
     pub engine_options: Vec<(String, String)>,
     pub openings: Vec<StartPosition>,
     /// Planned number of game pairs (SPSA iterations).
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn a_won_pair_moves_values_toward_the_plus_side() {
         let config = SpsaConfig {
-            engine: String::new(),
+            engine: PathBuf::new(),
             engine_options: Vec::new(),
             openings: vec![StartPosition::parse(crate::types::START_FEN).unwrap()],
             pairs: 100,

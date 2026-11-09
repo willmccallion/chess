@@ -1,10 +1,11 @@
 //! Side-by-side analysis of positions by this engine and a reference engine (e.g. Stockfish).
 
 use crate::uci_client::{Analysis, EngineError, UciEngine, UciScore, engine_display_name};
+use std::path::PathBuf;
 
 pub struct CompareConfig {
-    pub engine_path: String,
-    pub reference_path: String,
+    pub engine_path: PathBuf,
+    pub reference_path: PathBuf,
     pub engine_options: Vec<(String, String)>,
     pub reference_options: Vec<(String, String)>,
     pub fens: Vec<String>,
@@ -185,7 +186,7 @@ pub fn run_compare(config: &CompareConfig) -> Result<(), EngineError> {
         comparisons.push(comparison);
     }
 
-    print_summary(&summarize(&comparisons), engine_name, reference_name);
+    print_summary(&summarize(&comparisons), &engine_name, &reference_name);
     engine.quit();
     reference.quit();
     Ok(())
