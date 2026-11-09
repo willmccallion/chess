@@ -2009,44 +2009,12 @@ fn iterative_deepening(
     let mut score = 0;
     let mut completed_score = None;
     for depth in 1..=limits.max_depth {
-        let previous_score = score;
         search.seldepth = 0;
-        let mut delta = search.params.aspiration_delta;
-        let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
-            (
-                (score - delta).max(-SCORE_BOUND),
-                (score + delta).min(SCORE_BOUND),
-            )
-        } else {
-            (-SCORE_BOUND, SCORE_BOUND)
-        };
-
-        let mut aborted = false;
-        let mut fail_highs = 0;
-        loop {
-            let search_depth = (depth as i32 - fail_highs).max(1);
-            let iteration = negamax(&mut search, alpha, beta, search_depth, NodeKind::All);
-            let (Ok(iteration_score), false) = (iteration, search.time.check_hard_limit()) else {
-                aborted = true;
-                break;
-            };
-            score = iteration_score;
-            if score <= alpha {
-                beta = i32::midpoint(alpha, beta);
-                alpha = (score - delta).max(-SCORE_BOUND);
-                fail_highs = 0;
-            } else if score >= beta {
-                beta = (score + delta).min(SCORE_BOUND);
-                fail_highs += 1;
-            } else {
-                break;
-            }
-            delta += delta / 2;
-        }
-
-        if aborted {
+        let Some(iteration_score) = aspiration_search(&mut search, depth, score) else {
             break;
-        }
+        };
+        let previous_score = score;
+        score = iteration_score;
         completed_score = Some(score);
 
         let best_move = search.root_best.map(|(m, _)| m);
@@ -2070,6 +2038,40 @@ fn iterative_deepening(
         best_move: search.root_best.map(|(m, _)| m),
         nodes: search.time.nodes,
         score: completed_score,
+    }
+}
+
+/// Searches the root to `depth` in a window around `previous`, the score of
+/// the last depth, widening it after each fail until the score lands inside.
+/// A fail high also searches a ply shallower. `None` if the search aborts.
+fn aspiration_search(search: &mut Search, depth: usize, previous: i32) -> Option<i32> {
+    let mut delta = search.params.aspiration_delta;
+    let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
+        (
+            (previous - delta).max(-SCORE_BOUND),
+            (previous + delta).min(SCORE_BOUND),
+        )
+    } else {
+        (-SCORE_BOUND, SCORE_BOUND)
+    };
+    let mut fail_highs = 0;
+    loop {
+        let search_depth = (depth as i32 - fail_highs).max(1);
+        let iteration = negamax(search, alpha, beta, search_depth, NodeKind::All);
+        let (Ok(score), false) = (iteration, search.time.check_hard_limit()) else {
+            return None;
+        };
+        if score <= alpha {
+            beta = i32::midpoint(alpha, beta);
+            alpha = (score - delta).max(-SCORE_BOUND);
+            fail_highs = 0;
+        } else if score >= beta {
+            beta = (score + delta).min(SCORE_BOUND);
+            fail_highs += 1;
+        } else {
+            return Some(score);
+        }
+        delta += delta / 2;
     }
 }
 
