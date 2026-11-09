@@ -551,6 +551,17 @@ impl Search<'_> {
         self.stack[(self.ply + 2).min(MAX_PLY)].cutoff_count = 0;
     }
 
+    /// The history score of `m` if it is quiet, else 0.
+    fn quiet_history_of(&self, m: Move, continuations: &[Option<ContinuationKey>; 2]) -> i32 {
+        if !m.is_quiet() {
+            return 0;
+        }
+        let piece = self.board.piece_on()[m.from.index()];
+        self.thread_data
+            .histories
+            .quiet_history(self.board.turn(), piece, m, continuations)
+    }
+
     fn is_allowed_root_move(&self, m: Move) -> bool {
         self.allowed_root_moves
             .is_none_or(|allowed| allowed.contains(&m))
@@ -1168,19 +1179,17 @@ enum Singularity {
     MultiCut(SearchScore),
 }
 
-/// Verifies whether the TT move is singular by searching the node without it.
-fn singular_extension(
-    search: &mut Search,
-    tt_move: Move,
-    tt_entry: Option<crate::tt::TTEntry>,
-    depth: Depth,
-    beta: SearchScore,
-    is_pv: bool,
-    node: NodeKind,
-) -> Result<Singularity, Aborted> {
-    let Some(entry) = tt_entry else {
+/// How much deeper to search `m` from `node`: when `m` is the TT move of a
+/// node below the root, whether it is singular, found by searching the node
+/// without it.
+fn singular_extension(search: &mut Search, node: &Node, m: Move) -> Result<Singularity, Aborted> {
+    let Some(entry) = node
+        .tt_entry
+        .filter(|_| Some(m) == node.tt_move && !node.is_root && node.excluded_move.is_none())
+    else {
         return Ok(Singularity::Extend(Depth::ZERO));
     };
+    let depth = node.depth;
     let tt_score = entry.score().at_ply(search.ply);
     let reliable = depth >= search.params.singular_min_depth
         && entry.depth() >= depth - search.params.singular_tt_depth_margin
@@ -1192,13 +1201,13 @@ fn singular_extension(
 
     let singular_beta = tt_score - search.params.singular_beta_per_depth_x16 * depth.plies() / 16;
     let singular_depth = (depth - Depth::ONE) / 2;
-    search.stack[search.ply].excluded_move = Some(tt_move);
+    search.stack[search.ply].excluded_move = Some(m);
     let singular_score = negamax(
         search,
         singular_beta - SearchScore::UNIT,
         singular_beta,
         singular_depth,
-        node,
+        node.kind,
     );
     search.stack[search.ply].excluded_move = None;
     let singular_score = singular_score?;
@@ -1207,13 +1216,13 @@ fn singular_extension(
     }
 
     Ok(if singular_score < singular_beta {
-        let double = !is_pv
+        let double = !node.is_pv
             && singular_score < singular_beta - search.params.double_extension_margin
             && search.stack[search.ply].double_extensions < MAX_DOUBLE_EXTENSIONS;
         Singularity::Extend(if double { DOUBLE_EXTENSION } else { Depth::ONE })
-    } else if singular_beta >= beta {
+    } else if singular_beta >= node.beta {
         Singularity::MultiCut(singular_beta)
-    } else if tt_score >= beta {
+    } else if tt_score >= node.beta {
         Singularity::Extend(Depth::new(-1))
     } else {
         Singularity::Extend(Depth::ZERO)
@@ -1228,53 +1237,44 @@ enum Pruning {
     SkipQuiets,
 }
 
-/// What the move-pruning rules weigh about a move and its node.
-#[derive(Clone, Copy)]
-struct PruningCandidate {
-    depth: Depth,
-    eval: SearchScore,
-    alpha: SearchScore,
-    is_quiet: bool,
-    quiets_seen: i32,
-    lmp_limit: i32,
-    quiet_history: i32,
-}
-
 impl Search<'_> {
-    /// Applies late-move, history, futility and SEE pruning to `m`.
-    fn prune_move(&self, m: Move, c: PruningCandidate) -> Pruning {
+    /// Applies late-move, history, futility and SEE pruning to the candidate
+    /// `c`; never at the root, in check, to the first move or once every move
+    /// so far loses to mate.
+    fn prune_move(&self, node: &Node, state: &MoveLoop, c: &Candidate) -> Pruning {
+        let Some(eval) = node.eval.map(|e| e.refined) else {
+            return Pruning::Search;
+        };
+        if node.is_root
+            || state.moves_searched == 0
+            || state.best_score <= -SearchScore::MATE_THRESHOLD
+        {
+            return Pruning::Search;
+        }
         let params = &self.params;
-        let shallow = c.depth <= params.move_pruning_max_depth;
+        let plies = node.depth.plies();
+        let shallow = node.depth <= params.move_pruning_max_depth;
         if !c.is_quiet {
-            let losing =
-                shallow && !see_ge(&self.board, m, -params.see_capture_margin * c.depth.plies());
+            let losing = shallow && !see_ge(&self.board, c.m, -params.see_capture_margin * plies);
             return if losing {
                 Pruning::Skip
             } else {
                 Pruning::Search
             };
         }
-        if c.quiets_seen > c.lmp_limit {
+        if state.quiets_seen > state.lmp_limit {
             return Pruning::SkipQuiets;
         }
-        if c.depth <= params.history_pruning_max_depth
-            && c.quiet_history < -params.history_pruning_margin * c.depth.plies()
+        if node.depth <= params.history_pruning_max_depth
+            && c.quiet_history < -params.history_pruning_margin * plies
         {
             return Pruning::Skip;
         }
-        if shallow
-            && c.eval + params.futility_base + params.futility_per_depth * c.depth.plies()
-                <= c.alpha
+        if shallow && eval + params.futility_base + params.futility_per_depth * plies <= state.alpha
         {
             return Pruning::SkipQuiets;
         }
-        if shallow
-            && !see_ge(
-                &self.board,
-                m,
-                -params.see_quiet_margin * c.depth.plies().pow(2),
-            )
-        {
+        if shallow && !see_ge(&self.board, c.m, -params.see_quiet_margin * plies.pow(2)) {
             return Pruning::Skip;
         }
         Pruning::Search
@@ -1331,13 +1331,48 @@ struct NodeBounds {
     best_score: SearchScore,
 }
 
-/// Searches a move after the first, already made on the board: with a null
-/// window at reduced depth, again at full depth if it beats alpha, and with
-/// the full window if it then lands inside a PV node's window.
+/// A move made on the board from `node`, about to be searched.
+struct MadeMove<'n> {
+    node: &'n Node,
+    candidate: Candidate,
+    /// The depth the move is searched to before any reduction.
+    new_depth: Depth,
+    /// Which legal move of the node this is, from 1.
+    moves_searched: i32,
+}
+
+/// Searches a move already made: the first with the node's full window,
+/// later ones through [`search_late_move`].
+fn search_made_move(
+    search: &mut Search,
+    m: &MadeMove,
+    state: &MoveLoop,
+) -> Result<SearchScore, Aborted> {
+    let node = m.node;
+    if m.moves_searched == 1 {
+        let child = node.kind.first_child(node.is_pv);
+        return Ok(-negamax(
+            search,
+            -node.beta,
+            -state.alpha,
+            m.new_depth,
+            child,
+        )?);
+    }
+    let bounds = NodeBounds {
+        alpha: state.alpha,
+        beta: node.beta,
+        best_score: state.best_score,
+    };
+    search_late_move(search, m, bounds)
+}
+
+/// Searches a move after the first: with a null window at reduced depth,
+/// again at full depth if it beats alpha, and with the full window if it
+/// then lands inside a PV node's window.
 fn search_late_move(
     search: &mut Search,
-    node_ply: usize,
-    m: LateMove,
+    m: &MadeMove,
     bounds: NodeBounds,
 ) -> Result<SearchScore, Aborted> {
     let NodeBounds {
@@ -1345,7 +1380,7 @@ fn search_late_move(
         beta,
         best_score,
     } = bounds;
-    let reduction = search.late_move_reduction(node_ply, m);
+    let reduction = search.late_move_reduction(m);
     let reduced_depth = m.new_depth - reduction;
     let mut score = -negamax(
         search,
@@ -1367,85 +1402,51 @@ fn search_late_move(
                 -alpha - SearchScore::UNIT,
                 -alpha,
                 research_depth,
-                m.node.opposite(),
+                m.node.kind.opposite(),
             )?;
         }
     }
-    if m.is_pv && score > alpha && score < beta {
+    if m.node.is_pv && score > alpha && score < beta {
         score = -negamax(search, -beta, -alpha, m.new_depth, NodeKind::All)?;
     }
     Ok(score)
 }
 
-/// What a late move's reduction weighs about the move and its node.
-#[derive(Clone, Copy)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "independent facts about the move"
-)]
-struct LateMove {
-    depth: Depth,
-    /// The depth the move is searched to before any reduction.
-    new_depth: Depth,
-    moves_searched: i32,
-    quiet_history: i32,
-    is_quiet: bool,
-    is_pv: bool,
-    in_check: bool,
-    node: NodeKind,
-    improving: bool,
-    killer_or_counter: bool,
-    tt_capture: bool,
-    tt_pv: bool,
-}
-
 impl Search<'_> {
-    /// How many plies to reduce a late move by, with the move made on the
-    /// board and `node_ply` the ply of the node it was played from.
-    fn late_move_reduction(&self, node_ply: usize, m: LateMove) -> Depth {
+    /// How many plies to reduce a late move by, with the move made on the board.
+    fn late_move_reduction(&self, m: &MadeMove) -> Depth {
+        let (node, c) = (m.node, &m.candidate);
         let params = &self.params;
-        if m.depth < params.lmr_min_depth || m.in_check || (m.is_pv && !m.is_quiet) {
+        if node.depth < params.lmr_min_depth || node.in_check || (node.is_pv && !c.is_quiet) {
             return Depth::ZERO;
         }
-        let gives_check = self.board.in_check();
-        let mut reduction_1024 = 1024
+        let child_cutoffs = i32::from(self.stack[self.ply].cutoff_count);
+        let adjustments_1024 = [
+            (!node.is_pv, params.lmr_non_pv_x1024),
+            (node.kind == NodeKind::Cut, params.lmr_cut_node_x1024),
+            (!node.improving, params.lmr_not_improving_x1024),
+            (c.killer_or_counter, -params.lmr_killer_or_counter_x1024),
+            (self.board.in_check(), -params.lmr_gives_check_x1024),
+            (
+                node.tt_move.is_some_and(Move::is_capture),
+                params.lmr_tt_capture_x1024,
+            ),
+            (node.tt_pv, -params.lmr_tt_pv_x1024),
+            (
+                child_cutoffs > params.child_cutoff_threshold,
+                params.lmr_child_cutoffs_x1024,
+            ),
+        ];
+        let reduction_1024 = 1024
             * self
                 .lmr
-                .base_reduction(m.depth, m.moves_searched, m.is_quiet);
-        reduction_1024 += if m.is_pv { 0 } else { params.lmr_non_pv_x1024 };
-        reduction_1024 += if m.node == NodeKind::Cut {
-            params.lmr_cut_node_x1024
-        } else {
-            0
-        };
-        reduction_1024 += if m.improving {
-            0
-        } else {
-            params.lmr_not_improving_x1024
-        };
-        reduction_1024 -= if m.killer_or_counter {
-            params.lmr_killer_or_counter_x1024
-        } else {
-            0
-        };
-        reduction_1024 -= if gives_check {
-            params.lmr_gives_check_x1024
-        } else {
-            0
-        };
-        reduction_1024 += if m.tt_capture {
-            params.lmr_tt_capture_x1024
-        } else {
-            0
-        };
-        reduction_1024 -= if m.tt_pv { params.lmr_tt_pv_x1024 } else { 0 };
-        let child_cutoffs = i32::from(self.stack[node_ply + 1].cutoff_count);
-        reduction_1024 += if child_cutoffs > params.child_cutoff_threshold {
-            params.lmr_child_cutoffs_x1024
-        } else {
-            0
-        };
-        let r = reduction_1024 / 1024 - m.quiet_history / params.lmr_history_divisor;
+                .base_reduction(node.depth, m.moves_searched, c.is_quiet)
+            + adjustments_1024
+                .iter()
+                .filter(|&&(applies, _)| applies)
+                .map(|&(_, adjustment)| adjustment)
+                .sum::<i32>();
+        let r = reduction_1024 / 1024 - c.quiet_history / params.lmr_history_divisor;
         Depth::new(r.clamp(0, (m.new_depth.plies() - 1).max(0)))
     }
 }
@@ -1613,6 +1614,8 @@ struct MoveLoop {
     best_move: Option<Move>,
     moves_searched: i32,
     quiets_seen: i32,
+    /// Quiet moves past this many are skipped.
+    lmp_limit: i32,
     tried: TriedMoves,
 }
 
@@ -1676,14 +1679,14 @@ fn search_moves(
     let counter_move = search.counter_move();
     let mut picker = MovePicker::new(node.tt_move, killers[0], killers[1], counter_move);
     let continuations = search.continuation_keys();
-    let lmp_limit =
-        (search.params.lmp_base + node.depth.plies().pow(2)) / (2 - i32::from(node.improving));
     let mut state = MoveLoop {
         alpha: node.alpha,
         best_score: -SearchScore::BOUND,
         best_move: None,
         moves_searched: 0,
         quiets_seen: 0,
+        lmp_limit: (search.params.lmp_base + node.depth.plies().pow(2))
+            / (2 - i32::from(node.improving)),
         tried: TriedMoves::default(),
     };
 
@@ -1698,53 +1701,23 @@ fn search_moves(
         if Some(m) == node.excluded_move || (node.is_root && !search.is_allowed_root_move(m)) {
             continue;
         }
-        let is_quiet = m.is_quiet();
-        if is_quiet {
-            state.quiets_seen += 1;
-        }
-        let quiet_history = if is_quiet {
-            let piece = search.board.piece_on()[m.from.index()];
-            search.thread_data.histories.quiet_history(
-                search.board.turn(),
-                piece,
-                m,
-                &continuations,
-            )
-        } else {
-            0
+        let c = Candidate {
+            m,
+            is_quiet: m.is_quiet(),
+            quiet_history: search.quiet_history_of(m, &continuations),
+            killer_or_counter: killers.contains(&Some(m)) || Some(m) == counter_move,
         };
-
-        let can_prune = !node.is_root
-            && !node.in_check
-            && state.moves_searched > 0
-            && state.best_score > -SearchScore::MATE_THRESHOLD;
-        if can_prune && let Some(e) = node.eval {
-            let candidate = PruningCandidate {
-                depth: node.depth,
-                eval: e.refined,
-                alpha: state.alpha,
-                is_quiet,
-                quiets_seen: state.quiets_seen,
-                lmp_limit,
-                quiet_history,
-            };
-            match search.prune_move(m, candidate) {
-                Pruning::Search => {}
-                Pruning::Skip => continue,
-                Pruning::SkipQuiets => {
-                    picker.skip_quiets();
-                    continue;
-                }
+        state.quiets_seen += i32::from(c.is_quiet);
+        match search.prune_move(node, &state, &c) {
+            Pruning::Search => {}
+            Pruning::Skip => continue,
+            Pruning::SkipQuiets => {
+                picker.skip_quiets();
+                continue;
             }
         }
 
-        let candidate = Candidate {
-            m,
-            is_quiet,
-            quiet_history,
-            killer_or_counter: killers.contains(&Some(m)) || Some(m) == counter_move,
-        };
-        let score = match search_move(search, node, &mut state, candidate)? {
+        let score = match search_move(search, node, &mut state, c)? {
             MoveSearch::Illegal => continue,
             MoveSearch::MultiCut(score) => return Ok(ControlFlow::Break(score)),
             MoveSearch::Scored(score) => score,
@@ -1760,29 +1733,16 @@ fn search_moves(
     Ok(ControlFlow::Continue(state))
 }
 
-/// Searches one move: extended if singular, the first with the full window
-/// and later ones through [`search_late_move`].
+/// Searches one move, extended if singular.
 fn search_move(
     search: &mut Search,
     node: &Node,
     state: &mut MoveLoop,
     c: Candidate,
 ) -> Result<MoveSearch, Aborted> {
-    let extension = if Some(c.m) == node.tt_move && !node.is_root && node.excluded_move.is_none() {
-        match singular_extension(
-            search,
-            c.m,
-            node.tt_entry,
-            node.depth,
-            node.beta,
-            node.is_pv,
-            node.kind,
-        )? {
-            Singularity::Extend(plies) => plies,
-            Singularity::MultiCut(score) => return Ok(MoveSearch::MultiCut(score)),
-        }
-    } else {
-        Depth::ZERO
+    let extension = match singular_extension(search, node, c.m)? {
+        Singularity::Extend(depth) => depth,
+        Singularity::MultiCut(score) => return Ok(MoveSearch::MultiCut(score)),
     };
     let node_ply = search.ply;
     let nodes_before = search.time.nodes;
@@ -1790,45 +1750,19 @@ fn search_move(
         return Ok(MoveSearch::Illegal);
     };
     state.moves_searched += 1;
-    let new_depth = node.depth - Depth::ONE + extension;
-    if extension >= DOUBLE_EXTENSION {
+    let is_double = extension >= DOUBLE_EXTENSION;
+    if is_double {
         search.stack[node_ply].double_extensions += 1;
     }
-
-    let score = if state.moves_searched == 1 {
-        negamax(
-            search,
-            -node.beta,
-            -state.alpha,
-            new_depth,
-            node.kind.first_child(node.is_pv),
-        )
-        .map(|score| -score)
-    } else {
-        let late_move = LateMove {
-            depth: node.depth,
-            new_depth,
-            moves_searched: state.moves_searched,
-            quiet_history: c.quiet_history,
-            is_quiet: c.is_quiet,
-            is_pv: node.is_pv,
-            in_check: node.in_check,
-            node: node.kind,
-            improving: node.improving,
-            killer_or_counter: c.killer_or_counter,
-            tt_capture: node.tt_move.is_some_and(Move::is_capture),
-            tt_pv: node.tt_pv,
-        };
-        let bounds = NodeBounds {
-            alpha: state.alpha,
-            beta: node.beta,
-            best_score: state.best_score,
-        };
-        search_late_move(search, node_ply, late_move, bounds)
+    let made = MadeMove {
+        node,
+        candidate: c,
+        new_depth: node.depth - Depth::ONE + extension,
+        moves_searched: state.moves_searched,
     };
-
+    let score = search_made_move(search, &made, state);
     search.unmake_move(c.m, undo);
-    if extension >= DOUBLE_EXTENSION {
+    if is_double {
         search.stack[node_ply].double_extensions -= 1;
     }
     if node.is_root {
