@@ -207,9 +207,10 @@ fn format_elo(wins: usize, losses: usize, draws: usize) -> String {
     }
 }
 
+/// `n` as a percentage of `total`, six characters wide.
 fn format_pct(n: usize, total: usize) -> String {
     if total == 0 {
-        "  -  ".to_string()
+        format!("{:>6}", "-")
     } else {
         format!("{:5.1}%", n as f64 / total as f64 * 100.0)
     }
@@ -302,10 +303,10 @@ fn print_score_lines(s: &Score, elapsed: f64) {
 
 fn print_head_to_head(s: &Score, e1_name: &str, e2_name: &str) {
     let w = e1_name.len().max(e2_name.len()).max(6);
-    let border = format!("  +-{0:-<w$}-+------+------+------+-------+-------+", "");
+    let border = format!("  +-{0:-<w$}-+------+------+------+--------+-------+", "");
     println!("{border}");
     println!(
-        "  | {0:<w$} | {1:>4} | {2:>4} | {3:>4} | {4:>5} | {5:>5} |",
+        "  | {0:<w$} | {1:>4} | {2:>4} | {3:>4} | {4:>6} | {5:>5} |",
         "Engine", "W", "L", "D", "Score", "Pts",
     );
     println!("{border}");
@@ -328,11 +329,11 @@ fn print_head_to_head_row(name: &str, wdl: Wdl, w: usize) {
 
 /// Engine 1's results as white and as black.
 fn print_colour_breakdown(s: &Score, e1_name: &str) {
-    let border = "  +-----------+------+------+------+-------+";
+    let border = "  +-----------+------+------+------+--------+";
     println!("  White/Black Breakdown (from {}'s perspective):", e1_name);
     println!("{border}");
     println!(
-        "  | Color     | {0:>4} | {1:>4} | {2:>4} | {3:>5} |",
+        "  | Color     | {0:>4} | {1:>4} | {2:>4} | {3:>6} |",
         "W", "L", "D", "Score"
     );
     println!("{border}");
@@ -685,6 +686,13 @@ mod tests {
         assert_eq!(elo_error_95(0, 0, 0), None);
         assert_eq!(elo_error_95(4, 0, 0), None);
         assert!(elo_error_95(10, 10, 0).is_some_and(|e| e.is_finite() && e > 0.0));
+    }
+
+    #[test]
+    fn percentages_fill_the_six_character_score_column() {
+        let shown = [format_pct(1, 3), format_pct(3, 3), format_pct(0, 0)];
+
+        assert_eq!(shown, [" 33.3%", "100.0%", "     -"]);
     }
 
     #[test]
