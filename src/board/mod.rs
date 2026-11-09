@@ -1,5 +1,6 @@
+pub mod fen;
+
 use crate::eval::{EvalState, IncrementalState, PositionView};
-use crate::fen;
 use crate::magics;
 use crate::types::{
     BK_CASTLE, BQ_CASTLE, Bitboard, CASTLINGS, Castling, Color, Move, MoveList, PROMOTION_PIECES,

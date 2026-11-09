@@ -6,7 +6,7 @@ pub mod compare;
 pub mod datagen;
 mod elo;
 pub mod eval;
-pub mod fen;
+pub use board::fen;
 pub mod game_runner;
 pub mod history;
 pub mod legality;
