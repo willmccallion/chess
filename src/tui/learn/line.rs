@@ -382,6 +382,72 @@ impl LineScreen {
             Line::styled(self.line.plan.to_string(), Style::new().fg(TEXT)),
         ]
     }
+
+    /// Plays or rejects a move the board makes of `key` in a drill; false
+    /// when the board does not take the key.
+    fn board_takes(&mut self, key: KeyEvent, data: &mut CoachData) -> bool {
+        match self.panel.key(key, self.your_turn_in_drill()) {
+            BoardKey::Move(m) => self.play(m, data),
+            BoardKey::Invalid(text) => self.message = Some(text),
+            BoardKey::Handled => {}
+            BoardKey::NotHandled => return false,
+        }
+        true
+    }
+
+    /// Steps through the lesson, or starts the drill.
+    fn lesson_key(&mut self, key: KeyEvent) {
+        let Mode::Lesson { cursor } = &mut self.mode else {
+            return;
+        };
+        let shown = match key.code {
+            KeyCode::Right | KeyCode::Char('l' | ' ') => (*cursor + 1).min(self.moves.len()),
+            KeyCode::Left | KeyCode::Char('h') => cursor.saturating_sub(1),
+            KeyCode::Enter | KeyCode::Char('d') => return self.start_drill(),
+            _ => return,
+        };
+        *cursor = shown;
+        self.show(shown);
+    }
+
+    /// Shows the next move of the line as a hint, or restarts.
+    fn drill_key(&mut self, key: KeyEvent) {
+        let Mode::Drill {
+            ply, misses, shown, ..
+        } = &mut self.mode
+        else {
+            return;
+        };
+        match key.code {
+            KeyCode::Char('h') if self.line.is_yours(*ply) && !*shown => {
+                *misses += 1;
+                *shown = true;
+                let ply = *ply;
+                self.message = self
+                    .step_text(ply)
+                    .map(|(san, note)| format!("The line plays {san}. {note}"));
+            }
+            KeyCode::Char('r') => self.start_drill(),
+            KeyCode::Char('l') => self.start_lesson(),
+            _ => {}
+        }
+    }
+
+    /// Moves on to the next queued line, or goes over this one again.
+    fn done_key(&mut self, key: KeyEvent) -> Nav {
+        match key.code {
+            KeyCode::Enter if self.queue.is_empty() => return Nav::Back,
+            KeyCode::Enter => {
+                let next = self.queue.remove(0);
+                let rest = std::mem::take(&mut self.queue);
+                return Nav::Replace(Box::new(Self::drill(next, rest)));
+            }
+            KeyCode::Char('r') => self.start_drill(),
+            KeyCode::Char('l') => self.start_lesson(),
+            _ => {}
+        }
+        Nav::Stay
+    }
 }
 
 impl Screen for LineScreen {
@@ -431,19 +497,8 @@ impl Screen for LineScreen {
             self.help = false;
             return Nav::Stay;
         }
-        if matches!(self.mode, Mode::Drill { .. }) {
-            match self.panel.key(key, self.your_turn_in_drill()) {
-                BoardKey::Move(m) => {
-                    self.play(m, data);
-                    return Nav::Stay;
-                }
-                BoardKey::Invalid(text) => {
-                    self.message = Some(text);
-                    return Nav::Stay;
-                }
-                BoardKey::Handled => return Nav::Stay,
-                BoardKey::NotHandled => {}
-            }
+        if matches!(self.mode, Mode::Drill { .. }) && self.board_takes(key, data) {
+            return Nav::Stay;
         }
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Nav::Back,
@@ -452,49 +507,10 @@ impl Screen for LineScreen {
             KeyCode::Char('?') => self.help = true,
             _ => {}
         }
-        match &mut self.mode {
-            Mode::Lesson { cursor } => match key.code {
-                KeyCode::Right | KeyCode::Char('l' | ' ') => {
-                    *cursor = (*cursor + 1).min(self.moves.len());
-                    let c = *cursor;
-                    self.show(c);
-                }
-                KeyCode::Left | KeyCode::Char('h') => {
-                    *cursor = cursor.saturating_sub(1);
-                    let c = *cursor;
-                    self.show(c);
-                }
-                KeyCode::Enter | KeyCode::Char('d') => self.start_drill(),
-                _ => {}
-            },
-            Mode::Drill {
-                ply, misses, shown, ..
-            } => match key.code {
-                KeyCode::Char('h') if self.line.is_yours(*ply) && !*shown => {
-                    *misses += 1;
-                    *shown = true;
-                    let ply = *ply;
-                    self.message = self
-                        .step_text(ply)
-                        .map(|(san, note)| format!("The line plays {san}. {note}"));
-                }
-                KeyCode::Char('r') => self.start_drill(),
-                KeyCode::Char('l') => self.start_lesson(),
-                _ => {}
-            },
-            Mode::Done { .. } => match key.code {
-                KeyCode::Enter => {
-                    if self.queue.is_empty() {
-                        return Nav::Back;
-                    }
-                    let next = self.queue.remove(0);
-                    let rest = std::mem::take(&mut self.queue);
-                    return Nav::Replace(Box::new(Self::drill(next, rest)));
-                }
-                KeyCode::Char('r') => self.start_drill(),
-                KeyCode::Char('l') => self.start_lesson(),
-                _ => {}
-            },
+        match self.mode {
+            Mode::Lesson { .. } => self.lesson_key(key),
+            Mode::Drill { .. } => self.drill_key(key),
+            Mode::Done { .. } => return self.done_key(key),
         }
         Nav::Stay
     }
