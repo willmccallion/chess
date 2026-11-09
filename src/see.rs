@@ -1,6 +1,6 @@
 use crate::board::Board;
 use crate::magics;
-use crate::types::{Bitboard, Color, Move, Piece, PieceKind};
+use crate::types::{Bitboard, Move, Piece, PieceKind};
 
 /// Exchange values indexed by `PieceKind` (P, N, B, R, Q, K).
 pub const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
@@ -162,26 +162,14 @@ fn kind_value(kind: PieceKind) -> i32 {
     PIECE_VALUES[kind as usize]
 }
 
-fn pieces_of(b: &Board, kind: PieceKind) -> Bitboard {
-    b.piece_bb[Piece::from_kind(kind, Color::White).index()]
-        | b.piece_bb[Piece::from_kind(kind, Color::Black).index()]
-}
-
-fn color_pieces(b: &Board, color: Color) -> Bitboard {
-    match color {
-        Color::White => b.w_pieces,
-        Color::Black => b.b_pieces,
-    }
-}
-
 /// All pieces of both colors attacking `sq` given the occupancy `occupied`.
 fn attackers_to(b: &Board, sq: usize, occupied: Bitboard) -> Bitboard {
-    let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
-    let bishops_queens = pieces_of(b, PieceKind::Bishop) | pieces_of(b, PieceKind::Queen);
+    let rooks_queens = b.kind_bb(PieceKind::Rook) | b.kind_bb(PieceKind::Queen);
+    let bishops_queens = b.kind_bb(PieceKind::Bishop) | b.kind_bb(PieceKind::Queen);
     (magics::BLACK_PAWN_ATTACKS[sq] & b.piece_bb[Piece::WP.index()])
         | (magics::WHITE_PAWN_ATTACKS[sq] & b.piece_bb[Piece::BP.index()])
-        | (magics::knight_attacks_from(sq) & pieces_of(b, PieceKind::Knight))
-        | (magics::king_attacks_from(sq) & pieces_of(b, PieceKind::King))
+        | (magics::knight_attacks_from(sq) & b.kind_bb(PieceKind::Knight))
+        | (magics::king_attacks_from(sq) & b.kind_bb(PieceKind::King))
         | (magics::get_rook_attacks(sq, occupied) & rooks_queens)
         | (magics::get_bishop_attacks(sq, occupied) & bishops_queens)
 }
@@ -226,8 +214,8 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
     if m.en_passant {
         occupied ^= 1u64 << m.captured_square(b.turn);
     }
-    let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
-    let bishops_queens = pieces_of(b, PieceKind::Bishop) | pieces_of(b, PieceKind::Queen);
+    let rooks_queens = b.kind_bb(PieceKind::Rook) | b.kind_bb(PieceKind::Queen);
+    let bishops_queens = b.kind_bb(PieceKind::Bishop) | b.kind_bb(PieceKind::Queen);
 
     let mut side = b.turn;
     let mut attackers = attackers_to(b, to, occupied);
@@ -236,7 +224,7 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
     loop {
         side = side.other();
         attackers &= occupied;
-        let side_attackers = attackers & color_pieces(b, side);
+        let side_attackers = attackers & b.pieces_of(side);
         if side_attackers == 0 {
             break;
         }
@@ -244,14 +232,14 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
 
         let Some((kind, attacker_bb)) = SEE_ORDER
             .iter()
-            .map(|&kind| (kind, side_attackers & pieces_of(b, kind)))
+            .map(|&kind| (kind, side_attackers & b.kind_bb(kind)))
             .find(|&(_, bb)| bb != 0)
         else {
             break;
         };
 
         if kind == PieceKind::King {
-            let opponent_still_attacks = attackers & color_pieces(b, side.other()) != 0;
+            let opponent_still_attacks = attackers & b.pieces_of(side.other()) != 0;
             return if opponent_still_attacks {
                 !result
             } else {

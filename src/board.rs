@@ -8,8 +8,8 @@ use crate::zobrist;
 pub struct Board {
     pub piece_bb: [Bitboard; 13],
     pub piece_on: [Piece; 64],
-    pub w_pieces: Bitboard,
-    pub b_pieces: Bitboard,
+    /// Each colour's pieces, indexed by `Color`.
+    pub color_bb: [Bitboard; 2],
     pub all_pieces: Bitboard,
     pub turn: Color,
     pub castle: u8,
@@ -28,8 +28,7 @@ impl Board {
         Self {
             piece_bb: [0; 13],
             piece_on: [Piece::Empty; 64],
-            w_pieces: 0,
-            b_pieces: 0,
+            color_bb: [0; 2],
             all_pieces: 0,
             turn: Color::White,
             castle: 0,
@@ -72,6 +71,24 @@ impl Board {
                 .any(|&sq| self.is_square_attacked(sq, self.turn.other()))
     }
 
+    /// `color`'s pieces.
+    #[inline(always)]
+    pub const fn pieces_of(&self, color: Color) -> Bitboard {
+        self.color_bb[color as usize]
+    }
+
+    /// `color`'s pieces of `kind`.
+    #[inline(always)]
+    pub const fn pieces(&self, kind: PieceKind, color: Color) -> Bitboard {
+        self.piece_bb[Piece::from_kind(kind, color).index()]
+    }
+
+    /// Both colours' pieces of `kind`.
+    #[inline(always)]
+    pub const fn kind_bb(&self, kind: PieceKind) -> Bitboard {
+        self.pieces(kind, Color::White) | self.pieces(kind, Color::Black)
+    }
+
     /// Whether the side to move's king is attacked; a board without that
     /// king is not in check.
     #[inline(always)]
@@ -95,21 +112,18 @@ impl Board {
     #[inline]
     pub fn rebuild_derived(&mut self) {
         self.piece_bb = [0; 13];
-        self.w_pieces = 0;
-        self.b_pieces = 0;
+        self.color_bb = [0; 2];
 
         for sq in 0..64 {
             let p = self.piece_on[sq];
             if !p.is_empty() {
                 self.piece_bb[p.index()] |= 1u64 << sq;
-                match p.color() {
-                    Some(Color::White) => self.w_pieces |= 1u64 << sq,
-                    Some(Color::Black) => self.b_pieces |= 1u64 << sq,
-                    _ => {}
+                if let Some(color) = p.color() {
+                    self.color_bb[color as usize] |= 1u64 << sq;
                 }
             }
         }
-        self.all_pieces = self.w_pieces | self.b_pieces;
+        self.all_pieces = self.color_bb[0] | self.color_bb[1];
         self.eval_state.reset();
     }
 
@@ -270,7 +284,7 @@ impl Board {
         let white = self.turn == Color::White;
         let pawn = if white { Piece::WP } else { Piece::BP };
         let pawns = self.piece_bb[pawn.index()];
-        let enemy = if white { self.b_pieces } else { self.w_pieces };
+        let enemy = self.pieces_of(self.turn.other());
         let dir = if white { 8 } else { -8 };
         let start_rank = if white { 1 } else { 6 };
         let promo_rank = if white { 6 } else { 1 };
@@ -389,7 +403,7 @@ impl Board {
     #[inline]
     fn gen_leapers(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
-        let friendly = if white { self.w_pieces } else { self.b_pieces };
+        let friendly = self.pieces_of(self.turn);
 
         let kn = if white { Piece::WN } else { Piece::BN };
         let mut bb = self.piece_bb[kn.index()];
@@ -459,8 +473,8 @@ impl Board {
     #[inline]
     fn gen_sliders(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
-        let friendly = if white { self.w_pieces } else { self.b_pieces };
-        let enemy = if white { self.b_pieces } else { self.w_pieces };
+        let friendly = self.pieces_of(self.turn);
+        let enemy = self.pieces_of(self.turn.other());
         let occ = self.all_pieces;
         let b_piece = if white { Piece::WB } else { Piece::BB };
 
@@ -560,7 +574,7 @@ impl Board {
         let white = self.turn == Color::White;
         let pawn = if white { Piece::WP } else { Piece::BP };
         let pawns = self.piece_bb[pawn.index()];
-        let enemy = if white { self.b_pieces } else { self.w_pieces };
+        let enemy = self.pieces_of(self.turn.other());
         let dir: i32 = if white { 8 } else { -8 };
         let promo_rank = if white { 6 } else { 1 };
         let mut bb = pawns;
@@ -693,7 +707,7 @@ impl Board {
 
     fn gen_leaper_captures(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
-        let enemy = if white { self.b_pieces } else { self.w_pieces };
+        let enemy = self.pieces_of(self.turn.other());
 
         // Knights
         let kn = if white { Piece::WN } else { Piece::BN };
@@ -792,7 +806,7 @@ impl Board {
 
     fn gen_slider_captures(&self, out: &mut MoveList) {
         let white = self.turn == Color::White;
-        let enemy = if white { self.b_pieces } else { self.w_pieces };
+        let enemy = self.pieces_of(self.turn.other());
         let occ = self.all_pieces;
 
         // Bishops
@@ -1073,11 +1087,7 @@ impl Board {
         self.piece_on[from] = Piece::Empty;
         self.piece_bb[moving.index()] ^= 1u64 << from;
 
-        match moving.color() {
-            Some(Color::White) => self.w_pieces ^= 1u64 << from,
-            Some(Color::Black) => self.b_pieces ^= 1u64 << from,
-            _ => {}
-        }
+        self.color_bb[self.turn as usize] ^= 1u64 << from;
 
         if m.capture {
             let cap_sq = m.captured_square(self.turn);
@@ -1087,11 +1097,7 @@ impl Board {
                 self.zobrist ^= zobrist::ZOB.piece_key(captured, cap_sq);
                 self.piece_on[cap_sq] = Piece::Empty;
                 self.piece_bb[captured.index()] ^= 1u64 << cap_sq;
-                match captured.color() {
-                    Some(Color::White) => self.w_pieces ^= 1u64 << cap_sq,
-                    Some(Color::Black) => self.b_pieces ^= 1u64 << cap_sq,
-                    _ => {}
-                }
+                self.color_bb[self.turn.other() as usize] ^= 1u64 << cap_sq;
             }
         }
 
@@ -1106,11 +1112,7 @@ impl Board {
             self.zobrist ^= zobrist::ZOB.piece_key(moving, to);
         }
 
-        match moving.color() {
-            Some(Color::White) => self.w_pieces |= 1u64 << to,
-            Some(Color::Black) => self.b_pieces |= 1u64 << to,
-            _ => {}
-        }
+        self.color_bb[self.turn as usize] |= 1u64 << to;
 
         if m.castle {
             let (rook_from, rook_to) = castling_rook_squares(from, to);
@@ -1123,10 +1125,7 @@ impl Board {
             let rook_bb = (1u64 << rook_from) | (1u64 << rook_to);
             self.piece_bb[rook_piece.index()] ^= rook_bb;
 
-            match rook_piece.color().unwrap() {
-                Color::White => self.w_pieces ^= rook_bb,
-                Color::Black => self.b_pieces ^= rook_bb,
-            }
+            self.color_bb[self.turn as usize] ^= rook_bb;
         }
 
         if m.double_push {
@@ -1169,7 +1168,7 @@ impl Board {
         }
         self.zobrist ^= zobrist::ZOB.castle[(self.castle & 0xF) as usize];
 
-        self.all_pieces = self.w_pieces | self.b_pieces;
+        self.all_pieces = self.color_bb[0] | self.color_bb[1];
         self.zobrist ^= zobrist::ZOB.side;
         if self.turn == Color::Black {
             self.fullmove_number += 1;
@@ -1197,8 +1196,7 @@ impl Board {
         Self {
             piece_bb: self.piece_bb,
             piece_on: self.piece_on,
-            w_pieces: self.w_pieces,
-            b_pieces: self.b_pieces,
+            color_bb: self.color_bb,
             all_pieces: self.all_pieces,
             turn: self.turn,
             castle: self.castle,
@@ -1258,22 +1256,10 @@ impl Board {
 
         self.piece_on[from] = moving_piece;
         self.piece_bb[moving_piece.index()] |= 1u64 << from;
-        if let Some(c) = moving_piece.color() {
-            if c == Color::White {
-                self.w_pieces |= 1u64 << from;
-            } else {
-                self.b_pieces |= 1u64 << from;
-            }
-        }
+        self.color_bb[self.turn as usize] |= 1u64 << from;
 
         self.piece_bb[piece_on_to.index()] &= !(1u64 << to);
-        if let Some(c) = piece_on_to.color() {
-            if c == Color::White {
-                self.w_pieces &= !(1u64 << to);
-            } else {
-                self.b_pieces &= !(1u64 << to);
-            }
-        }
+        self.color_bb[self.turn as usize] &= !(1u64 << to);
 
         if m.capture {
             let captured = u.captured_piece;
@@ -1286,13 +1272,7 @@ impl Board {
             self.piece_on[cap_sq] = captured;
             if !captured.is_empty() {
                 self.piece_bb[captured.index()] |= 1u64 << cap_sq;
-                if let Some(c) = captured.color() {
-                    if c == Color::White {
-                        self.w_pieces |= 1u64 << cap_sq;
-                    } else {
-                        self.b_pieces |= 1u64 << cap_sq;
-                    }
-                }
+                self.color_bb[self.turn.other() as usize] |= 1u64 << cap_sq;
             }
         } else {
             self.piece_on[to] = Piece::Empty;
@@ -1306,13 +1286,10 @@ impl Board {
 
             let rook_bb = (1u64 << rook_from) | (1u64 << rook_to);
             self.piece_bb[rook.index()] ^= rook_bb;
-            match rook.color().unwrap() {
-                Color::White => self.w_pieces ^= rook_bb,
-                Color::Black => self.b_pieces ^= rook_bb,
-            }
+            self.color_bb[self.turn as usize] ^= rook_bb;
         }
 
-        self.all_pieces = self.w_pieces | self.b_pieces;
+        self.all_pieces = self.color_bb[0] | self.color_bb[1];
     }
 
     #[inline]
@@ -1533,7 +1510,10 @@ mod tests {
                     "{m:?} from {}",
                     before.to_fen()
                 );
-                assert_eq!(board.all_pieces, board.w_pieces | board.b_pieces);
+                assert_eq!(
+                    board.all_pieces,
+                    board.pieces_of(Color::White) | board.pieces_of(Color::Black)
+                );
 
                 board.unmake_move(m, undo);
                 assert_eq!(

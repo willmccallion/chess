@@ -105,7 +105,7 @@ impl Piece {
     }
 
     #[inline(always)]
-    pub fn from_kind(kind: PieceKind, color: Color) -> Self {
+    pub const fn from_kind(kind: PieceKind, color: Color) -> Self {
         match (kind, color) {
             (PieceKind::Pawn, Color::White) => Piece::WP,
             (PieceKind::Knight, Color::White) => Piece::WN,
@@ -123,7 +123,7 @@ impl Piece {
     }
 
     #[inline(always)]
-    pub fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self as usize
     }
 }

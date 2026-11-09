@@ -524,11 +524,7 @@ fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
 }
 
 fn has_non_pawn_material(board: &Board) -> bool {
-    let our_pieces = if board.turn == crate::types::Color::White {
-        board.w_pieces
-    } else {
-        board.b_pieces
-    };
+    let our_pieces = board.pieces_of(board.turn);
     let pawns_and_kings = board.piece_bb[Piece::WP.index()]
         | board.piece_bb[Piece::BP.index()]
         | board.piece_bb[Piece::WK.index()]

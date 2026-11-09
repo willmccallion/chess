@@ -2,7 +2,7 @@
 
 use crate::board::Board;
 use crate::magics;
-use crate::types::{Bitboard, Color, Move, Piece, PieceKind};
+use crate::types::{Bitboard, Color, Move, PieceKind};
 use std::sync::OnceLock;
 
 struct LineTables {
@@ -66,17 +66,6 @@ impl LegalityInfo {
     }
 }
 
-fn pieces(board: &Board, kind: PieceKind, color: Color) -> Bitboard {
-    board.piece_bb[Piece::from_kind(kind, color).index()]
-}
-
-fn color_pieces(board: &Board, color: Color) -> Bitboard {
-    match color {
-        Color::White => board.w_pieces,
-        Color::Black => board.b_pieces,
-    }
-}
-
 /// Pieces of `by` attacking `sq` when the board occupancy is `occupied`, ignoring
 /// any of their pieces in `removed` (e.g. one just captured).
 fn attackers_of(
@@ -90,12 +79,12 @@ fn attackers_of(
         Color::White => magics::BLACK_PAWN_ATTACKS[sq],
         Color::Black => magics::WHITE_PAWN_ATTACKS[sq],
     };
-    let queens = pieces(board, PieceKind::Queen, by);
-    let rook_like = pieces(board, PieceKind::Rook, by) | queens;
-    let bishop_like = pieces(board, PieceKind::Bishop, by) | queens;
-    let attackers = (pawn_attacks & pieces(board, PieceKind::Pawn, by))
-        | (magics::knight_attacks_from(sq) & pieces(board, PieceKind::Knight, by))
-        | (magics::king_attacks_from(sq) & pieces(board, PieceKind::King, by))
+    let queens = board.pieces(PieceKind::Queen, by);
+    let rook_like = board.pieces(PieceKind::Rook, by) | queens;
+    let bishop_like = board.pieces(PieceKind::Bishop, by) | queens;
+    let attackers = (pawn_attacks & board.pieces(PieceKind::Pawn, by))
+        | (magics::knight_attacks_from(sq) & board.pieces(PieceKind::Knight, by))
+        | (magics::king_attacks_from(sq) & board.pieces(PieceKind::King, by))
         | (magics::get_rook_attacks(sq, occupied) & rook_like)
         | (magics::get_bishop_attacks(sq, occupied) & bishop_like);
     attackers & !removed
@@ -106,20 +95,20 @@ impl Board {
     pub fn legality_info(&self) -> Option<LegalityInfo> {
         let us = self.turn;
         let them = us.other();
-        let king_bb = pieces(self, PieceKind::King, us);
+        let king_bb = self.pieces(PieceKind::King, us);
         if king_bb == 0 {
             return None;
         }
         let king_sq = king_bb.trailing_zeros() as usize;
         let checkers = attackers_of(self, king_sq, them, self.all_pieces, 0);
 
-        let queens = pieces(self, PieceKind::Queen, them);
+        let queens = self.pieces(PieceKind::Queen, them);
         let snipers = (magics::get_rook_attacks(king_sq, 0)
-            & (pieces(self, PieceKind::Rook, them) | queens))
+            & (self.pieces(PieceKind::Rook, them) | queens))
             | (magics::get_bishop_attacks(king_sq, 0)
-                & (pieces(self, PieceKind::Bishop, them) | queens));
+                & (self.pieces(PieceKind::Bishop, them) | queens));
         let tables = line_tables();
-        let ours = color_pieces(self, us);
+        let ours = self.pieces_of(us);
         let mut pinned = 0;
         let mut remaining = snipers;
         while remaining != 0 {
