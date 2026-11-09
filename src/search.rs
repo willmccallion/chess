@@ -936,6 +936,70 @@ enum ProbCut {
     Aborted,
 }
 
+/// What razoring, reverse futility and null-move pruning weigh about a
+/// non-PV node with a static evaluation.
+#[derive(Clone, Copy)]
+struct NodePruning {
+    depth: i32,
+    eval: i32,
+    alpha: i32,
+    beta: i32,
+    improving: bool,
+    node: NodeKind,
+    /// The node is searched without its TT move to test that move's singularity.
+    is_singular_search: bool,
+}
+
+/// The score a node returns without searching its moves, when its static
+/// evaluation is far enough outside the window.
+fn prune_node(s: &mut Search, n: NodePruning) -> Option<i32> {
+    let razor_margin = s.params.razor_margin + s.params.razor_depth_sq_margin * n.depth * n.depth;
+    if n.eval < n.alpha - razor_margin {
+        let q_score = quiesce(s, n.alpha, n.beta);
+        if q_score < n.alpha {
+            return Some(q_score);
+        }
+    }
+    if n.depth <= s.params.rfp_max_depth
+        && n.eval - s.params.rfp_margin * (n.depth - i32::from(n.improving)) >= n.beta
+    {
+        return Some(n.eval);
+    }
+    null_move_cutoff(s, n)
+}
+
+/// Passes the move and searches the reply shallower; a side that still fails
+/// high after giving its opponent a free move fails high here too.
+fn null_move_cutoff(s: &mut Search, n: NodePruning) -> Option<i32> {
+    let previous_was_null = s.ply > 0 && s.stack[s.ply - 1].current_move.is_none();
+    if n.depth < s.params.nmp_min_depth
+        || n.is_singular_search
+        || n.eval < n.beta
+        || previous_was_null
+        || !has_non_pawn_material(&s.board)
+    {
+        return None;
+    }
+    let r = s.params.nmp_base_reduction
+        + n.depth / s.params.nmp_depth_divisor
+        + ((n.eval - n.beta) / s.params.nmp_eval_divisor).min(s.params.nmp_eval_max);
+    let undo = s.make_null_move();
+    let null_score = -negamax(s, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
+    s.unmake_null_move(undo);
+    if s.tm.check_hard_limit() {
+        return Some(0);
+    }
+    if null_score < n.beta {
+        return None;
+    }
+    // A mate found after passing proves nothing about the real moves.
+    Some(if null_score > MATE_THRESHOLD {
+        n.beta
+    } else {
+        null_score
+    })
+}
+
 /// Looks for a capture that beats `probcut_beta` in quiescence and then in a reduced
 /// search; if one exists the node almost certainly fails high at full depth too.
 fn probcut(
@@ -1257,42 +1321,17 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
     let improving = s.is_improving(corrected_eval);
 
     if !is_pv && let Some(eval) = eval {
-        if eval < alpha - s.params.razor_margin - s.params.razor_depth_sq_margin * depth * depth {
-            let q_score = quiesce(s, alpha, beta);
-            if q_score < alpha {
-                return q_score;
-            }
-        }
-
-        if depth <= s.params.rfp_max_depth
-            && eval - s.params.rfp_margin * (depth - i32::from(improving)) >= beta
-        {
-            return eval;
-        }
-
-        let previous_was_null = !is_root && s.stack[s.ply - 1].current_move.is_none();
-        if depth >= s.params.nmp_min_depth
-            && excluded_move.is_none()
-            && eval >= beta
-            && !previous_was_null
-            && has_non_pawn_material(&s.board)
-        {
-            let r = s.params.nmp_base_reduction
-                + depth / s.params.nmp_depth_divisor
-                + ((eval - beta) / s.params.nmp_eval_divisor).min(s.params.nmp_eval_max);
-            let undo = s.make_null_move();
-            let null_score = -negamax(s, -beta, -beta + 1, depth - r, node.opposite());
-            s.unmake_null_move(undo);
-            if s.tm.check_hard_limit() {
-                return 0;
-            }
-            if null_score >= beta {
-                return if null_score > MATE_THRESHOLD {
-                    beta
-                } else {
-                    null_score
-                };
-            }
+        let candidate = NodePruning {
+            depth,
+            eval,
+            alpha,
+            beta,
+            improving,
+            node,
+            is_singular_search: excluded_move.is_some(),
+        };
+        if let Some(score) = prune_node(s, candidate) {
+            return score;
         }
     }
 
