@@ -137,81 +137,96 @@ const SEE_ORDER: [PieceKind; 6] = [
 /// an exchange worth zero.
 pub fn see_ge(b: &Board, m: Move, threshold: Centipawns) -> bool {
     let threshold = threshold.get();
-    if m.is_castle() || m.promotion().is_some() {
-        return 0 >= threshold;
-    }
-    let from = m.from.index();
-    let to = m.to.index();
-    let Some(mover_kind) = b.piece_on()[from].kind() else {
+    let mover_kind = b.piece_on()[m.from.index()].kind();
+    let Some(mover_kind) = mover_kind.filter(|_| !m.is_castle() && m.promotion().is_none()) else {
         return 0 >= threshold;
     };
-
+    let to = m.to.index();
     let captured_value = if m.is_en_passant() {
         kind_value(PieceKind::Pawn)
     } else {
         b.piece_on()[to].kind().map_or(0, kind_value)
     };
-    let mut swap = captured_value - threshold;
+    let swap = captured_value - threshold;
     if swap < 0 {
         return false;
     }
-    swap = kind_value(mover_kind) - swap;
+    let swap = kind_value(mover_kind) - swap;
     if swap <= 0 {
         return true;
     }
 
-    let mut occupied = b.all_pieces() ^ (1u64 << from) ^ (1u64 << to);
+    let mut occupied = b.all_pieces() ^ (1u64 << m.from.index()) ^ (1u64 << to);
     if m.is_en_passant() {
         occupied ^= 1u64 << m.captured_square(b.turn());
     }
-    let rooks_queens = b.kind_bb(PieceKind::Rook) | b.kind_bb(PieceKind::Queen);
-    let bishops_queens = b.kind_bb(PieceKind::Bishop) | b.kind_bb(PieceKind::Queen);
+    wins_exchange(b, to, occupied, swap)
+}
 
+/// Plays out the recaptures on `to` after the side to move's move, least
+/// valuable attacker first, with `swap` what the side to move would lose if
+/// recaptured; whether it still makes its threshold.
+fn wins_exchange(b: &Board, to: usize, mut occupied: Bitboard, mut swap: i32) -> bool {
+    let sliders = Sliders::of(b);
     let mut side = b.turn();
     let mut attackers = attackers_to(b, to, occupied);
     let mut result = true;
-
     loop {
         side = side.other();
         attackers &= occupied;
         let side_attackers = attackers & b.pieces_of(side);
-        if side_attackers == 0 {
-            break;
-        }
-        result = !result;
-
-        let Some((kind, attacker_bb)) = SEE_ORDER
-            .iter()
-            .map(|&kind| (kind, side_attackers & b.kind_bb(kind)))
-            .find(|&(_, bb)| bb != 0)
-        else {
+        let Some((kind, attacker_bb)) = least_valuable_of(b, side_attackers) else {
             break;
         };
-
+        result = !result;
         if kind == PieceKind::King {
             let opponent_still_attacks = attackers & b.pieces_of(side.other()) != 0;
-            return if opponent_still_attacks {
-                !result
-            } else {
-                result
-            };
+            return result != opponent_still_attacks;
         }
-
         swap = kind_value(kind) - swap;
         if swap < i32::from(result) {
             break;
         }
         occupied ^= attacker_bb.isolate_lowest_one();
+        attackers |= sliders.revealed_behind(kind, to, occupied);
+    }
+    result
+}
 
-        if matches!(kind, PieceKind::Pawn | PieceKind::Bishop | PieceKind::Queen) {
-            attackers |= magics::get_bishop_attacks(to, occupied) & bishops_queens;
-        }
-        if matches!(kind, PieceKind::Rook | PieceKind::Queen) {
-            attackers |= magics::get_rook_attacks(to, occupied) & rooks_queens;
+/// The least valuable kind among `attackers`, and the attackers of that kind.
+fn least_valuable_of(b: &Board, attackers: Bitboard) -> Option<(PieceKind, Bitboard)> {
+    SEE_ORDER
+        .iter()
+        .map(|&kind| (kind, attackers & b.kind_bb(kind)))
+        .find(|&(_, bb)| bb != 0)
+}
+
+/// Both sides' sliders, by the lines they move along.
+struct Sliders {
+    diagonal: Bitboard,
+    straight: Bitboard,
+}
+
+impl Sliders {
+    const fn of(b: &Board) -> Self {
+        let queens = b.kind_bb(PieceKind::Queen);
+        Self {
+            diagonal: b.kind_bb(PieceKind::Bishop) | queens,
+            straight: b.kind_bb(PieceKind::Rook) | queens,
         }
     }
 
-    result
+    /// The sliders that attack `to` through the square a `kind` just left.
+    fn revealed_behind(&self, kind: PieceKind, to: usize, occupied: Bitboard) -> Bitboard {
+        let mut revealed = 0;
+        if matches!(kind, PieceKind::Pawn | PieceKind::Bishop | PieceKind::Queen) {
+            revealed |= magics::get_bishop_attacks(to, occupied) & self.diagonal;
+        }
+        if matches!(kind, PieceKind::Rook | PieceKind::Queen) {
+            revealed |= magics::get_rook_attacks(to, occupied) & self.straight;
+        }
+        revealed
+    }
 }
 
 #[cfg(test)]
