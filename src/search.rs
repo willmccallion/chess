@@ -908,7 +908,7 @@ fn probcut(
     depth: i32,
     probcut_beta: i32,
     static_eval: i32,
-    cut_node: bool,
+    node: NodeKind,
 ) -> ProbCut {
     use crate::movepicker::QMovePicker;
 
@@ -923,7 +923,13 @@ fn probcut(
         };
         let mut score = -quiesce(s, -probcut_beta, -probcut_beta + 1);
         if score >= probcut_beta {
-            score = -negamax(s, -probcut_beta, -probcut_beta + 1, probe_depth, !cut_node);
+            score = -negamax(
+                s,
+                -probcut_beta,
+                -probcut_beta + 1,
+                probe_depth,
+                node.opposite(),
+            );
         }
         s.unmake_move(m, undo);
 
@@ -964,7 +970,7 @@ fn singular_extension(
     depth: i32,
     beta: i32,
     is_pv: bool,
-    cut_node: bool,
+    node: NodeKind,
 ) -> Singularity {
     let Some(entry) = tt_entry else {
         return Singularity::Extend(0);
@@ -981,13 +987,7 @@ fn singular_extension(
     let singular_beta = tt_score - s.params.singular_beta_per_depth_x16 * depth / 16;
     let singular_depth = (depth - 1) / 2;
     s.stack[s.ply].excluded_move = Some(tt_move);
-    let singular_score = negamax(
-        s,
-        singular_beta - 1,
-        singular_beta,
-        singular_depth,
-        cut_node,
-    );
+    let singular_score = negamax(s, singular_beta - 1, singular_beta, singular_depth, node);
     s.stack[s.ply].excluded_move = None;
     if s.tm.check_hard_limit() {
         return Singularity::Aborted;
@@ -1007,8 +1007,36 @@ fn singular_extension(
     }
 }
 
-/// `cut_node`: a non-PV node expected to fail high.
-fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_node: bool) -> i32 {
+/// What a node is expected to do, as Stockfish's cut and all nodes; a PV
+/// node, told apart by its open window, counts as an all node.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NodeKind {
+    /// Expected to fail high.
+    Cut,
+    All,
+}
+
+impl NodeKind {
+    /// The kind a child that answers this node is expected to be.
+    const fn opposite(self) -> Self {
+        match self {
+            Self::Cut => Self::All,
+            Self::All => Self::Cut,
+        }
+    }
+
+    /// The kind the first move leads to: a cut node below a non-PV all
+    /// node, an all node otherwise.
+    const fn first_child(self, is_pv: bool) -> Self {
+        if !is_pv && matches!(self, Self::All) {
+            Self::Cut
+        } else {
+            Self::All
+        }
+    }
+}
+
+fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: NodeKind) -> i32 {
     s.seldepth = s.seldepth.max(s.ply);
     if s.tm.check_hard_limit() {
         return 0;
@@ -1116,7 +1144,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 + depth / s.params.nmp_depth_divisor
                 + ((eval - beta) / s.params.nmp_eval_divisor).min(s.params.nmp_eval_max);
             let undo = s.make_null_move();
-            let null_score = -negamax(s, -beta, -beta + 1, depth - r, !cut_node);
+            let null_score = -negamax(s, -beta, -beta + 1, depth - r, node.opposite());
             s.unmake_null_move(undo);
             if s.tm.check_hard_limit() {
                 return 0;
@@ -1144,7 +1172,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 && score_from_tt(entry.score(), s.ply) < probcut_beta
         });
         if !tt_rules_out_probcut {
-            match probcut(s, &legality, depth, probcut_beta, static_eval, cut_node) {
+            match probcut(s, &legality, depth, probcut_beta, static_eval, node) {
                 ProbCut::Cutoff(score) => return score,
                 ProbCut::Aborted => return 0,
                 ProbCut::NoCutoff => {}
@@ -1233,7 +1261,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             Some(m) == killer1 || Some(m) == killer2 || Some(m) == counter_move;
 
         let extension = if Some(m) == tt_move && !is_root && excluded_move.is_none() {
-            match singular_extension(s, m, tt_entry, depth, beta, is_pv, cut_node) {
+            match singular_extension(s, m, tt_entry, depth, beta, is_pv, node) {
                 Singularity::Extend(plies) => plies,
                 Singularity::MultiCut(score) => return score,
                 Singularity::Aborted => return 0,
@@ -1253,7 +1281,7 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
         }
 
         let score = if moves_searched == 1 {
-            -negamax(s, -beta, -alpha, new_depth, !is_pv && !cut_node)
+            -negamax(s, -beta, -alpha, new_depth, node.first_child(is_pv))
         } else {
             let reduction = if depth >= s.params.lmr_min_depth && !in_check && (is_quiet || !is_pv)
             {
@@ -1261,7 +1289,11 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
                 let p = &s.params;
                 let mut r_1024 = 1024 * s.lmr.base_reduction(depth, moves_searched, is_quiet);
                 r_1024 += if is_pv { 0 } else { p.lmr_non_pv_x1024 };
-                r_1024 += if cut_node { p.lmr_cut_node_x1024 } else { 0 };
+                r_1024 += if node == NodeKind::Cut {
+                    p.lmr_cut_node_x1024
+                } else {
+                    0
+                };
                 r_1024 += if improving {
                     0
                 } else {
@@ -1296,17 +1328,17 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
             };
             let reduced_depth = new_depth - reduction;
 
-            let mut search_score = -negamax(s, -alpha - 1, -alpha, reduced_depth, true);
+            let mut search_score = -negamax(s, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut);
             if search_score > alpha && reduction > 0 {
                 let deeper = search_score > best_score + s.params.deeper_margin + 2 * new_depth;
                 let shallower = search_score < best_score + s.params.shallower_margin;
                 let research_depth = new_depth + i32::from(deeper) - i32::from(shallower);
                 if research_depth > reduced_depth {
-                    search_score = -negamax(s, -alpha - 1, -alpha, research_depth, !cut_node);
+                    search_score = -negamax(s, -alpha - 1, -alpha, research_depth, node.opposite());
                 }
             }
             if is_pv && search_score > alpha && search_score < beta {
-                search_score = -negamax(s, -beta, -alpha, new_depth, false);
+                search_score = -negamax(s, -beta, -alpha, new_depth, NodeKind::All);
             }
             search_score
         };
@@ -1550,7 +1582,7 @@ fn iterative_deepening(
         let mut fail_highs = 0;
         loop {
             let search_depth = (depth as i32 - fail_highs).max(1);
-            let iteration_score = negamax(&mut search, alpha, beta, search_depth, false);
+            let iteration_score = negamax(&mut search, alpha, beta, search_depth, NodeKind::All);
             if search.tm.check_hard_limit() {
                 aborted = true;
                 break;
