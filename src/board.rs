@@ -1706,6 +1706,36 @@ mod tests {
         }
     }
 
+    /// `text`, a UCI move legal in `fen`, in SAN.
+    fn san(fen: &str, text: &str) -> String {
+        let mut board = Board::from_fen(fen).unwrap();
+        let m = crate::uci_io::parse_uci_move(&mut board, text).unwrap();
+        let mut legal = MoveList::new();
+        board.generate_legal_moves(&mut legal);
+        board.to_san(m, legal.as_slice())
+    }
+
+    #[test]
+    fn san_names_the_file_rank_or_square_that_tells_two_pieces_apart() {
+        assert_eq!(san("4k3/8/8/8/8/8/8/1N1K1N2 w - - 0 1", "b1d2"), "Nbd2");
+        assert_eq!(san("4k3/8/8/R7/8/8/8/R3K3 w - - 0 1", "a1a3"), "R1a3");
+        assert_eq!(san("4k3/8/8/8/8/Q7/8/Q1Q1K3 w - - 0 1", "a1b2"), "Qa1b2");
+    }
+
+    #[test]
+    fn san_marks_check_and_mate() {
+        assert_eq!(san("4k3/8/8/8/8/8/8/R3K3 w - - 0 1", "a1a8"), "Ra8+");
+        assert_eq!(san("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8"), "Ra8#");
+    }
+
+    #[test]
+    fn san_writes_pawn_captures_promotions_and_castling() {
+        assert_eq!(san("4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1", "e4d5"), "exd5");
+        assert_eq!(san("1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1", "a7b8q"), "axb8=Q+");
+        assert_eq!(san("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "e1g1"), "O-O");
+        assert_eq!(san("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "e1c1"), "O-O-O");
+    }
+
     #[test]
     fn insufficient_material_covers_lone_minors_and_same_colored_bishops() {
         let dead = [
