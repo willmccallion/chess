@@ -11,7 +11,7 @@ use super::game::eval_after_search;
 use super::{Job, JobKind, JobResult, Nav, Screen};
 use crate::coach::judgement::Eval;
 use crate::coach::profile::PuzzleReason;
-use crate::coach::puzzles::{Attempt, AttemptState, PuzzleId, Verdict, describe_themes};
+use crate::coach::puzzles::{Attempt, AttemptState, Puzzle, PuzzleId, Verdict, describe_themes};
 use crate::coach::rating::Elo;
 use crate::coach::store::TrainingItem;
 use crate::notation::{numbered, san_of};
@@ -204,88 +204,40 @@ impl Puzzles {
         let Some(current) = &self.current else {
             return empty_lines(data);
         };
-        let puzzle = &current.attempt.puzzle;
-        let mut lines = vec![Line::from(vec![Span::styled(
-            current.reason.describe(),
-            Style::new().fg(INFO),
-        )])];
-        let rating = puzzle
-            .rating
-            .map_or_else(String::new, |r| format!(" · puzzle {}", r.0));
-        lines.push(dim(format!(
-            "Your puzzle rating {}{rating}",
-            data.profile.puzzle_rating.0
-        )));
-        lines.push(Line::raw(""));
-        let side = if puzzle.board.turn() == Color::White {
-            "White"
-        } else {
-            "Black"
-        };
-        let task = if puzzle.is_from_your_games() {
-            format!("{side} to move. Find a better move than the one you played.")
-        } else {
-            format!("{side} to move. Find the best move.")
-        };
-        lines.push(heading(task));
-        if let Some(played) = &current.played_in_game {
-            lines.push(dim(format!("In your game you played {played} here.")));
-        }
-        lines.push(Line::raw(""));
-        let finished = current.attempt.state != AttemptState::Solving;
-        match &current.feedback {
-            Feedback::Start => {}
-            Feedback::Correct => lines.push(colored("Correct! Keep going.", GOOD)),
-            Feedback::Checking => lines.push(dim("Checking your move with the engine…")),
-            Feedback::Solved { also_good } => {
-                let text = if *also_good {
-                    "Solved! That works just as well."
-                } else {
-                    "Solved!"
-                };
-                lines.push(Line::styled(
-                    text,
-                    Style::new().fg(GOOD).add_modifier(Modifier::BOLD),
-                ));
-            }
-            Feedback::Wrong { expected } => {
-                lines.push(Line::styled(
-                    "Not quite.",
-                    Style::new().fg(BAD).add_modifier(Modifier::BOLD),
-                ));
-                lines.push(Line::styled(
-                    format!("The answer was {expected}."),
-                    Style::new().fg(TEXT),
-                ));
-            }
-            Feedback::Revealed => {
-                lines.push(dim("Showing the solution: press s for the next move."));
-            }
-        }
-        if finished {
-            let change = data.profile.puzzle_rating.0 - self.rating_before.0;
-            if puzzle.rating.is_some() && change != 0 {
-                lines.push(colored(
-                    format!(
-                        "Puzzle rating {} → {} ({change:+})",
-                        self.rating_before.0, data.profile.puzzle_rating.0
-                    ),
-                    if change > 0 { GOOD } else { BAD },
-                ));
-            }
-            let themes = describe_themes(&puzzle.themes);
-            if !themes.is_empty() {
-                lines.push(dim(format!("Themes: {themes}")));
-            }
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "n: next puzzle   r: try again   s: show solution",
-                Style::new().fg(DIM),
-            ));
+        let mut lines = rating_lines(current, data);
+        lines.extend(task_lines(current));
+        lines.extend(feedback_lines(&current.feedback));
+        if current.attempt.state != AttemptState::Solving {
+            lines.extend(self.finished_lines(&current.attempt.puzzle, data));
         }
         if let Some(message) = &self.message {
             lines.push(colored(message.clone(), BAD));
         }
+        lines
+    }
+
+    /// What follows a finished puzzle: the rating change, its themes and the keys.
+    fn finished_lines(&self, puzzle: &Puzzle, data: &CoachData) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let change = data.profile.puzzle_rating.0 - self.rating_before.0;
+        if puzzle.rating.is_some() && change != 0 {
+            lines.push(colored(
+                format!(
+                    "Puzzle rating {} → {} ({change:+})",
+                    self.rating_before.0, data.profile.puzzle_rating.0
+                ),
+                if change > 0 { GOOD } else { BAD },
+            ));
+        }
+        let themes = describe_themes(&puzzle.themes);
+        if !themes.is_empty() {
+            lines.push(dim(format!("Themes: {themes}")));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "n: next puzzle   r: try again   s: show solution",
+            Style::new().fg(DIM),
+        ));
         lines
     }
 
@@ -311,6 +263,68 @@ impl Puzzles {
         self.current
             .as_ref()
             .is_some_and(|c| c.attempt.state == AttemptState::Solving && c.judging.is_none())
+    }
+}
+
+/// Why this puzzle came up, and the player's and the puzzle's ratings.
+fn rating_lines(current: &Current, data: &CoachData) -> Vec<Line<'static>> {
+    let rating = current
+        .attempt
+        .puzzle
+        .rating
+        .map_or_else(String::new, |r| format!(" · puzzle {}", r.0));
+    vec![
+        Line::from(vec![Span::styled(
+            current.reason.describe(),
+            Style::new().fg(INFO),
+        )]),
+        dim(format!(
+            "Your puzzle rating {}{rating}",
+            data.profile.puzzle_rating.0
+        )),
+        Line::raw(""),
+    ]
+}
+
+/// What to find, and the move played in the game the puzzle came from.
+fn task_lines(current: &Current) -> Vec<Line<'static>> {
+    let puzzle = &current.attempt.puzzle;
+    let side = if puzzle.board.turn() == Color::White {
+        "White"
+    } else {
+        "Black"
+    };
+    let task = if puzzle.is_from_your_games() {
+        format!("{side} to move. Find a better move than the one you played.")
+    } else {
+        format!("{side} to move. Find the best move.")
+    };
+    let mut lines = vec![heading(task)];
+    if let Some(played) = &current.played_in_game {
+        lines.push(dim(format!("In your game you played {played} here.")));
+    }
+    lines.push(Line::raw(""));
+    lines
+}
+
+/// How the last move went.
+fn feedback_lines(feedback: &Feedback) -> Vec<Line<'static>> {
+    let bold = |text: &'static str, color| {
+        Line::styled(text, Style::new().fg(color).add_modifier(Modifier::BOLD))
+    };
+    match feedback {
+        Feedback::Start => Vec::new(),
+        Feedback::Correct => vec![colored("Correct! Keep going.", GOOD)],
+        Feedback::Checking => vec![dim("Checking your move with the engine…")],
+        Feedback::Solved { also_good: true } => {
+            vec![bold("Solved! That works just as well.", GOOD)]
+        }
+        Feedback::Solved { also_good: false } => vec![bold("Solved!", GOOD)],
+        Feedback::Wrong { expected } => vec![
+            bold("Not quite.", BAD),
+            Line::styled(format!("The answer was {expected}."), Style::new().fg(TEXT)),
+        ],
+        Feedback::Revealed => vec![dim("Showing the solution: press s for the next move.")],
     }
 }
 
