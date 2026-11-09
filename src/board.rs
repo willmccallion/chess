@@ -115,7 +115,6 @@ impl Board {
             .is_some_and(|king| self.is_square_attacked(king, self.turn.other()))
     }
 
-    #[inline]
     pub fn from_fen(fen_str: &str) -> Result<Self, String> {
         let mut b = fen::parse_fen(fen_str)?;
         b.eval_state.reset();
@@ -178,7 +177,6 @@ impl Board {
     }
 
     /// Threefold repetition, for adjudicating games.
-    #[inline]
     pub fn is_draw_by_repetition(&self) -> bool {
         self.count_repetitions() >= 2
     }
@@ -826,7 +824,6 @@ impl Board {
         self.plies_from_null = undo.old_plies_from_null;
     }
 
-    #[inline]
     pub fn to_fen(&self) -> String {
         fen::to_fen(self)
     }

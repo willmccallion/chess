@@ -23,7 +23,6 @@ const MAX_DEPTH: usize = 127;
 /// Hash for the coach bot's small per-move searches.
 const COACH_HASH_MB: usize = 16;
 
-#[inline]
 fn parse_setoption(rest: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = rest.splitn(2, "name").collect();
     let after = parts.get(1)?.trim();
