@@ -69,7 +69,7 @@ pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
     let start = Instant::now();
 
     for fen in BENCH_FENS {
-        let board = Board::from_fen(fen)?;
+        let board = Board::from_fen(fen).map_err(|e| format!("bench position {fen}: {e}"))?;
         tt.clear();
         let control = SearchControl::new(None);
         let mut threads = SearchThreads::new(1);

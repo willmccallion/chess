@@ -10,6 +10,7 @@ use super::rating::Elo;
 use super::review::AnalysedPosition;
 use super::srs::UnixTime;
 use crate::board::Board;
+use crate::fen::FenError;
 use crate::game_runner::{GameEndReason, GameResult};
 use crate::search::Score;
 use crate::types::{Color, Move};
@@ -109,7 +110,7 @@ pub struct GameRecord {
 
 impl GameRecord {
     /// The starting position, without evaluation state so it is cheap to copy.
-    pub fn start(&self) -> Result<Board, String> {
+    pub fn start(&self) -> Result<Board, FenError> {
         Board::from_fen(&self.start_fen).map(|b| b.without_eval_state())
     }
 

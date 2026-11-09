@@ -1,6 +1,7 @@
 //! Endgame drills: positions to win or hold against the engine's best defence.
 
 use crate::board::Board;
+use crate::fen::FenError;
 use crate::types::{Color, Piece, PieceKind};
 
 /// What you have to do in a drill.
@@ -38,11 +39,11 @@ pub struct Drill {
 }
 
 impl Drill {
-    pub fn board(&self) -> Result<Board, String> {
+    pub fn board(&self) -> Result<Board, FenError> {
         Board::from_fen(self.fen)
     }
 
-    pub fn side(&self) -> Result<Color, String> {
+    pub fn side(&self) -> Result<Color, FenError> {
         self.board().map(|b| b.turn)
     }
 }

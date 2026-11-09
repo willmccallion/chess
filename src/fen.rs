@@ -1,24 +1,74 @@
 use crate::board::Board;
 use crate::magics;
 use crate::types::{BK_CASTLE, BQ_CASTLE, Color, Piece, PieceKind, Square, WK_CASTLE, WQ_CASTLE};
+use std::fmt;
 
-pub fn parse_fen(fen: &str) -> Result<Board, String> {
+/// Why a FEN describes no position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FenError {
+    /// A required field is absent; this names it.
+    MissingField(&'static str),
+    RankCount(usize),
+    /// Ranks count from 1.
+    RankTooLong {
+        rank: usize,
+    },
+    RankTooShort {
+        rank: usize,
+        squares: usize,
+    },
+    PieceLetter(char),
+    SideToMove(String),
+    CastlingLetter(char),
+    EnPassantSquare(String),
+    MoveCounter(String),
+    /// The side has no king, or more than one.
+    KingCount(Color),
+    /// The side that just moved left its king attacked.
+    WaitingSideInCheck,
+}
+
+impl fmt::Display for FenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingField(field) => write!(f, "missing {field}"),
+            Self::RankCount(count) => write!(f, "placement has {count} ranks, not 8"),
+            Self::RankTooLong { rank } => write!(f, "rank {rank} has more than 8 squares"),
+            Self::RankTooShort { rank, squares } => {
+                write!(f, "rank {rank} has {squares} squares, not 8")
+            }
+            Self::PieceLetter(letter) => write!(f, "bad piece letter {letter:?}"),
+            Self::SideToMove(side) => write!(f, "bad side to move {side:?}"),
+            Self::CastlingLetter(letter) => write!(f, "bad castling letter {letter:?}"),
+            Self::EnPassantSquare(square) => write!(f, "bad en-passant square {square:?}"),
+            Self::MoveCounter(counter) => write!(f, "bad move counter {counter:?}"),
+            Self::KingCount(Color::White) => write!(f, "FEN must have exactly one white king"),
+            Self::KingCount(Color::Black) => write!(f, "FEN must have exactly one black king"),
+            Self::WaitingSideInCheck => write!(f, "side not to move is in check"),
+        }
+    }
+}
+
+impl std::error::Error for FenError {}
+
+pub fn parse_fen(fen: &str) -> Result<Board, FenError> {
     let mut b = Board::empty();
 
     let mut parts = fen.split_whitespace();
-    let placement = parts.next().ok_or("missing placement")?;
-    let side = parts.next().ok_or("missing side")?;
-    let castle = parts.next().ok_or("missing castling")?;
-    let ep = parts.next().ok_or("missing en-passant")?;
-    let halfmove = parts.next().unwrap_or("0");
-    let fullmove = parts.next().unwrap_or("1");
+    let mut field = |name| parts.next().ok_or(FenError::MissingField(name));
+    let placement = field("placement")?;
+    let side = field("side to move")?;
+    let castle = field("castling")?;
+    let ep = field("en-passant square")?;
+    let halfmove = parts.next();
+    let fullmove = parts.next();
 
     place_pieces(&mut b, placement)?;
 
     b.turn = match side {
         "w" => Color::White,
         "b" => Color::Black,
-        _ => return Err("bad side".into()),
+        _ => return Err(FenError::SideToMove(side.to_string())),
     };
 
     b.castle = 0;
@@ -29,7 +79,7 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
                 'Q' => b.castle |= WQ_CASTLE,
                 'k' => b.castle |= BK_CASTLE,
                 'q' => b.castle |= BQ_CASTLE,
-                _ => return Err("bad castling".into()),
+                _ => return Err(FenError::CastlingLetter(c)),
             }
         }
     }
@@ -37,11 +87,11 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
     let ep_sq = if ep == "-" {
         None
     } else {
-        Some(Square::parse(ep).ok_or_else(|| format!("bad en-passant square {ep:?}"))?)
+        Some(Square::parse(ep).ok_or_else(|| FenError::EnPassantSquare(ep.to_string()))?)
     };
 
-    b.halfmove_clock = halfmove.parse().unwrap_or(0);
-    b.fullmove_number = fullmove.parse().unwrap_or(1);
+    b.halfmove_clock = parse_counter(halfmove, 0)?;
+    b.fullmove_number = parse_counter(fullmove, 1)?;
 
     b.rebuild_derived();
     validate_kings(&b)?;
@@ -52,12 +102,20 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
     Ok(b)
 }
 
+/// A move counter, or `default` when the FEN leaves it out.
+fn parse_counter<T: std::str::FromStr>(counter: Option<&str>, default: T) -> Result<T, FenError> {
+    counter.map_or(Ok(default), |text| {
+        text.parse()
+            .map_err(|_| FenError::MoveCounter(text.to_string()))
+    })
+}
+
 /// Places the pieces of a FEN placement field: eight ranks from the
 /// eighth down, each of eight squares.
-fn place_pieces(b: &mut Board, placement: &str) -> Result<(), String> {
+fn place_pieces(b: &mut Board, placement: &str) -> Result<(), FenError> {
     let ranks: Vec<&str> = placement.split('/').collect();
     if ranks.len() != 8 {
-        return Err(format!("placement has {} ranks, not 8", ranks.len()));
+        return Err(FenError::RankCount(ranks.len()));
     }
     for (rank, text) in (0..8).rev().zip(ranks) {
         let mut file = 0;
@@ -66,15 +124,18 @@ fn place_pieces(b: &mut Board, placement: &str) -> Result<(), String> {
                 file += empty as usize;
                 continue;
             }
-            let piece = Piece::from_fen_char(c).ok_or_else(|| format!("bad piece letter {c:?}"))?;
+            let piece = Piece::from_fen_char(c).ok_or(FenError::PieceLetter(c))?;
             if file >= 8 {
-                return Err(format!("rank {} has more than 8 squares", rank + 1));
+                return Err(FenError::RankTooLong { rank: rank + 1 });
             }
             b.place_piece(piece, rank * 8 + file);
             file += 1;
         }
         if file != 8 {
-            return Err(format!("rank {} has {file} squares, not 8", rank + 1));
+            return Err(FenError::RankTooShort {
+                rank: rank + 1,
+                squares: file,
+            });
         }
     }
     Ok(())
@@ -104,17 +165,17 @@ fn is_capturable_en_passant(b: &Board, sq: Square) -> bool {
 }
 
 /// Each side needs exactly one king, and the side that just moved cannot be in check.
-fn validate_kings(b: &Board) -> Result<(), String> {
-    for king in [Piece::WK, Piece::BK] {
-        if b.piece_bb[king.index()].count_ones() != 1 {
-            return Err(format!("FEN must have exactly one {king} king"));
+fn validate_kings(b: &Board) -> Result<(), FenError> {
+    for color in [Color::White, Color::Black] {
+        if b.pieces(PieceKind::King, color).count_ones() != 1 {
+            return Err(FenError::KingCount(color));
         }
     }
     let waiting_side = b.turn.other();
     if let Some(waiting_king) = b.king_square(waiting_side)
         && b.is_square_attacked(waiting_king, b.turn)
     {
-        return Err("side not to move is in check".into());
+        return Err(FenError::WaitingSideInCheck);
     }
     Ok(())
 }
@@ -193,13 +254,19 @@ mod tests {
     #[test]
     fn rejects_position_where_side_not_to_move_is_in_check() {
         let fen = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 b kq - 0 1";
-        assert!(parse_fen(fen).is_err());
+        assert_eq!(parse_fen(fen).err(), Some(FenError::WaitingSideInCheck));
     }
 
     #[test]
     fn rejects_missing_or_extra_kings() {
-        assert!(parse_fen("8/8/8/8/8/8/8/K7 w - - 0 1").is_err());
-        assert!(parse_fen("k7/8/8/8/8/8/8/KK6 w - - 0 1").is_err());
+        assert_eq!(
+            parse_fen("8/8/8/8/8/8/8/K7 w - - 0 1").err(),
+            Some(FenError::KingCount(Color::Black))
+        );
+        assert_eq!(
+            parse_fen("k7/8/8/8/8/8/8/KK6 w - - 0 1").err(),
+            Some(FenError::KingCount(Color::White))
+        );
     }
 
     #[test]
@@ -226,21 +293,52 @@ mod tests {
     fn rejects_an_en_passant_square_off_the_board_without_panicking() {
         let parsed = std::panic::catch_unwind(|| parse_fen("4k3/8/8/8/8/8/8/4K3 w - e0 0 1"));
 
-        assert!(matches!(parsed, Ok(Err(_))));
+        assert!(matches!(parsed, Ok(Err(FenError::EnPassantSquare(_)))));
     }
 
     #[test]
     fn rejects_an_unknown_piece_letter() {
-        assert!(parse_fen("4k3/8/8/8/8/8/8/4KX2 w - - 0 1").is_err());
+        assert_eq!(
+            parse_fen("4k3/8/8/8/8/8/8/4KX2 w - - 0 1").err(),
+            Some(FenError::PieceLetter('X'))
+        );
     }
 
     #[test]
     fn rejects_a_placement_without_eight_ranks() {
-        assert!(parse_fen("4k3/8/8/8/8/8/4K3 w - - 0 1").is_err());
+        assert_eq!(
+            parse_fen("4k3/8/8/8/8/8/4K3 w - - 0 1").err(),
+            Some(FenError::RankCount(7))
+        );
     }
 
     #[test]
     fn rejects_a_rank_without_eight_squares() {
-        assert!(parse_fen("4k3/8/8/8/7/8/8/4K3 w - - 0 1").is_err());
+        assert_eq!(
+            parse_fen("4k3/8/8/8/7/8/8/4K3 w - - 0 1").err(),
+            Some(FenError::RankTooShort {
+                rank: 4,
+                squares: 7
+            })
+        );
+    }
+
+    #[test]
+    fn move_counters_default_when_left_out_and_must_read_as_numbers() {
+        let short = parse_fen("4k3/8/8/8/8/8/8/4K3 w - -").unwrap();
+
+        assert_eq!((short.halfmove_clock, short.fullmove_number), (0, 1));
+        assert_eq!(
+            parse_fen("4k3/8/8/8/8/8/8/4K3 w - - x 1").err(),
+            Some(FenError::MoveCounter("x".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_missing_field_is_named() {
+        assert_eq!(
+            parse_fen("4k3/8/8/8/8/8/8/4K3 w").err(),
+            Some(FenError::MissingField("castling"))
+        );
     }
 }

@@ -141,7 +141,7 @@ impl Board {
         board
     }
 
-    pub fn from_fen(fen_str: &str) -> Result<Self, String> {
+    pub fn from_fen(fen_str: &str) -> Result<Self, fen::FenError> {
         let mut b = fen::parse_fen(fen_str)?;
         b.eval_state.reset();
         Ok(b)
