@@ -126,7 +126,7 @@ pub fn see(b: &Board, mov: Move) -> i32 {
 
     occupied ^= 1u64 << from_sq;
     if mov.en_passant {
-        occupied ^= 1u64 << en_passant_victim(b, to_sq);
+        occupied ^= 1u64 << mov.captured_square(b.turn);
     }
 
     loop {
@@ -156,14 +156,6 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     }
 
     gain[0]
-}
-
-/// The square of the pawn an en-passant capture onto `to` takes.
-const fn en_passant_victim(b: &Board, to: usize) -> usize {
-    match b.turn {
-        Color::White => to - 8,
-        Color::Black => to + 8,
-    }
 }
 
 fn kind_value(kind: PieceKind) -> i32 {
@@ -232,7 +224,7 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
 
     let mut occupied = b.all_pieces ^ (1u64 << from) ^ (1u64 << to);
     if m.en_passant {
-        occupied ^= 1u64 << en_passant_victim(b, to);
+        occupied ^= 1u64 << m.captured_square(b.turn);
     }
     let rooks_queens = pieces_of(b, PieceKind::Rook) | pieces_of(b, PieceKind::Queen);
     let bishops_queens = pieces_of(b, PieceKind::Bishop) | pieces_of(b, PieceKind::Queen);

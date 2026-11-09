@@ -190,6 +190,18 @@ pub struct Move {
 }
 
 impl Move {
+    /// The square of the piece this move takes when `mover` plays it:
+    /// beside the destination for en passant, the destination otherwise.
+    #[inline(always)]
+    pub const fn captured_square(self, mover: Color) -> usize {
+        let to = self.to as usize;
+        match (self.en_passant, mover) {
+            (true, Color::White) => to - 8,
+            (true, Color::Black) => to + 8,
+            (false, _) => to,
+        }
+    }
+
     /// Neither a capture nor a promotion.
     #[inline(always)]
     pub const fn is_quiet(self) -> bool {

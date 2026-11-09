@@ -153,12 +153,7 @@ impl Board {
         }
 
         if m.en_passant {
-            let captured_sq = if self.turn == Color::White {
-                to - 8
-            } else {
-                to + 8
-            };
-            let captured = 1u64 << captured_sq;
+            let captured = 1u64 << m.captured_square(self.turn);
             let occupied = (self.all_pieces ^ (1u64 << from) ^ captured) | (1u64 << to);
             return attackers_of(self, info.king_sq, them, occupied, captured) == 0;
         }

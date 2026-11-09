@@ -43,11 +43,7 @@ pub fn record_piece_changes(
         add: false,
     });
     if m.capture {
-        let cap_sq = match (m.en_passant, position.turn) {
-            (true, Color::White) => to - 8,
-            (true, Color::Black) => to + 8,
-            (false, _) => to,
-        };
+        let cap_sq = m.captured_square(position.turn);
         let captured = position.piece_on[cap_sq];
         if !captured.is_empty() {
             out.push(UpdateBody {

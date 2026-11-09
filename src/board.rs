@@ -1099,20 +1099,12 @@ impl Board {
                 if to_piece != Piece::Empty {
                     return false;
                 }
-                let cap_sq = if self.turn == Color::White {
-                    to as i32 - 8
-                } else {
-                    to as i32 + 8
-                };
-                if !(0..64).contains(&cap_sq) {
-                    return false;
-                }
                 let enemy_pawn = if self.turn == Color::White {
                     Piece::BP
                 } else {
                     Piece::WP
                 };
-                if self.piece_on[cap_sq as usize] != enemy_pawn {
+                if self.piece_on[m.captured_square(self.turn)] != enemy_pawn {
                     return false;
                 }
             } else {
@@ -1200,15 +1192,7 @@ impl Board {
         self.eval_state.push_move(position, m);
 
         if m.capture {
-            let cap_sq = if m.en_passant {
-                if self.turn == Color::White {
-                    to - 8
-                } else {
-                    to + 8
-                }
-            } else {
-                to
-            };
+            let cap_sq = m.captured_square(self.turn);
             undo.captured_piece = self.piece_on[cap_sq];
         }
 
@@ -1228,15 +1212,7 @@ impl Board {
         }
 
         if m.capture {
-            let cap_sq = if m.en_passant {
-                if self.turn == Color::White {
-                    to - 8
-                } else {
-                    to + 8
-                }
-            } else {
-                to
-            };
+            let cap_sq = m.captured_square(self.turn);
 
             let captured = undo.captured_piece;
             if !captured.is_empty() {
@@ -1438,16 +1414,10 @@ impl Board {
         if m.capture {
             let captured = u.captured_piece;
 
-            let cap_sq = if m.en_passant {
+            if m.en_passant {
                 self.piece_on[to] = Piece::Empty;
-                if self.turn == Color::White {
-                    to - 8
-                } else {
-                    to + 8
-                }
-            } else {
-                to
-            };
+            }
+            let cap_sq = m.captured_square(self.turn);
 
             self.piece_on[cap_sq] = captured;
             if !captured.is_empty() {
