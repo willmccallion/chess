@@ -78,7 +78,9 @@ pub fn run(config: &DatagenConfig) -> io::Result<DatagenSummary> {
             let seed = config.seed ^ (worker as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
             thread::Builder::new()
                 .name(format!("datagen-{worker}"))
-                .spawn_scoped(scope, move || play_games(config, seed, stop, &sender))?;
+                .spawn_scoped(scope, move || {
+                    play_training_games(config, seed, stop, &sender)
+                })?;
         }
         drop(sender);
 
@@ -106,7 +108,7 @@ pub fn run(config: &DatagenConfig) -> io::Result<DatagenSummary> {
     })
 }
 
-fn play_games(
+fn play_training_games(
     config: &DatagenConfig,
     seed: u64,
     stop: &AtomicBool,
@@ -118,7 +120,7 @@ fn play_games(
     while !stop.load(Ordering::Relaxed) {
         tt.clear();
         threads.clear();
-        let Some(game) = play_game(&mut rng, &tt, &mut threads, config) else {
+        let Some(game) = play_training_game(&mut rng, &tt, &mut threads, config) else {
             continue;
         };
         if sender.send(game).is_err() {
@@ -231,7 +233,7 @@ fn think(
     Some((result.best_move?, result.score?))
 }
 
-fn play_game(
+fn play_training_game(
     rng: &mut StdRng,
     tt: &SharedTransTable,
     threads: &mut SearchThreads,
@@ -383,7 +385,7 @@ mod tests {
         let mut threads = SearchThreads::new(1);
         let mut rng = StdRng::seed_from_u64(config.seed);
         let game = (0..20)
-            .find_map(|_| play_game(&mut rng, &tt, &mut threads, &config))
+            .find_map(|_| play_training_game(&mut rng, &tt, &mut threads, &config))
             .unwrap();
 
         let mut text = Vec::new();
