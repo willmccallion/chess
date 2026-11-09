@@ -24,7 +24,7 @@ missing_errors_doc = "allow"
 # The search's hot path is inlined on purpose; change it only with a benchmark.
 inline_always = "allow"
 # Board, eval and network code converts between square, score and weight
-# widths on purpose; newtypes are replacing these casts.
+# widths on purpose, within ranges the chess rules or the network bound.
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_possible_wrap = "allow"
