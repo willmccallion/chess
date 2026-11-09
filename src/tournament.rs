@@ -6,7 +6,7 @@ use crate::types::START_FEN;
 use crate::uci_client::UciEngine;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::Instant;
 
@@ -33,7 +33,29 @@ pub fn engine_name(name: Option<String>, path: &str) -> String {
     name.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string())
 }
 
+/// The moves after which a game is called a draw.
+const MAX_GAME_MOVES: usize = 300;
+
+/// Engine 1 plays white in the first game of each pair and black in the second.
+const fn e1_plays_white(game_idx: usize) -> bool {
+    game_idx.is_multiple_of(2)
+}
+
 impl TournamentConfig {
+    fn game_config(&self, game_idx: usize) -> GameConfig {
+        let (white_clock, black_clock) = if e1_plays_white(game_idx) {
+            (self.e1_clock, self.e2_clock)
+        } else {
+            (self.e2_clock, self.e1_clock)
+        };
+        GameConfig {
+            white_clock,
+            black_clock,
+            max_moves: MAX_GAME_MOVES,
+            start: self.start_for_game(game_idx).clone(),
+        }
+    }
+
     fn start_for_game(&self, game_idx: usize) -> &StartPosition {
         if self.openings.is_empty() {
             return &self.start;
@@ -414,6 +436,30 @@ fn format_clock(clock: GameClock) -> String {
 
 /// Plays the tournament and prints its results, or says why it cannot start.
 pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
+    round_up_to_pairs(&mut config);
+    check_engine_paths(&config)?;
+    print_header(&config);
+
+    let start_time = Instant::now();
+    let tournament = Tournament::new(config);
+    thread::scope(|scope| {
+        for _ in 0..tournament.config.concurrency {
+            scope.spawn(|| run_worker(&tournament));
+        }
+    });
+    let elapsed = start_time.elapsed().as_secs_f64();
+
+    let Tournament { config, score, .. } = tournament;
+    let mut score = score.into_inner().unwrap_or_else(PoisonError::into_inner);
+    if config.sprt.is_some() && score.sprt_decision.is_none() {
+        score.sprt_decision = Some(SprtDecision::Continue);
+    }
+    print_summary(&score, &config.e1_name, &config.e2_name, elapsed);
+    Ok(())
+}
+
+/// Makes the game count even, so every opening is played with both colours.
+fn round_up_to_pairs(config: &mut TournamentConfig) {
     if config.rounds % 2 == 1 {
         config.rounds += 1;
         println!(
@@ -421,7 +467,9 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
             config.rounds
         );
     }
+}
 
+fn check_engine_paths(config: &TournamentConfig) -> Result<(), String> {
     for (engine, path) in [
         ("engine1", &config.engine1_path),
         ("engine2", &config.engine2_path),
@@ -430,10 +478,12 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
             return Err(format!("{engine} path '{path}' not found"));
         }
     }
+    Ok(())
+}
 
+fn print_header(config: &TournamentConfig) {
     let e1_name = config.e1_name.as_str();
     let e2_name = config.e2_name.as_str();
-
     println!("Tournament: {} vs {}", e1_name, e2_name);
     if config.e1_clock == config.e2_clock {
         println!("Time control: {}", format_clock(config.e1_clock));
@@ -470,162 +520,152 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
         );
     }
     println!("---");
+}
 
-    let start_time = Instant::now();
-    let next_game = Arc::new(AtomicUsize::new(0));
-    let score = Arc::new(Mutex::new(Score::default()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let config = Arc::new(config);
-    let mut handles = Vec::new();
+/// What a tournament's workers share: the configuration, the next game to
+/// hand out, the standings, and whether SPRT has ended the tournament.
+struct Tournament {
+    config: TournamentConfig,
+    next_game: AtomicUsize,
+    score: Mutex<Score>,
+    stop: AtomicBool,
+}
 
-    for _ in 0..config.concurrency {
-        let next_game = Arc::clone(&next_game);
-        let score = Arc::clone(&score);
-        let stop = Arc::clone(&stop);
-        let config = Arc::clone(&config);
+impl Tournament {
+    fn new(config: TournamentConfig) -> Self {
+        Self {
+            config,
+            next_game: AtomicUsize::new(0),
+            score: Mutex::new(Score::default()),
+            stop: AtomicBool::new(false),
+        }
+    }
 
-        let handle = thread::spawn(move || {
-            let mut e1 = match spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
+    /// The next game to play, or `None` once all are handed out or SPRT has
+    /// decided.
+    fn claim_game(&self) -> Option<usize> {
+        if self.stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        let game_idx = self.next_game.fetch_add(1, Ordering::Relaxed);
+        (game_idx < self.config.rounds).then_some(game_idx)
+    }
+
+    /// Adds a finished game to the standings and prints it, then runs SPRT
+    /// if the game completes a pair.
+    fn record(&self, game_idx: usize, outcome: &GameOutcome) {
+        let e1_is_white = e1_plays_white(game_idx);
+        let mut score = self.score.lock().unwrap_or_else(PoisonError::into_inner);
+        let pair_completed = score.record(outcome, e1_is_white, game_idx);
+        print_game_line(&self.config, &score, e1_is_white, outcome);
+        if pair_completed {
+            self.check_sprt(&mut score);
+        }
+    }
+
+    /// Prints the log-likelihood ratio and stops the tournament once SPRT
+    /// accepts a hypothesis.
+    fn check_sprt(&self, score: &mut Score) {
+        let Some(sprt) = self.config.sprt else {
+            return;
+        };
+        if score.sprt_decision.is_some() {
+            return;
+        }
+        let llr = sprt.llr(&score.penta);
+        println!(
+            "  SPRT: LLR {:.2} [{:.2}, {:.2}] after {} pairs",
+            llr,
+            sprt.lower_bound(),
+            sprt.upper_bound(),
+            score.penta.pairs()
+        );
+        let decision = sprt.decide(llr);
+        if decision != SprtDecision::Continue {
+            score.sprt_decision = Some(decision);
+            self.stop.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+fn print_game_line(
+    config: &TournamentConfig,
+    score: &Score,
+    e1_is_white: bool,
+    outcome: &GameOutcome,
+) {
+    let (e1_name, e2_name) = (config.e1_name.as_str(), config.e2_name.as_str());
+    let (white_name, black_name) = if e1_is_white {
+        (e1_name, e2_name)
+    } else {
+        (e2_name, e1_name)
+    };
+    let result_str = match outcome.result {
+        GameResult::WhiteWin => "1-0",
+        GameResult::BlackWin => "0-1",
+        GameResult::Draw => "1/2-1/2",
+    };
+    println!(
+        "Game {:>3}/{}: {} vs {} -> {} ({}, {} plies)  [{} {:.1} - {:.1} {}] [{}]",
+        score.completed(),
+        config.rounds,
+        white_name,
+        black_name,
+        result_str,
+        outcome.reason,
+        outcome.move_count,
+        e1_name,
+        score.e1.points(),
+        score.e1.opponent().points(),
+        e2_name,
+        format_elo(score.e1.wins, score.e1.losses, score.e1.draws),
+    );
+}
+
+/// Plays games with one pair of engines until the tournament runs out of
+/// them, restarting both engines after a crash.
+fn run_worker(tournament: &Tournament) {
+    let config = &tournament.config;
+    let mut e1 = match spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Failed to start engine1: {}", e);
+            return;
+        }
+    };
+    let mut e2 = match spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Failed to start engine2: {}", e);
+            return;
+        }
+    };
+
+    while let Some(game_idx) = tournament.claim_game() {
+        let (white, black) = if e1_plays_white(game_idx) {
+            (&mut e1, &mut e2)
+        } else {
+            (&mut e2, &mut e1)
+        };
+        let outcome = play_game(white, black, &config.game_config(game_idx));
+        tournament.record(game_idx, &outcome);
+
+        if outcome.reason == GameEndReason::EngineCrash {
+            if let Ok(new_e1) =
+                spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
             {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("Failed to start engine1: {}", e);
-                    return;
-                }
-            };
-            let mut e2 = match spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
-            {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("Failed to start engine2: {}", e);
-                    return;
-                }
-            };
-
-            let e1_name = config.e1_name.as_str();
-            let e2_name = config.e2_name.as_str();
-
-            loop {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                let game_idx = next_game.fetch_add(1, Ordering::Relaxed);
-                if game_idx >= config.rounds {
-                    break;
-                }
-
-                let e1_is_white = game_idx.is_multiple_of(2);
-                let (white_clock, black_clock) = if e1_is_white {
-                    (config.e1_clock, config.e2_clock)
-                } else {
-                    (config.e2_clock, config.e1_clock)
-                };
-                let game_config = GameConfig {
-                    white_clock,
-                    black_clock,
-                    max_moves: 300,
-                    start: config.start_for_game(game_idx).clone(),
-                };
-
-                let (white, black) = if e1_is_white {
-                    (&mut e1, &mut e2)
-                } else {
-                    (&mut e2, &mut e1)
-                };
-
-                let (white_name, black_name) = if e1_is_white {
-                    (e1_name, e2_name)
-                } else {
-                    (e2_name, e1_name)
-                };
-
-                let outcome = play_game(white, black, &game_config);
-
-                let result_str = match outcome.result {
-                    GameResult::WhiteWin => "1-0",
-                    GameResult::BlackWin => "0-1",
-                    GameResult::Draw => "1/2-1/2",
-                };
-
-                let mut s = score.lock().unwrap();
-                let pair_completed = s.record(&outcome, e1_is_white, game_idx);
-
-                let e1_score = s.e1.points();
-                let e2_score = s.e1.opponent().points();
-                let elo = format_elo(s.e1.wins, s.e1.losses, s.e1.draws);
-
-                println!(
-                    "Game {:>3}/{}: {} vs {} -> {} ({}, {} plies)  [{} {:.1} - {:.1} {}] [{}]",
-                    s.completed(),
-                    config.rounds,
-                    white_name,
-                    black_name,
-                    result_str,
-                    outcome.reason,
-                    outcome.move_count,
-                    e1_name,
-                    e1_score,
-                    e2_score,
-                    e2_name,
-                    elo,
-                );
-
-                if pair_completed
-                    && let Some(sprt) = config.sprt
-                    && s.sprt_decision.is_none()
-                {
-                    let llr = sprt.llr(&s.penta);
-                    println!(
-                        "  SPRT: LLR {:.2} [{:.2}, {:.2}] after {} pairs",
-                        llr,
-                        sprt.lower_bound(),
-                        sprt.upper_bound(),
-                        s.penta.pairs()
-                    );
-                    let decision = sprt.decide(llr);
-                    if decision != SprtDecision::Continue {
-                        s.sprt_decision = Some(decision);
-                        stop.store(true, Ordering::Relaxed);
-                    }
-                }
-
-                // If an engine crashed, try to respawn it
-                if outcome.reason == GameEndReason::EngineCrash {
-                    if let Ok(new_e1) =
-                        spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
-                    {
-                        e1 = new_e1;
-                    }
-                    if let Ok(new_e2) =
-                        spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
-                    {
-                        e2 = new_e2;
-                    }
-                }
+                e1 = new_e1;
             }
-
-            e1.quit();
-            e2.quit();
-        });
-
-        handles.push(handle);
+            if let Ok(new_e2) =
+                spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
+            {
+                e2 = new_e2;
+            }
+        }
     }
 
-    for h in handles {
-        let _ = h.join();
-    }
-
-    let elapsed = start_time.elapsed().as_secs_f64();
-
-    let mut s = score.lock().unwrap();
-    if config.sprt.is_some() && s.sprt_decision.is_none() {
-        s.sprt_decision = Some(SprtDecision::Continue);
-    }
-    let e1_name = config.e1_name.as_str();
-    let e2_name = config.e2_name.as_str();
-
-    print_summary(&s, e1_name, e2_name, elapsed);
-    Ok(())
+    e1.quit();
+    e2.quit();
 }
 
 #[cfg(test)]
