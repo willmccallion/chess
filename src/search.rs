@@ -436,13 +436,7 @@ struct Search<'a> {
 /// half-moves without a capture or pawn move, unless the side to move is
 /// checkmated, which the mate decides.
 fn is_fifty_move_draw(board: &Board) -> bool {
-    board.halfmove_clock >= 100 && !(board.in_check() && has_no_legal_move(board))
-}
-
-fn has_no_legal_move(board: &Board) -> bool {
-    let mut moves = MoveList::new();
-    board.generate_legal_moves(&mut moves);
-    moves.is_empty()
+    board.halfmove_clock >= 100 && !(board.in_check() && !board.has_legal_move())
 }
 
 /// Makes `m` if it is legal in `pos`.
@@ -1817,7 +1811,7 @@ fn iteration_info(search: &Search, depth: usize, best_move: Move, score: i32) ->
 
 fn legal_moves(board: &Board) -> MoveList {
     let mut moves = MoveList::new();
-    board.clone().generate_legal_moves(&mut moves);
+    board.generate_legal_moves(&mut moves);
     moves
 }
 

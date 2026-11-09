@@ -279,6 +279,13 @@ impl Board {
     }
 
     #[inline]
+    /// Whether the side to move has any legal move.
+    pub fn has_legal_move(&self) -> bool {
+        let mut moves = MoveList::new();
+        self.generate_legal_moves(&mut moves);
+        !moves.is_empty()
+    }
+
     pub fn generate_legal_moves(&self, out: &mut MoveList) {
         let mut pseudo = MoveList::new();
         self.generate_pseudo_legal_moves(&mut pseudo);
@@ -889,27 +896,11 @@ impl Board {
             san.push(promo.to_char_upper());
         }
 
-        let mut temp_board = self.clone();
-        let undo = temp_board.make_move(m);
-
-        if temp_board.in_check() {
-            let mut has_legal_move = false;
-            let mut next_moves = MoveList::new();
-            temp_board.generate_legal_moves(&mut next_moves);
-
-            if !next_moves.is_empty() {
-                has_legal_move = true;
-            }
-
-            if has_legal_move {
-                san.push('+');
-            } else {
-                san.push('#');
-            }
+        let mut after = self.clone();
+        after.make_move(m);
+        if after.in_check() {
+            san.push(if after.has_legal_move() { '+' } else { '#' });
         }
-
-        temp_board.unmake_move(m, undo);
-
         san
     }
 }
