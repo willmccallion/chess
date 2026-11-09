@@ -57,3 +57,36 @@ pub fn format_uci(m: Move) -> String {
 
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::START_FEN;
+
+    fn parsed(fen: &str, text: &str) -> Option<String> {
+        let mut board = Board::from_fen(fen).unwrap();
+        parse_uci_move(&mut board, text).map(format_uci)
+    }
+
+    #[test]
+    fn a_move_is_read_in_either_case_and_written_in_lower_case() {
+        assert_eq!(parsed(START_FEN, "E2E4"), Some("e2e4".to_string()));
+    }
+
+    #[test]
+    fn short_text_and_squares_off_the_board_are_not_moves() {
+        for text in ["", "e2e", "i2i4", "e9e4", "e0e1"] {
+            assert_eq!(parsed(START_FEN, text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_promotion_needs_a_piece_letter_and_keeps_it() {
+        let fen = "8/4P1k1/8/8/8/8/6K1/8 w - - 0 1";
+
+        assert_eq!(parsed(fen, "e7e8"), None);
+        assert_eq!(parsed(fen, "e7e8x"), None);
+        assert_eq!(parsed(fen, "e7e8N"), Some("e7e8n".to_string()));
+        assert_eq!(parsed(fen, "e7e8q"), Some("e7e8q".to_string()));
+    }
+}

@@ -595,6 +595,68 @@ mod tests {
     }
 
     #[test]
+    fn setoption_reads_names_with_spaces_and_empty_values() {
+        assert_eq!(
+            parse_setoption(" name Move Overhead value 30"),
+            Some(("Move Overhead".to_string(), "30".to_string()))
+        );
+        assert_eq!(
+            parse_setoption(" name Ponder"),
+            Some(("Ponder".to_string(), String::new()))
+        );
+        assert_eq!(parse_setoption(" Hash 16"), None);
+    }
+
+    #[test]
+    fn a_position_needs_startpos_or_a_valid_fen() {
+        assert!(parse_position("").is_err());
+        assert!(parse_position("moves e2e4").is_err());
+        assert!(parse_position("fen not a fen").is_err());
+    }
+
+    #[test]
+    fn a_position_stops_at_an_illegal_move_and_keeps_the_moves_before_it() {
+        let board = parse_position("startpos moves e2e4 e7e9 d2d4").unwrap();
+
+        let mut expected = Board::from_fen(START_FEN).unwrap();
+        let e4 = parse_uci_move(&mut expected, "e2e4").unwrap();
+        expected.make_move(e4);
+        assert_eq!(board.to_fen(), expected.to_fen());
+    }
+
+    #[test]
+    fn hash_and_threads_outside_their_ranges_are_ignored() {
+        let mut options = Options::new(EvalOptions::built_in());
+        let mut tt = SharedTransTable::new(1);
+
+        for (name, value) in [
+            ("Hash", "0"),
+            ("Hash", "999999"),
+            ("Threads", "0"),
+            ("Threads", "100000"),
+        ] {
+            apply_option(name, value, &mut options, &mut tt);
+        }
+
+        assert_eq!(
+            (options.hash_mb, options.threads),
+            (DEFAULT_HASH_MB, DEFAULT_THREADS)
+        );
+    }
+
+    #[test]
+    fn move_overhead_is_clamped_to_its_range() {
+        let mut options = Options::new(EvalOptions::built_in());
+        let mut tt = SharedTransTable::new(1);
+
+        apply_option("Move Overhead", "-5", &mut options, &mut tt);
+        let low = options.move_overhead_ms;
+        apply_option("Move Overhead", "999999", &mut options, &mut tt);
+
+        assert_eq!((low, options.move_overhead_ms), (0, MAX_MOVE_OVERHEAD_MS));
+    }
+
+    #[test]
     fn movetime_gives_its_time_less_the_overhead() {
         let budget = time_budget("movetime 500", Color::Black, 10);
 
