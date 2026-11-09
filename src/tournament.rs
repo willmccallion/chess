@@ -1,3 +1,4 @@
+use crate::elo::{elo_error_95, elo_of};
 use crate::game_runner::{
     EngineResult, GameClock, GameConfig, GameEndReason, GameOutcome, GameResult, StartPosition,
     Wdl, play_game,
@@ -139,42 +140,13 @@ pub fn parse_option(s: &str) -> Result<(String, String), String> {
     Ok((name.trim().to_string(), value.trim().to_string()))
 }
 
-fn elo_diff(wins: usize, losses: usize, draws: usize) -> Option<f64> {
-    let total = (wins + losses + draws) as f64;
-    if total == 0.0 {
-        return None;
-    }
-    let score = (wins as f64 + draws as f64 * 0.5) / total;
-    if score <= 0.0 || score >= 1.0 {
-        return None;
-    }
-    Some(-400.0 * (1.0 / score - 1.0).log10())
-}
-
-fn elo_error_95(wins: usize, losses: usize, draws: usize) -> Option<f64> {
-    let total = (wins + losses + draws) as f64;
-    if total < 2.0 {
-        return None;
-    }
-    let score = (wins as f64 + draws as f64 * 0.5) / total;
-    if score <= 0.0 || score >= 1.0 {
-        return None;
-    }
-    let se = (score * (1.0 - score) / total).sqrt();
-    let lo = (score - 1.96 * se).max(0.001);
-    let hi = (score + 1.96 * se).min(0.999);
-    let elo_lo = -400.0 * (1.0 / lo - 1.0).log10();
-    let elo_hi = -400.0 * (1.0 / hi - 1.0).log10();
-    Some((elo_hi - elo_lo) / 2.0)
-}
-
-fn format_elo(wins: usize, losses: usize, draws: usize) -> String {
-    match elo_diff(wins, losses, draws) {
+fn format_elo(wdl: Wdl) -> String {
+    match elo_of(wdl) {
         // `{:+.0}` would show an estimate that rounds to zero as "+0" or "-0".
         Some(e) if e.round() == 0.0 => "0".to_string(),
         Some(e) => format!("{:+.0}", e),
-        None if wins > losses => "+inf".to_string(),
-        None if losses > wins => "-inf".to_string(),
+        None if wdl.wins > wdl.losses => "+inf".to_string(),
+        None if wdl.losses > wdl.wins => "-inf".to_string(),
         _ => "0".to_string(),
     }
 }
@@ -226,10 +198,10 @@ const SUMMARY_RULE: &str = "====================================================
 /// The score with its Elo estimate, then the game, pair, SPRT and speed counts.
 fn print_score_lines(standings: &Standings, elapsed: f64) {
     let total = standings.completed();
-    let elo = format_elo(standings.e1.wins, standings.e1.losses, standings.e1.draws);
+    let elo = format_elo(standings.e1);
     let err = match standings.penta.elo() {
         Some((_, pair_error)) => Some(pair_error),
-        None => elo_error_95(standings.e1.wins, standings.e1.losses, standings.e1.draws),
+        None => elo_error_95(standings.e1),
     };
     let draw_rate = if total > 0 {
         standings.e1.draws as f64 / total as f64 * 100.0
@@ -579,7 +551,7 @@ fn print_game_line(
         standings.e1.points(),
         standings.e1.opponent().points(),
         e2_name,
-        format_elo(standings.e1.wins, standings.e1.losses, standings.e1.draws),
+        format_elo(standings.e1),
     );
 }
 
@@ -669,35 +641,8 @@ mod tests {
     }
 
     #[test]
-    fn elo_is_undefined_without_games_or_with_a_clean_sweep() {
-        assert_eq!(elo_diff(0, 0, 0), None);
-        assert_eq!(elo_diff(5, 0, 0), None);
-        assert_eq!(elo_diff(0, 5, 0), None);
-    }
-
-    #[test]
-    fn elo_follows_the_logistic_curve() {
-        let even = elo_diff(3, 3, 4).unwrap();
-        let three_quarters = elo_diff(3, 1, 0).unwrap();
-
-        assert!(even.abs() < 1e-9, "{even}");
-        assert!(
-            (three_quarters - 400.0 * 3f64.log10()).abs() < 1e-9,
-            "{three_quarters}"
-        );
-    }
-
-    #[test]
-    fn the_error_bar_needs_two_games_and_a_mixed_score() {
-        assert_eq!(elo_error_95(1, 0, 0), None);
-        assert_eq!(elo_error_95(0, 0, 0), None);
-        assert_eq!(elo_error_95(4, 0, 0), None);
-        assert!(elo_error_95(10, 10, 0).is_some_and(|e| e.is_finite() && e > 0.0));
-    }
-
-    #[test]
     fn an_even_or_nearly_even_score_formats_as_zero_elo() {
-        let shown = [format_elo(2, 2, 0), format_elo(1000, 1001, 0)];
+        let shown = [format_elo(wdl(2, 2, 0)), format_elo(wdl(1000, 1001, 0))];
 
         assert_eq!(shown, ["0", "0"]);
     }
@@ -712,13 +657,21 @@ mod tests {
     #[test]
     fn a_clean_sweep_formats_as_infinite_elo() {
         let shown = [
-            format_elo(4, 0, 0),
-            format_elo(0, 4, 0),
-            format_elo(0, 0, 0),
-            format_elo(3, 1, 0),
+            format_elo(wdl(4, 0, 0)),
+            format_elo(wdl(0, 4, 0)),
+            format_elo(wdl(0, 0, 0)),
+            format_elo(wdl(3, 1, 0)),
         ];
 
         assert_eq!(shown, ["+inf", "-inf", "0", "+191"]);
+    }
+
+    const fn wdl(wins: usize, losses: usize, draws: usize) -> Wdl {
+        Wdl {
+            wins,
+            losses,
+            draws,
+        }
     }
 
     fn outcome(result: GameResult, reason: GameEndReason, move_count: usize) -> GameOutcome {
@@ -759,11 +712,6 @@ mod tests {
             1,
         );
 
-        let wdl = |wins, losses, draws| Wdl {
-            wins,
-            losses,
-            draws,
-        };
         assert_eq!((first, second), (false, true));
         assert_eq!(standings.e1, wdl(1, 1, 0));
         assert_eq!(

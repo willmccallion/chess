@@ -1,6 +1,6 @@
 //! Pentanomial game-pair statistics and a GSPRT stopping rule in logistic Elo.
 
-const Z_95: f64 = 1.96;
+use crate::elo::{Z_95, elo_to_score, score_to_elo};
 
 /// Outcome of a game pair from engine 1's perspective, in half-points (0..=4).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -62,14 +62,6 @@ impl Pentanomial {
         let error = (score_to_elo(upper) - score_to_elo(lower)) / 2.0;
         Some((score_to_elo(mean), error))
     }
-}
-
-fn score_to_elo(score: f64) -> f64 {
-    -400.0 * (1.0 / score - 1.0).log10()
-}
-
-fn elo_to_score(elo: f64) -> f64 {
-    1.0 / (1.0 + 10f64.powf(-elo / 400.0))
 }
 
 #[derive(Copy, Clone, Debug)]

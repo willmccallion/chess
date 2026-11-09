@@ -4,6 +4,7 @@ pub mod board;
 pub mod coach;
 pub mod compare;
 pub mod datagen;
+mod elo;
 pub mod eval;
 pub mod fen;
 pub mod game_runner;
