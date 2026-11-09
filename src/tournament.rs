@@ -480,6 +480,10 @@ impl Tournament {
 
     /// Adds a finished game to the standings and prints it, then runs SPRT
     /// if the game completes a pair.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "holding the lock keeps each printed line in step with its standings"
+    )]
     fn record(&self, game_idx: usize, outcome: &GameOutcome) {
         let e1_is_white = e1_plays_white(game_idx);
         let mut standings = self
@@ -681,6 +685,7 @@ mod tests {
 
     #[test]
     fn a_game_result_reads_from_each_engines_side() {
+        use EngineResult::{Draw, Loss, Win};
         let results = [
             EngineResult::of(GameResult::WhiteWin, true),
             EngineResult::of(GameResult::WhiteWin, false),
@@ -690,7 +695,6 @@ mod tests {
             EngineResult::of(GameResult::Draw, false),
         ];
 
-        use EngineResult::{Draw, Loss, Win};
         assert_eq!(results, [Win, Loss, Loss, Win, Draw, Draw]);
     }
 

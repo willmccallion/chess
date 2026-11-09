@@ -311,7 +311,10 @@ mod tests {
         let b = board(START_FEN);
         let [e4, _] = moves_pair(&b, "e4", "d4");
 
-        assert!(positional_differences(&b, e4, e4, Phase::Opening).is_empty());
+        assert_eq!(
+            positional_differences(&b, e4, e4, Phase::Opening),
+            Vec::<String>::new()
+        );
     }
 
     fn moves_pair(b: &Board, first: &str, second: &str) -> [Move; 2] {

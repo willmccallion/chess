@@ -122,6 +122,7 @@ pub enum Color {
 
 impl Color {
     #[inline(always)]
+    #[must_use]
     pub fn other(self) -> Self {
         if self == Self::White {
             Self::Black
@@ -182,7 +183,7 @@ impl Piece {
         match self {
             Self::WP | Self::WN | Self::WB | Self::WR | Self::WQ | Self::WK => Some(Color::White),
             Self::BP | Self::BN | Self::BB | Self::BR | Self::BQ | Self::BK => Some(Color::Black),
-            _ => None,
+            Self::Empty => None,
         }
     }
 
@@ -195,7 +196,7 @@ impl Piece {
             Self::WR | Self::BR => Some(PieceKind::Rook),
             Self::WQ | Self::BQ => Some(PieceKind::Queen),
             Self::WK | Self::BK => Some(PieceKind::King),
-            _ => None,
+            Self::Empty => None,
         }
     }
 

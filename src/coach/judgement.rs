@@ -34,9 +34,8 @@ impl Eval {
     /// The chance the side to move wins (draws counting half).
     pub fn win_chance(self) -> WinChance {
         match self {
-            Self::Checkmated => WinChance::LOST,
             Self::Score(Score::MateIn(moves)) if moves > 0 => WinChance::WON,
-            Self::Score(Score::MateIn(_)) => WinChance::LOST,
+            Self::Checkmated | Self::Score(Score::MateIn(_)) => WinChance::LOST,
             Self::Score(Score::Centipawns(cp)) => {
                 let cp = f64::from(cp.clamp(-CP_CLAMP, CP_CLAMP));
                 WinChance(100.0 / (1.0 + (-WIN_CHANCE_SLOPE * cp).exp()))
@@ -94,6 +93,7 @@ impl WinChance {
         self.0
     }
 
+    #[must_use]
     pub fn for_opponent(self) -> Self {
         Self(100.0 - self.0)
     }

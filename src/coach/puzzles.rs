@@ -131,7 +131,7 @@ impl LichessPuzzle {
 }
 
 /// What happened when you tried a move.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
     /// Right; the opponent answers with `reply` and you go on.
     Continue {

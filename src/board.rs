@@ -716,6 +716,7 @@ impl Board {
 
     /// A copy without evaluation state, so it and its clones are cheap; evaluating it
     /// rebuilds the state on first use.
+    #[must_use]
     pub fn without_eval_state(&self) -> Self {
         Self {
             piece_bb: self.piece_bb,
@@ -1111,10 +1112,6 @@ mod tests {
         }
     }
 
-    fn move_key(m: &Move) -> u16 {
-        u16::from(*m)
-    }
-
     /// The FENs the perft suite checks, and an en-passant position.
     const SPLIT_FENS: [&str; 6] = [
         START_FEN,
@@ -1139,10 +1136,10 @@ mod tests {
                 split.push(m);
             }
 
-            let mut all_keys: Vec<_> = all.as_slice().iter().map(move_key).collect();
-            let mut split_keys: Vec<_> = split.as_slice().iter().map(move_key).collect();
-            all_keys.sort();
-            split_keys.sort();
+            let mut all_keys: Vec<_> = all.as_slice().iter().map(|&m| u16::from(m)).collect();
+            let mut split_keys: Vec<_> = split.as_slice().iter().map(|&m| u16::from(m)).collect();
+            all_keys.sort_unstable();
+            split_keys.sort_unstable();
             assert_eq!(all_keys, split_keys, "{}", board.to_fen());
         }
     }

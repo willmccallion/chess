@@ -123,9 +123,11 @@ const SEE_ORDER: [PieceKind; 6] = [
     PieceKind::King,
 ];
 
-/// Whether the static exchange on the move's target square gains at least `threshold`
-/// for the side to move. Handles quiet moves and x-ray attackers; castling and
-/// promotions are treated as an exchange worth zero.
+/// Whether the static exchange on the move's target square gains at least
+/// `threshold` for the side to move.
+///
+/// Handles quiet moves and x-ray attackers; castling and promotions count as
+/// an exchange worth zero.
 pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
     if m.is_castle() || m.promotion().is_some() {
         return 0 >= threshold;

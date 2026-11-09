@@ -573,7 +573,7 @@ mod tests {
     fn game(id: u64, sans: &[&str], evals: &[Eval], result: GameResult) -> ReviewedGame {
         let start = Board::from_fen(START_FEN).unwrap();
         let moves = parse_san_line(&start, sans).unwrap();
-        let mut board = start.clone();
+        let mut board = start;
         let mut analysis = Vec::new();
         for (i, &eval) in evals.iter().enumerate() {
             let best_line = if i + 1 < evals.len() && i < moves.len() {

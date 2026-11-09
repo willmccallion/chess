@@ -136,13 +136,14 @@ const CORRECTION_LIMIT: i32 = 128;
 /// Learned static-eval error per pawn structure, in 1/256 of the search's
 /// score unit (3/4 centipawn), which is what the search feeds it.
 pub struct CorrectionHistory {
-    entries: Vec<[i32; CORRECTION_ENTRIES]>,
+    /// White's entries, then Black's.
+    entries: Box<[i32]>,
 }
 
 impl CorrectionHistory {
     pub fn new() -> Self {
         Self {
-            entries: vec![[0; CORRECTION_ENTRIES]; 2],
+            entries: vec![0; 2 * CORRECTION_ENTRIES].into_boxed_slice(),
         }
     }
 
@@ -151,9 +152,13 @@ impl CorrectionHistory {
         (pawn_key >> (64 - CORRECTION_BITS)) as usize
     }
 
+    const fn index(color: Color, pawn_key: u64) -> usize {
+        color as usize * CORRECTION_ENTRIES + Self::slot(pawn_key)
+    }
+
     /// Search units to add to the static eval of a position with this pawn structure.
     pub fn correction(&self, color: Color, pawn_key: u64) -> i32 {
-        self.entries[color as usize][Self::slot(pawn_key)] / CORRECTION_GRAIN
+        self.entries[Self::index(color, pawn_key)] / CORRECTION_GRAIN
     }
 
     /// Moves the stored correction toward `error` (search score minus corrected eval),
@@ -161,7 +166,7 @@ impl CorrectionHistory {
     pub fn update(&mut self, color: Color, pawn_key: u64, error: i32, depth: i32, max_weight: i32) {
         let weight = (depth + 1).min(max_weight);
         let limit = CORRECTION_LIMIT * CORRECTION_GRAIN;
-        let entry = &mut self.entries[color as usize][Self::slot(pawn_key)];
+        let entry = &mut self.entries[Self::index(color, pawn_key)];
         let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
         let blended = (*entry * (CORRECTION_WEIGHT_SCALE - weight) + target * weight)
             / CORRECTION_WEIGHT_SCALE;

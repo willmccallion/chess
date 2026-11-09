@@ -149,7 +149,7 @@ impl DatagenArgs {
             nodes: chess::search::NodeLimit {
                 soft: soft_nodes.max(1),
                 hard: hard_nodes
-                    .unwrap_or(soft_nodes.saturating_mul(8))
+                    .unwrap_or_else(|| soft_nodes.saturating_mul(8))
                     .max(soft_nodes.max(1)),
             },
             random_plies,
@@ -297,8 +297,8 @@ struct EvalTraceArgs {
 #[cfg(feature = "stockfish-nnue")]
 impl EvalTraceArgs {
     fn run(self) {
-        let Self { fen, big, small } = self;
         use eval::stockfish::{NetPaths, load, trace_text};
+        let Self { fen, big, small } = self;
         let built_in = NetPaths::built_in();
         let paths = match (big, small, built_in) {
             (Some(big), Some(small), _) => NetPaths {
@@ -723,8 +723,13 @@ impl SideChoice {
         match self {
             Self::White => Color::White,
             Self::Black => Color::Black,
-            Self::Random if rand::random::<bool>() => Color::White,
-            Self::Random => Color::Black,
+            Self::Random => {
+                if rand::random::<bool>() {
+                    Color::White
+                } else {
+                    Color::Black
+                }
+            }
         }
     }
 }

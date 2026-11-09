@@ -172,8 +172,13 @@ impl Setup {
         let human = match self.side {
             SideChoice::White => Color::White,
             SideChoice::Black => Color::Black,
-            SideChoice::Random if rand::Rng::gen_bool(&mut data.rng, 0.5) => Color::White,
-            SideChoice::Random => Color::Black,
+            SideChoice::Random => {
+                if rand::Rng::gen_bool(&mut data.rng, 0.5) {
+                    Color::White
+                } else {
+                    Color::Black
+                }
+            }
         };
         GameSettings {
             level: self.level.unwrap_or_else(|| data.profile.suggested_level()),

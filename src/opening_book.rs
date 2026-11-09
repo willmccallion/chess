@@ -33,7 +33,6 @@ pub struct BookEntry {
     pub key: u64,
     pub raw_move: u16,
     pub weight: u16,
-    pub _learn: u32,
 }
 
 impl BookEntry {
@@ -78,13 +77,11 @@ impl OpeningBook {
             let key = (&buffer[0..8]).read_u64::<BigEndian>()?;
             let raw_move = (&buffer[8..10]).read_u16::<BigEndian>()?;
             let weight = (&buffer[10..12]).read_u16::<BigEndian>()?;
-            let learn = (&buffer[12..16]).read_u32::<BigEndian>()?;
-
+            // The last four bytes, Polyglot's learn field, are not used.
             entries.push(BookEntry {
                 key,
                 raw_move,
                 weight,
-                _learn: learn,
             });
         }
 
@@ -234,7 +231,6 @@ mod tests {
             key: 0,
             raw_move: (from << 6) | to,
             weight: 1,
-            _learn: 0,
         };
         entry.legal_move(&board, legal.as_slice()).map(format_uci)
     }

@@ -7,19 +7,19 @@ use std::sync::OnceLock;
 
 struct LineTables {
     /// Squares strictly between two aligned squares.
-    between: [[Bitboard; 64]; 64],
+    between: Box<[[Bitboard; 64]]>,
     /// The full rank, file or diagonal through two aligned squares.
-    line: [[Bitboard; 64]; 64],
+    line: Box<[[Bitboard; 64]]>,
 }
 
-static LINE_TABLES: OnceLock<Box<LineTables>> = OnceLock::new();
+static LINE_TABLES: OnceLock<LineTables> = OnceLock::new();
 
 fn line_tables() -> &'static LineTables {
     LINE_TABLES.get_or_init(|| {
-        let mut tables = Box::new(LineTables {
-            between: [[0; 64]; 64],
-            line: [[0; 64]; 64],
-        });
+        let mut tables = LineTables {
+            between: vec![[0; 64]; 64].into_boxed_slice(),
+            line: vec![[0; 64]; 64].into_boxed_slice(),
+        };
         for a in 0..64 {
             for b in 0..64 {
                 if a == b {

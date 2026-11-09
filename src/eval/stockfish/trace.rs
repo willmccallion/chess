@@ -9,6 +9,12 @@ use std::fmt::Write;
 
 /// Stockfish's WDL-model scale `a` for the material on the board.
 fn win_rate_scale(position: PositionView) -> f64 {
+    const AS: [f64; 4] = [
+        -72.325_658_36,
+        185.938_320_38,
+        -144.588_621_93,
+        416.449_504_46,
+    ];
     let count = |pieces: [Piece; 2]| {
         pieces
             .iter()
@@ -21,12 +27,6 @@ fn win_rate_scale(position: PositionView) -> f64 {
         + 5 * count([Piece::WR, Piece::BR])
         + 9 * count([Piece::WQ, Piece::BQ]);
     let m = f64::from(material.clamp(17, 78)) / 58.0;
-    const AS: [f64; 4] = [
-        -72.325_658_36,
-        185.938_320_38,
-        -144.588_621_93,
-        416.449_504_46,
-    ];
     ((AS[0] * m + AS[1]) * m + AS[2]) * m + AS[3]
 }
 

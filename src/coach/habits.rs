@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn recapturing_with_the_queen_is_not_an_early_queen() {
-        assert!(habits(&["e4", "d5", "exd5", "Qxd5"], Color::Black).is_empty());
+        assert_eq!(habits(&["e4", "d5", "exd5", "Qxd5"], Color::Black), []);
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn a_knight_escaping_a_pawn_attack_may_move_again() {
-        assert!(habits(&["Nf3", "e5", "e3", "e4", "Nd4"], Color::White).is_empty());
+        assert_eq!(habits(&["Nf3", "e5", "e3", "e4", "Nd4"], Color::White), []);
     }
 
     #[test]
@@ -208,8 +208,8 @@ mod tests {
             "a6", "Bb3", "Ba7", "Nbd2", "h6", "Nf1", "Re8", "Ng3", "Be6", "h3", "Qd7",
         ];
 
-        assert!(habits(&italian, Color::White).is_empty());
-        assert!(habits(&italian, Color::Black).is_empty());
+        assert_eq!(habits(&italian, Color::White), []);
+        assert_eq!(habits(&italian, Color::Black), []);
     }
 
     #[test]

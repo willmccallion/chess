@@ -24,9 +24,9 @@ const MAX_DEPTH: usize = 127;
 const COACH_HASH_MB: usize = 16;
 
 fn parse_setoption(rest: &str) -> Option<(String, String)> {
+    const VALUE: &str = " value ";
     let parts: Vec<&str> = rest.splitn(2, "name").collect();
     let after = parts.get(1)?.trim();
-    const VALUE: &str = " value ";
     if let Some(idx) = after.to_ascii_lowercase().find(VALUE) {
         let (n, v) = after.split_at(idx);
         Some((n.trim().to_string(), v[VALUE.len()..].trim().to_string()))

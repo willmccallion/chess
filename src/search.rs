@@ -303,7 +303,7 @@ impl TimeManager {
     }
 
     #[inline(always)]
-    fn check_hard_limit(&mut self) -> bool {
+    fn check_hard_limit(&self) -> bool {
         if self.control.is_stopped() {
             return true;
         }
@@ -437,7 +437,7 @@ struct Search<'a> {
 /// half-moves without a capture or pawn move, unless the side to move is
 /// checkmated, which the mate decides.
 fn is_fifty_move_draw(board: &Board) -> bool {
-    board.halfmove_clock >= 100 && !(board.in_check() && !board.has_legal_move())
+    board.halfmove_clock >= 100 && (!board.in_check() || board.has_legal_move())
 }
 
 /// Makes `m` if it is legal in `pos`.
@@ -1325,6 +1325,10 @@ fn search_late_move(
 
 /// What a late move's reduction weighs about the move and its node.
 #[derive(Clone, Copy)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the move"
+)]
 struct LateMove {
     depth: i32,
     /// The depth the move is searched to before any reduction.

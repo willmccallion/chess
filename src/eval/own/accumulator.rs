@@ -20,7 +20,7 @@ pub(super) const fn feature_index(
     };
     let relative_square = match perspective {
         Color::White => square,
-        Color::Black => square ^ 56,
+        Color::Black => square ^ 0b11_1000,
     };
     side + 64 * kind as usize + relative_square
 }
@@ -148,7 +148,7 @@ impl AccumulatorStack {
     /// Accumulators of the current position, which is `position`.
     pub fn current(&mut self, net: &Network, position: PositionView) -> &Pair {
         if let Some(base) = self.latest_computed() {
-            self.update_from(net, base)
+            self.update_from(net, base);
         } else {
             let ply = &mut self.plies[self.top];
             ply.accumulators = refreshed(net, position);

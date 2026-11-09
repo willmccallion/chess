@@ -137,10 +137,12 @@ impl Level {
             .unwrap_or(Self::WEAKEST)
     }
 
+    #[must_use]
     pub fn harder(self) -> Self {
         Self::new(self.0 + 1).unwrap_or(self)
     }
 
+    #[must_use]
     pub fn easier(self) -> Self {
         Self::new(self.0.saturating_sub(1)).unwrap_or(self)
     }

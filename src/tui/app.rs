@@ -180,6 +180,10 @@ fn since_ms(since: Instant, now: Instant) -> i64 {
     now.saturating_duration_since(since).as_millis() as i64
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent toggles of the board screen"
+)]
 pub struct App {
     config: PlayConfig,
     human: Color,
@@ -527,19 +531,19 @@ impl App {
     /// The game so far: its moves in numbered SAN and the position reached.
     pub fn record(&self) -> String {
         let moves: Vec<Move> = self.history.iter().map(|&(m, _)| m).collect();
-        let mut record = String::new();
+        let mut lines = Vec::new();
         if self.config.start.to_fen() != crate::types::START_FEN {
-            record.push_str(&format!("Start: {}\n", self.config.start.to_fen()));
+            lines.push(format!("Start: {}", self.config.start.to_fen()));
         }
-        record.push_str(&format!(
-            "Moves: {}\n",
+        lines.push(format!(
+            "Moves: {}",
             line_in_san(&self.config.start, &moves)
         ));
-        record.push_str(&format!("Final: {}", self.board.to_fen()));
+        lines.push(format!("Final: {}", self.board.to_fen()));
         if let Some(end) = self.outcome {
-            record.push_str(&format!("\nResult: {:?} by {}", end.result, end.reason));
+            lines.push(format!("Result: {:?} by {}", end.result, end.reason));
         }
-        record
+        lines.join("\n")
     }
 
     /// A press of the left mouse button on `square`.
@@ -689,7 +693,7 @@ mod tests {
         app.release_square(square("e2"), now);
         app.press_square(square("e5"), now);
 
-        assert!(app.history().is_empty());
+        assert_eq!(app.history(), []);
         assert_eq!(app.selected(), None);
     }
 
@@ -752,7 +756,7 @@ mod tests {
         app.press_square(square("e7"), now);
         app.release_square(square("e8"), now);
         assert!(app.pending_promotion().is_some());
-        assert!(app.history().is_empty());
+        assert_eq!(app.history(), []);
 
         app.choose_promotion(PieceKind::Knight, now);
 
@@ -770,7 +774,7 @@ mod tests {
 
         app.undo(now);
 
-        assert!(app.history().is_empty());
+        assert_eq!(app.history(), []);
         assert_eq!(app.board().turn, Color::White);
     }
 

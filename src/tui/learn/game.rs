@@ -180,7 +180,7 @@ impl CoachGame {
             .map(|(_, a)| a)
     }
 
-    fn guard_search(&self, tag: u64, board: Board) -> Job {
+    fn guard_search(tag: u64, board: Board) -> Job {
         Job {
             tag,
             kind: JobKind::Search(SearchLimit::Time(Some(TimeBudget::fixed(GUARD_SEARCH_MS)))),
@@ -459,17 +459,15 @@ impl CoachGame {
 impl Screen for CoachGame {
     fn draw(&self, frame: &mut Frame, data: &CoachData, now: Instant) {
         let layout = screen_layout(frame.area());
-        let mut marks = Vec::new();
-        if let Some(m) = self.app.proposed() {
-            marks = move_marks(
-                m,
-                if self.warning.is_some() {
-                    MARK_BAD
-                } else {
-                    super::common::MARK_HINT
-                },
-            );
-        }
+        let mark = if self.warning.is_some() {
+            MARK_BAD
+        } else {
+            super::common::MARK_HINT
+        };
+        let marks = self
+            .app
+            .proposed()
+            .map_or_else(Vec::new, |m| move_marks(m, mark));
         let scene = BoardScene {
             board: self.app.board(),
             flipped: self.app.flipped,
@@ -655,7 +653,10 @@ impl Screen for CoachGame {
             return None;
         }
         if self.baseline_for_now().is_none() {
-            return Some(self.guard_search(BASELINE_TAG | ply as u64, self.app.board().clone()));
+            return Some(Self::guard_search(
+                BASELINE_TAG | ply as u64,
+                self.app.board().clone(),
+            ));
         }
         let proposed = self.app.proposed().filter(|_| self.warning.is_none())?;
         let mut after = self.app.board().clone();
@@ -664,7 +665,7 @@ impl Screen for CoachGame {
             | (ply as u64) << 16
             | u64::from(u8::from(proposed.from)) << 8
             | u64::from(u8::from(proposed.to));
-        Some(self.guard_search(tag, after))
+        Some(Self::guard_search(tag, after))
     }
 
     fn engine(&mut self, tag: u64, result: JobResult, data: &mut CoachData, now: Instant) -> Nav {

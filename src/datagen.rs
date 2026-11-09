@@ -1,6 +1,8 @@
-//! Self-play games for training a network. Each kept position is written as
-//! `<FEN> | <score> | <result>`, with the search score in centipawns and the game result
-//! (1.0, 0.5 or 0.0) both from White's side: the text format bullet converts to its data.
+//! Self-play games for training a network.
+//!
+//! Each kept position is written as `<FEN> | <score> | <result>`, with the
+//! search score in centipawns and the game result (1.0, 0.5 or 0.0) both from
+//! White's side: the text format bullet converts to its data.
 
 use crate::board::Board;
 use crate::game_runner::{GameResult, position_outcome};
@@ -392,7 +394,7 @@ mod tests {
         write_game(&mut text, &game).unwrap();
         let text = String::from_utf8(text).unwrap();
 
-        assert!(!game.positions.is_empty());
+        assert_ne!(game.positions, []);
         for line in text.lines() {
             let fields: Vec<&str> = line.split(" | ").collect();
             assert_eq!(fields.len(), 3, "{line}");

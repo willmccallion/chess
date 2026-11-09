@@ -5,6 +5,7 @@
 pub struct UnixTime(pub u64);
 
 impl UnixTime {
+    #[must_use]
     pub const fn plus_seconds(self, seconds: u64) -> Self {
         Self(self.0 + seconds)
     }

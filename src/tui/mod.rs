@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Engine resources for a session.
+#[derive(Clone, Copy)]
 pub struct EngineConfig {
     pub threads: usize,
     pub hash_mb: usize,

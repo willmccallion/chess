@@ -120,10 +120,11 @@ impl Session {
                 area = frame.area();
                 screen.draw(frame, data, now);
             })?;
-            let mut nav = Nav::Stay;
-            if event::poll(FRAME_INTERVAL)? {
-                nav = self.handle_event(&event::read()?, area, data);
-            }
+            let mut nav = if event::poll(FRAME_INTERVAL)? {
+                self.handle_event(&event::read()?, area, data)
+            } else {
+                Nav::Stay
+            };
             while matches!(nav, Nav::Stay)
                 && let Some(reply) = engine.try_reply()
             {

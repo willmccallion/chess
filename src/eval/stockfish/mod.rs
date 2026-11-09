@@ -57,15 +57,15 @@ pub struct Networks {
 
 static LOADED: NetCache<Networks> = NetCache::new();
 
-fn load_error(path: &Path, error: NetLoadError) -> String {
+fn load_error(path: &Path, error: &NetLoadError) -> String {
     format!("{}: {error}", path.display())
 }
 
 /// The networks in `paths`, read from them unless this process already has.
 pub fn load(paths: &NetPaths) -> Result<&'static Networks, String> {
     let read = || {
-        let big = load_big_network(&paths.big).map_err(|e| load_error(&paths.big, e))?;
-        let small = load_small_network(&paths.small).map_err(|e| load_error(&paths.small, e))?;
+        let big = load_big_network(&paths.big).map_err(|e| load_error(&paths.big, &e))?;
+        let small = load_small_network(&paths.small).map_err(|e| load_error(&paths.small, &e))?;
         Ok(Networks {
             big,
             small,
@@ -194,7 +194,7 @@ impl IncrementalState for AccumulatorStack {
 
 /// The big net's per-bucket table and the final evaluation, as Stockfish's `eval` prints them.
 pub fn trace_text(nets: &Networks, board: &Board) -> String {
-    let mut text = trace::format_trace(&nets.big, board);
+    let trace = trace::format_trace(&nets.big, board);
     let position = board.position_view();
     let internal = stockfish_eval(nets, &mut nets.new_state(), position);
     let white_relative = if board.turn == Color::White {
@@ -202,11 +202,10 @@ pub fn trace_text(nets: &Networks, board: &Board) -> String {
     } else {
         -internal
     };
-    text.push_str(&format!(
-        "Final evaluation       {:+.2} (white side)\n",
+    format!(
+        "{trace}Final evaluation       {:+.2} (white side)\n",
         0.01 * f64::from(trace::to_cp(white_relative, position))
-    ));
-    text
+    )
 }
 
 #[cfg(test)]
@@ -259,7 +258,7 @@ mod tests {
         }
     }
 
-    fn random_move(board: &mut Board, rng: &mut StdRng) -> Option<crate::types::Move> {
+    fn random_move(board: &Board, rng: &mut StdRng) -> Option<crate::types::Move> {
         let mut moves = MoveList::new();
         board.generate_legal_moves(&mut moves);
         (!moves.is_empty()).then(|| moves.get(rng.gen_range(0..moves.len())))
@@ -303,7 +302,7 @@ mod tests {
                     if rng.gen_bool(0.3) {
                         assert_incremental_matches_refresh(&mut board);
                     }
-                    let Some(m) = random_move(&mut board, &mut rng) else {
+                    let Some(m) = random_move(&board, &mut rng) else {
                         break;
                     };
                     board.make_move(m);

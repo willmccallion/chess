@@ -137,6 +137,9 @@ fn find_magic_for_sq(sq: usize, is_rook: bool, rng: &mut Rng) -> FoundMagic {
     }
 }
 
+const KNIGHT_DELTAS: [i32; 8] = [6, 10, 15, 17, -6, -10, -15, -17];
+const KING_DELTAS: [i32; 8] = [1, -1, 8, -8, 7, 9, -7, -9];
+
 /// Generates all attack tables and writes them to a single .rs file.
 fn generate_attacks_source(out_dir: &Path) -> io::Result<()> {
     let dest_path = out_dir.join("generated_attacks.rs");
@@ -151,9 +154,6 @@ fn generate_attacks_source(out_dir: &Path) -> io::Result<()> {
     let mut black_pawn_attacks = [0u64; 64];
     let mut knight_attacks = [0u64; 64];
     let mut king_attacks = [0u64; 64];
-
-    const KNIGHT_DELTAS: [i32; 8] = [6, 10, 15, 17, -6, -10, -15, -17];
-    const KING_DELTAS: [i32; 8] = [1, -1, 8, -8, 7, 9, -7, -9];
 
     for sq in 0..64 {
         let sq_i32 = sq as i32;
@@ -244,6 +244,14 @@ fn write_slider_tables(f: &mut impl Write, name: &str, found: &[FoundMagic]) -> 
     writeln!(f, "];")
 }
 
+const fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut x = *state;
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
 fn generate_zobrist_keys(out_dir: &Path) -> io::Result<()> {
     let dest_path = out_dir.join("generated_zobrist.rs");
     let mut f = BufWriter::new(File::create(&dest_path)?);
@@ -254,13 +262,6 @@ fn generate_zobrist_keys(out_dir: &Path) -> io::Result<()> {
     )?;
     writeln!(f, "use crate::types::ZKey;")?;
 
-    const fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut x = *state;
-        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        x ^ (x >> 31)
-    }
     let mut seed: u64 = 0x1234_5678_9ABC_DEF0;
 
     // Generate the keys

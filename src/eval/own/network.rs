@@ -63,7 +63,8 @@ impl Column {
 
 pub struct Network {
     /// Column `i` is what input feature `i` adds to an accumulator.
-    feature_weights: Box<[Column; INPUTS]>,
+    /// One column per input feature.
+    feature_weights: Box<[Column]>,
     pub(super) feature_bias: Column,
     /// Output weights for the side to move's accumulator, then the other side's.
     output_weights: [Column; 2],
@@ -146,10 +147,9 @@ impl Network {
             pairs: bytes.as_chunks::<2>().0.iter(),
             file_bytes: bytes.len(),
         };
-        let mut feature_weights = Box::new([Column::ZERO; INPUTS]);
-        for column in &mut feature_weights {
-            *column = values.column("feature", MAX_FEATURE_WEIGHT)?;
-        }
+        let feature_weights = (0..INPUTS)
+            .map(|_| values.column("feature", MAX_FEATURE_WEIGHT))
+            .collect::<Result<_, _>>()?;
         let feature_bias = values.column("feature bias", MAX_FEATURE_WEIGHT)?;
         let output_weights = [
             values.column("output", MAX_OUTPUT_WEIGHT)?,

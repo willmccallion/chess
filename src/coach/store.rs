@@ -483,17 +483,17 @@ fn parse_attempt(line: &str) -> Option<AttemptRecord> {
             "0" => false,
             _ => return None,
         },
-        rating: optional_field::<i32>(rating)?.map(Elo),
-        moves: optional_field(moves)?,
+        rating: optional_field::<i32>(rating).ok()?.map(Elo),
+        moves: optional_field(moves).ok()?,
     })
 }
 
-/// A field that is `-` when absent: Some(None) for `-`, None if it does not parse.
-fn optional_field<T: std::str::FromStr>(text: &str) -> Option<Option<T>> {
+/// A field that is `-` when absent.
+fn optional_field<T: std::str::FromStr>(text: &str) -> Result<Option<T>, T::Err> {
     if text == "-" {
-        Some(None)
+        Ok(None)
     } else {
-        text.parse().ok().map(Some)
+        text.parse().map(Some)
     }
 }
 
@@ -597,7 +597,7 @@ mod tests {
         store.append_game(&game).unwrap();
         let loaded = store.load_games().unwrap();
 
-        assert!(loaded.bad_lines.is_empty());
+        assert_eq!(loaded.bad_lines, []);
         let back = &loaded.items[0];
         assert_eq!(
             (back.id, back.human, back.level, back.result),
@@ -628,7 +628,7 @@ mod tests {
         store.save_analysis(GameId(2), &analysis).unwrap();
         let games = store.load_games().unwrap().items;
 
-        assert!(games[0].analysis.is_empty());
+        assert_eq!(games[0].analysis, []);
         assert_eq!(games[1].analysis, analysis);
     }
 

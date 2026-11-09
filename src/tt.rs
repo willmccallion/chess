@@ -122,7 +122,7 @@ impl TTEntry {
     }
 
     #[inline(always)]
-    const fn age(&self) -> u8 {
+    const fn age(self) -> u8 {
         ((self.data >> AGE_SHIFT) & AGE_MASK) as u8
     }
 }
@@ -248,7 +248,7 @@ impl SharedTransTable {
             if slot_key == key {
                 let existing = TTEntry { data };
                 if existing.age() == age || new_entry.depth() >= existing.depth() {
-                    let kept_move = write.best_move.or(existing.best_move());
+                    let kept_move = write.best_move.or_else(|| existing.best_move());
                     let entry = TTEntry::pack(
                         TTWrite {
                             best_move: kept_move,

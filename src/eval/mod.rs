@@ -112,6 +112,10 @@ impl<N> NetCache<N> {
 
     /// The network `is_wanted` picks if one was read before, else the one
     /// `read` returns, which is kept.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "holding the lock while reading keeps two threads from reading one file twice"
+    )]
     pub(crate) fn get_or_read<E>(
         &self,
         is_wanted: impl Fn(&N) -> bool,
@@ -227,15 +231,13 @@ impl EvalOptions {
 
     /// UCI `option` lines for these settings.
     pub fn uci_options(&self) -> Vec<String> {
-        let kinds: String = EvalKind::ALL
-            .iter()
-            .map(|kind| format!(" var {}", kind.name()))
-            .collect();
+        let kinds: Vec<&str> = EvalKind::ALL.iter().map(|kind| kind.name()).collect();
         #[cfg_attr(not(feature = "stockfish-nnue"), expect(unused_mut))]
         let mut lines = vec![
             format!(
-                "option name Evaluator type combo default {}{kinds}",
-                self.kind.name()
+                "option name Evaluator type combo default {} var {}",
+                self.kind.name(),
+                kinds.join(" var ")
             ),
             format!(
                 "option name OwnEvalFile type string default {}",
