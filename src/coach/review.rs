@@ -291,7 +291,7 @@ fn review_move(
     in_book: bool,
 ) -> Option<MoveReview> {
     let san = san_of(board, played)?;
-    let mover = board.turn;
+    let mover = board.turn();
     let mut after_board = board.clone();
     after_board.make_move(played);
     let chance_before = before.eval.win_chance();
@@ -335,7 +335,7 @@ fn find_cause(
     before: &AnalysedPosition,
     after: &AnalysedPosition,
 ) -> Cause {
-    let mover = board.turn;
+    let mover = board.turn();
     let had_mate = before.eval.mate_in().filter(|&n| n > 0);
     let still_mating = after.eval.mate_in().is_some_and(|n| n < 0);
     if let Some(moves) = had_mate
@@ -386,7 +386,7 @@ fn lost_material_cause(
     };
     let capture = first_move_text(after_board, reply_line);
     let target = reply.to;
-    let piece = after_board.piece_on[target.index()].kind();
+    let piece = after_board.piece_on()[target.index()].kind();
     let wins_outright = reply.is_capture()
         && !reply.is_en_passant()
         && see(after_board, reply) >= WINNING_CAPTURE_SEE;

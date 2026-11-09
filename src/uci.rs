@@ -346,7 +346,7 @@ fn start_search(
     let max_depth = go
         .depth
         .map_or(MAX_DEPTH, |d| (d.max(1) as usize).min(MAX_DEPTH));
-    let budget = time_budget(go, board.turn, options.move_overhead_ms);
+    let budget = time_budget(go, board.turn(), options.move_overhead_ms);
 
     let (control, ponder_budget) = if go.ponder {
         (SearchControl::new(None), budget)
@@ -428,8 +428,8 @@ fn coach_move(
 ) -> Option<Move> {
     let spec = level.spec();
     let mut rng = rand::thread_rng();
-    let ply =
-        (board.fullmove_number.max(1) as usize - 1) * 2 + usize::from(board.turn == Color::Black);
+    let ply = (board.fullmove_number().max(1) as usize - 1) * 2
+        + usize::from(board.turn() == Color::Black);
     if ply < spec.book_plies {
         let book: Vec<(Move, u16)> = legal_book_moves(board)
             .iter()
@@ -561,7 +561,7 @@ impl Session {
             let searcher = self
                 .coach_searcher
                 .get_or_insert_with(|| Searcher::new(1, COACH_HASH_MB));
-            let chosen = coach_move(&self.board, level, go.clock(self.board.turn), searcher);
+            let chosen = coach_move(&self.board, level, go.clock(self.board.turn()), searcher);
             answer_now_or_hold(chosen, go, &mut self.active);
             return Ok(());
         }

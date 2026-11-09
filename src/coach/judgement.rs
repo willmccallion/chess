@@ -243,7 +243,7 @@ fn non_pawn_material(board: &Board, color: Color) -> i32 {
 }
 
 pub const fn piece_count(board: &Board, kind: PieceKind, color: Color) -> i32 {
-    board.piece_bb[crate::types::Piece::from_kind(kind, color).index()].count_ones() as i32
+    board.piece_bb()[crate::types::Piece::from_kind(kind, color).index()].count_ones() as i32
 }
 
 /// `color`'s material lead in points.

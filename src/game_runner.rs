@@ -173,14 +173,14 @@ pub fn position_outcome(board: &Board) -> Option<(GameResult, GameEndReason)> {
     board.generate_legal_moves(&mut legal);
     if legal.is_empty() {
         return Some(if board.in_check() {
-            (win_for(board.turn.other()), GameEndReason::Checkmate)
+            (win_for(board.turn().other()), GameEndReason::Checkmate)
         } else {
             (GameResult::Draw, GameEndReason::Stalemate)
         });
     }
     let draw_reason = if board.is_draw_by_repetition() {
         GameEndReason::Repetition
-    } else if board.halfmove_clock >= 100 {
+    } else if board.halfmove_clock() >= 100 {
         GameEndReason::FiftyMoveRule
     } else if board.has_insufficient_material() {
         GameEndReason::InsufficientMaterial
@@ -206,12 +206,12 @@ pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConf
         if let Some((result, reason)) = game.result_by_rules(config.max_moves) {
             return game.outcome(result, reason);
         }
-        let engine = match game.board.turn {
+        let engine = match game.board.turn() {
             Color::White => &mut *white,
             Color::Black => &mut *black,
         };
         if let Err(reason) = game.play_turn(engine) {
-            return game.outcome(win_for(game.board.turn.other()), reason);
+            return game.outcome(win_for(game.board.turn().other()), reason);
         }
     }
 }
@@ -308,7 +308,7 @@ impl<'a> Game<'a> {
             )
             .map_err(|_| GameEndReason::EngineCrash)?;
         self.clocks
-            .charge(self.board.turn, start.elapsed().as_millis() as i64)?;
+            .charge(self.board.turn(), start.elapsed().as_millis() as i64)?;
         let Some(m) = parse_uci_move(&self.board, &bestmove) else {
             report_rejected_move(&engine.name, &bestmove, &self.board);
             return Err(GameEndReason::IllegalMove);

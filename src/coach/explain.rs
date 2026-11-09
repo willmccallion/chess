@@ -48,7 +48,7 @@ fn outcome_of(board: &Board, line: &[Move], side: Color) -> String {
         end.make_move(m);
     }
     if let Some((_, GameEndReason::Checkmate)) = position_outcome(&end) {
-        return format!("{} is checkmated", color_name(end.turn));
+        return format!("{} is checkmated", color_name(end.turn()));
     }
     let gain = material_gain_along(board, line, side);
     let (winner, points) = if gain >= 0 {
@@ -78,7 +78,7 @@ pub fn positional_differences(
     better: Move,
     phase: Phase,
 ) -> Vec<String> {
-    let mover = before.turn;
+    let mover = before.turn();
     let (Some(played_san), Some(better_san)) = (san_of(before, played), san_of(before, better))
     else {
         return Vec::new();
@@ -136,7 +136,7 @@ const fn castling_rights(board: &Board, color: Color) -> u32 {
         Color::White => WK_CASTLE | WQ_CASTLE,
         Color::Black => BK_CASTLE | BQ_CASTLE,
     };
-    (board.castle & mask).count_ones()
+    (board.castle() & mask).count_ones()
 }
 
 /// Own pawns on the two ranks in front of a king on its back rank, on its file and beside it.
@@ -158,7 +158,7 @@ fn king_cover(board: &Board, color: Color) -> u32 {
     for f in file.saturating_sub(1)..=(file + 1).min(7) {
         for distance in 1..=2 {
             let r = rank as i32 + step * distance;
-            if board.piece_on[(r as u32 * 8 + f) as usize] == pawn {
+            if board.piece_on()[(r as u32 * 8 + f) as usize] == pawn {
                 cover += 1;
             }
         }
@@ -167,7 +167,7 @@ fn king_cover(board: &Board, color: Color) -> u32 {
 }
 
 fn pawns_per_file(board: &Board, color: Color) -> [u32; 8] {
-    let pawns = board.piece_bb[Piece::from_kind(PieceKind::Pawn, color).index()];
+    let pawns = board.piece_bb()[Piece::from_kind(PieceKind::Pawn, color).index()];
     std::array::from_fn(|file| (pawns & (0x0101_0101_0101_0101u64 << file)).count_ones())
 }
 
@@ -192,8 +192,8 @@ fn isolated_pawns(board: &Board, color: Color) -> u32 {
 
 /// Whether `m` moves a knight or bishop off its starting square.
 fn develops(board: &Board, m: Move) -> bool {
-    let piece = board.piece_on[m.from.index()];
-    let home_rank = if board.turn == Color::White { 0 } else { 7 };
+    let piece = board.piece_on()[m.from.index()];
+    let home_rank = if board.turn() == Color::White { 0 } else { 7 };
     matches!(piece.kind(), Some(PieceKind::Knight | PieceKind::Bishop))
         && m.from.rank() == home_rank
 }
@@ -201,7 +201,7 @@ fn develops(board: &Board, m: Move) -> bool {
 /// How many moves `color`'s pieces would have if it were their turn.
 fn mobility(board: &Board, color: Color) -> i32 {
     let mut b = board.without_eval_state();
-    if b.turn != color {
+    if b.turn() != color {
         b.make_null_move();
     }
     let mut moves = MoveList::new();

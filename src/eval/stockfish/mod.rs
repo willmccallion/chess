@@ -197,7 +197,7 @@ pub fn trace_text(nets: &Networks, board: &Board) -> String {
     let trace = trace::format_trace(&nets.big, board);
     let position = board.position_view();
     let internal = stockfish_eval(nets, &mut nets.new_state(), position);
-    let white_relative = if board.turn == Color::White {
+    let white_relative = if board.turn() == Color::White {
         internal
     } else {
         -internal

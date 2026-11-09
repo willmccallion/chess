@@ -335,7 +335,7 @@ mod tests {
         let puzzle = parse_lichess_csv_row(ROW).unwrap().to_puzzle().unwrap();
 
         assert_eq!(puzzle.solution.len(), 3);
-        assert_eq!(puzzle.board.turn, crate::types::Color::White);
+        assert_eq!(puzzle.board.turn(), crate::types::Color::White);
         assert!(puzzle.last_move.is_some());
     }
 

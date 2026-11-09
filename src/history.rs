@@ -206,14 +206,19 @@ mod tests {
 
     #[test]
     fn every_single_pawn_change_moves_to_a_different_correction_slot() {
-        let mut board = crate::board::Board::from_fen(crate::types::START_FEN).unwrap();
-        let base = CorrectionHistory::slot(board.pawn_key());
-        for piece in [Piece::WP, Piece::BP] {
-            for sq in 8..56 {
-                board.piece_bb[piece.index()] ^= 1u64 << sq;
-                let slot = CorrectionHistory::slot(board.pawn_key());
-                board.piece_bb[piece.index()] ^= 1u64 << sq;
-                assert_ne!(slot, base, "{piece:?} on {sq}");
+        use crate::board::{Board, pawn_structure_key};
+        let start = Board::start();
+        let white = start.piece_bb()[Piece::WP.index()];
+        let black = start.piece_bb()[Piece::BP.index()];
+        let base = CorrectionHistory::slot(pawn_structure_key(white, black));
+        for sq in 8..56 {
+            let pawn = 1u64 << sq;
+            for (side, white, black) in [
+                ("white", white ^ pawn, black),
+                ("black", white, black ^ pawn),
+            ] {
+                let slot = CorrectionHistory::slot(pawn_structure_key(white, black));
+                assert_ne!(slot, base, "{side} pawn on {sq}");
             }
         }
     }

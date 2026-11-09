@@ -102,7 +102,7 @@ impl Puzzles {
     fn reset_board(&mut self) {
         if let Some(current) = &self.current {
             let board = current.attempt.board.clone();
-            self.panel.flipped = board.turn == Color::Black;
+            self.panel.flipped = board.turn() == Color::Black;
             self.panel
                 .set_position(board, current.attempt.puzzle.last_move);
         }
@@ -216,7 +216,7 @@ impl Puzzles {
             data.profile.puzzle_rating.0
         )));
         lines.push(Line::raw(""));
-        let side = if puzzle.board.turn == Color::White {
+        let side = if puzzle.board.turn() == Color::White {
             "White"
         } else {
             "Black"
@@ -435,10 +435,10 @@ impl Screen for Puzzles {
         let Some(m) = current.judging else {
             return Nav::Stay;
         };
-        let mover = current.attempt.board.turn;
+        let mover = current.attempt.board.turn();
         let mut after = current.attempt.board.clone();
         after.make_move(m);
-        let chance = eval_after_search(&after, outcome.score).win_chance_for(after.turn, mover);
+        let chance = eval_after_search(&after, outcome.score).win_chance_for(after.turn(), mover);
         let good_enough = current
             .best_before
             .is_some_and(|best| best.win_chance().drop_to(chance) <= GOOD_ENOUGH_DROP);

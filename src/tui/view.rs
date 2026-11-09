@@ -245,7 +245,7 @@ pub fn draw(frame: &mut Frame, app: &App, now: Instant) {
     draw_side_panel(frame, app, screen.side, now);
     frame.render_widget(status_line(app), screen.status);
     if let (Some(board), Some(_)) = (screen.board, app.pending_promotion()) {
-        draw_promotion_choice(frame, app.board().turn, app.piece_style, board);
+        draw_promotion_choice(frame, app.board().turn(), app.piece_style, board);
     }
     if app.panels.help {
         draw_help(frame);
@@ -258,7 +258,7 @@ pub fn draw_board(buf: &mut Buffer, scene: &BoardScene, geometry: BoardGeometry)
     let last_move = scene.last_move;
     let checked_king = in_check_king_square(board);
     for square in (0..64).map(Square::new) {
-        let piece = board.piece_on[square.index()];
+        let piece = board.piece_on()[square.index()];
         let is_light = (square.rank() + square.file()) % 2 == 1;
         let mark = scene
             .marks
@@ -318,7 +318,7 @@ fn draw_coordinates(buf: &mut Buffer, flipped: bool, geometry: BoardGeometry) {
 }
 
 fn in_check_king_square(board: &Board) -> Option<Square> {
-    board.king_square(board.turn).filter(|_| board.in_check())
+    board.king_square(board.turn()).filter(|_| board.in_check())
 }
 
 /// A dot a third of the square across, centred, drawn in half-block pixels.
@@ -507,7 +507,7 @@ fn player_name(app: &App, color: Color) -> &'static str {
 fn players_panel(app: &App, now: Instant) -> Paragraph<'static> {
     let board = app.board();
     let player_line = |color: Color| {
-        let to_move = board.turn == color && app.outcome().is_none();
+        let to_move = board.turn() == color && app.outcome().is_none();
         let side = if color == Color::White {
             "White"
         } else {
@@ -518,7 +518,7 @@ fn players_panel(app: &App, now: Instant) -> Paragraph<'static> {
             Span::raw(format!("{side:<6} {:<7}", player_name(app, color))),
         ];
         if let Some(clocks) = app.clocks() {
-            let ms = clocks.remaining_ms(color, board.turn, now);
+            let ms = clocks.remaining_ms(color, board.turn(), now);
             spans.push(clock_span(ms, to_move, Style::new()));
         }
         Line::from(spans)
@@ -640,9 +640,9 @@ fn engine_lines(line: &EngineLine) -> Vec<Line<'static>> {
 fn moves_panel(app: &App, visible_rows: u16) -> Paragraph<'static> {
     let start = app.start_position();
     let mut rows = Vec::new();
-    let mut number = start.fullmove_number;
+    let mut number = start.fullmove_number();
     let mut moves = app.history().iter().map(|(_, san)| san.as_str());
-    if start.turn == Color::Black
+    if start.turn() == Color::Black
         && let Some(first) = moves.next()
     {
         rows.push(format!("{number:>3}. {:<8} {first}", "..."));

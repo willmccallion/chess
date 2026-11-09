@@ -156,7 +156,7 @@ impl CoachGame {
     }
 
     fn is_bot_turn(&self) -> bool {
-        !self.is_over() && self.app.board().turn != self.settings.human
+        !self.is_over() && self.app.board().turn() != self.settings.human
     }
 
     fn moves(&self) -> Vec<Move> {
@@ -169,7 +169,7 @@ impl CoachGame {
         let remaining = self
             .app
             .clocks()
-            .map(|c| c.remaining_ms(bot, self.app.board().turn, Instant::now()));
+            .map(|c| c.remaining_ms(bot, self.app.board().turn(), Instant::now()));
         self.settings.level.spec().nodes_for_clock(remaining)
     }
 
@@ -258,7 +258,7 @@ impl CoachGame {
         let board = self.app.board().clone();
         let mut after_board = board.without_eval_state();
         after_board.make_move(m);
-        let punishment = line_story(&after_board, &after.best_line, board.turn);
+        let punishment = line_story(&after_board, &after.best_line, board.turn());
         let review = review_moves(&board, &[m], &[before, after], &|_, _| false)
             .into_iter()
             .next();
@@ -293,7 +293,7 @@ impl CoachGame {
         let board = self.app.board();
         let mut lines = Vec::new();
         for color in [Color::White, Color::Black] {
-            let to_move = board.turn == color && !self.is_over();
+            let to_move = board.turn() == color && !self.is_over();
             let (name, rating) = if color == self.settings.human {
                 ("You".to_string(), self.rating_before.0.to_string())
             } else {
@@ -311,7 +311,7 @@ impl CoachGame {
                 Span::styled(format!("{rating:<7}"), Style::new().fg(DIM)),
             ];
             if let Some(clocks) = self.app.clocks() {
-                let ms = clocks.remaining_ms(color, board.turn, now);
+                let ms = clocks.remaining_ms(color, board.turn(), now);
                 spans.push(clock_span(ms, to_move, Style::new().fg(TEXT)));
             }
             lines.push(Line::from(spans));

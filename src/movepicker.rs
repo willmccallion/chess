@@ -24,7 +24,7 @@ struct QuietThreats {
 }
 
 fn attacks_of(board: &Board, kind: PieceKind, color: Color) -> Bitboard {
-    let mut pieces = board.piece_bb[Piece::from_kind(kind, color).index()];
+    let mut pieces = board.piece_bb()[Piece::from_kind(kind, color).index()];
     let mut attacks = 0;
     while pieces != 0 {
         let sq = pieces.trailing_zeros() as usize;
@@ -33,8 +33,8 @@ fn attacks_of(board: &Board, kind: PieceKind, color: Color) -> Bitboard {
             PieceKind::Pawn if color == Color::White => magics::WHITE_PAWN_ATTACKS[sq],
             PieceKind::Pawn => magics::BLACK_PAWN_ATTACKS[sq],
             PieceKind::Knight => magics::knight_attacks_from(sq),
-            PieceKind::Bishop => magics::get_bishop_attacks(sq, board.all_pieces),
-            PieceKind::Rook => magics::get_rook_attacks(sq, board.all_pieces),
+            PieceKind::Bishop => magics::get_bishop_attacks(sq, board.all_pieces()),
+            PieceKind::Rook => magics::get_rook_attacks(sq, board.all_pieces()),
             PieceKind::Queen | PieceKind::King => 0,
         };
     }
@@ -45,12 +45,12 @@ fn attacks_of(board: &Board, kind: PieceKind, color: Color) -> Bitboard {
 /// check the king on `king`, indexed by `PieceKind`.
 fn checking_squares(board: &Board, king: Square) -> [Bitboard; 6] {
     let king_sq = king.index();
-    let pawn_checks = match board.turn {
+    let pawn_checks = match board.turn() {
         Color::White => magics::BLACK_PAWN_ATTACKS[king_sq],
         Color::Black => magics::WHITE_PAWN_ATTACKS[king_sq],
     };
-    let bishop_checks = magics::get_bishop_attacks(king_sq, board.all_pieces);
-    let rook_checks = magics::get_rook_attacks(king_sq, board.all_pieces);
+    let bishop_checks = magics::get_bishop_attacks(king_sq, board.all_pieces());
+    let rook_checks = magics::get_rook_attacks(king_sq, board.all_pieces());
     let mut checks = [0; 6];
     checks[PieceKind::Pawn as usize] = pawn_checks;
     checks[PieceKind::Knight as usize] = magics::knight_attacks_from(king_sq);
@@ -62,7 +62,7 @@ fn checking_squares(board: &Board, king: Square) -> [Bitboard; 6] {
 
 impl QuietThreats {
     fn new(board: &Board) -> Self {
-        let them = board.turn.other();
+        let them = board.turn().other();
         let by_pawn = attacks_of(board, PieceKind::Pawn, them);
         let by_minor = by_pawn
             | attacks_of(board, PieceKind::Knight, them)
@@ -132,10 +132,10 @@ pub struct OrderingContext<'a> {
 
 impl OrderingContext<'_> {
     fn quiet_score(&self, board: &Board, threats: &QuietThreats, m: Move) -> i32 {
-        let piece = board.piece_on[m.from.index()];
+        let piece = board.piece_on()[m.from.index()];
         let threat = piece.kind().map_or(0, |kind| threats.adjustment(kind, m));
         self.histories
-            .quiet_history(board.turn, piece, m, &self.continuations)
+            .quiet_history(board.turn(), piece, m, &self.continuations)
             + threat
     }
 
@@ -144,8 +144,8 @@ impl OrderingContext<'_> {
             Some(PieceKind::Queen) => PIECE_VALUES[PieceKind::Queen as usize],
             _ => 0,
         };
-        let piece = board.piece_on[m.from.index()];
-        let victim_score = captured_kind(board.piece_on[m.to.index()], m).map_or(0, |victim| {
+        let piece = board.piece_on()[m.from.index()];
+        let victim_score = captured_kind(board.piece_on()[m.to.index()], m).map_or(0, |victim| {
             MVV_SCALE * PIECE_VALUES[victim as usize] + self.histories.capture(piece, m.to, victim)
         });
         victim_score + MVV_SCALE * promotion_value

@@ -36,7 +36,7 @@ fn least_valuable_attacker(
     SEE_ORDER.iter().find_map(|&kind| {
         let piece = Piece::from_kind(kind, side);
         let attackers =
-            attack_sources(kind, side, sq, occupied) & b.piece_bb[piece.index()] & occupied;
+            attack_sources(kind, side, sq, occupied) & b.piece_bb()[piece.index()] & occupied;
         (attackers != 0).then(|| (piece, attackers.trailing_zeros() as usize))
     })
 }
@@ -52,21 +52,21 @@ pub fn see(b: &Board, mov: Move) -> i32 {
     let mut gain = [0; 32];
     let mut gain_idx = 1;
 
-    let mut from_piece = b.piece_on[from_sq];
-    let mut occupied = b.all_pieces;
-    let mut current_turn = b.turn;
+    let mut from_piece = b.piece_on()[from_sq];
+    let mut occupied = b.all_pieces();
+    let mut current_turn = b.turn();
 
     let captured_piece = if mov.is_en_passant() {
-        Piece::from_kind(PieceKind::Pawn, b.turn.other())
+        Piece::from_kind(PieceKind::Pawn, b.turn().other())
     } else {
-        b.piece_on[to_sq]
+        b.piece_on()[to_sq]
     };
 
     gain[0] = piece_value(captured_piece);
 
     occupied ^= 1u64 << from_sq;
     if mov.is_en_passant() {
-        occupied ^= 1u64 << mov.captured_square(b.turn);
+        occupied ^= 1u64 << mov.captured_square(b.turn());
     }
 
     loop {
@@ -106,8 +106,8 @@ const fn kind_value(kind: PieceKind) -> i32 {
 fn attackers_to(b: &Board, sq: usize, occupied: Bitboard) -> Bitboard {
     let rooks_queens = b.kind_bb(PieceKind::Rook) | b.kind_bb(PieceKind::Queen);
     let bishops_queens = b.kind_bb(PieceKind::Bishop) | b.kind_bb(PieceKind::Queen);
-    (magics::BLACK_PAWN_ATTACKS[sq] & b.piece_bb[Piece::WP.index()])
-        | (magics::WHITE_PAWN_ATTACKS[sq] & b.piece_bb[Piece::BP.index()])
+    (magics::BLACK_PAWN_ATTACKS[sq] & b.piece_bb()[Piece::WP.index()])
+        | (magics::WHITE_PAWN_ATTACKS[sq] & b.piece_bb()[Piece::BP.index()])
         | (magics::knight_attacks_from(sq) & b.kind_bb(PieceKind::Knight))
         | (magics::king_attacks_from(sq) & b.kind_bb(PieceKind::King))
         | (magics::get_rook_attacks(sq, occupied) & rooks_queens)
@@ -134,14 +134,14 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
     }
     let from = m.from.index();
     let to = m.to.index();
-    let Some(mover_kind) = b.piece_on[from].kind() else {
+    let Some(mover_kind) = b.piece_on()[from].kind() else {
         return 0 >= threshold;
     };
 
     let captured_value = if m.is_en_passant() {
         kind_value(PieceKind::Pawn)
     } else {
-        b.piece_on[to].kind().map_or(0, kind_value)
+        b.piece_on()[to].kind().map_or(0, kind_value)
     };
     let mut swap = captured_value - threshold;
     if swap < 0 {
@@ -152,14 +152,14 @@ pub fn see_ge(b: &Board, m: Move, threshold: i32) -> bool {
         return true;
     }
 
-    let mut occupied = b.all_pieces ^ (1u64 << from) ^ (1u64 << to);
+    let mut occupied = b.all_pieces() ^ (1u64 << from) ^ (1u64 << to);
     if m.is_en_passant() {
-        occupied ^= 1u64 << m.captured_square(b.turn);
+        occupied ^= 1u64 << m.captured_square(b.turn());
     }
     let rooks_queens = b.kind_bb(PieceKind::Rook) | b.kind_bb(PieceKind::Queen);
     let bishops_queens = b.kind_bb(PieceKind::Bishop) | b.kind_bb(PieceKind::Queen);
 
-    let mut side = b.turn;
+    let mut side = b.turn();
     let mut attackers = attackers_to(b, to, occupied);
     let mut result = true;
 

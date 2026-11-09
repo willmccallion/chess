@@ -48,8 +48,8 @@ impl BookEntry {
             4 => Some(PieceKind::Queen),
             _ => None,
         };
-        let castles = b.piece_on[from.index()] == Piece::from_kind(PieceKind::King, b.turn)
-            && b.piece_on[to.index()] == Piece::from_kind(PieceKind::Rook, b.turn);
+        let castles = b.piece_on()[from.index()] == Piece::from_kind(PieceKind::King, b.turn())
+            && b.piece_on()[to.index()] == Piece::from_kind(PieceKind::Rook, b.turn());
         let to = match (castles, to > from) {
             (false, _) => Some(to),
             (true, true) => from.offset(2),

@@ -226,7 +226,7 @@ pub fn calculate_key(b: &Board) -> u64 {
     let mut key = 0;
 
     for sq in 0..64 {
-        let piece = b.piece_on[sq];
+        let piece = b.piece_on()[sq];
         if !piece.is_empty() {
             let poly_piece_idx = PIECE_TO_POLY_INDEX[piece.index()];
             let random_idx = poly_piece_idx * 64 + sq;
@@ -234,25 +234,25 @@ pub fn calculate_key(b: &Board) -> u64 {
         }
     }
 
-    if b.castle & 1 != 0 {
+    if b.castle() & 1 != 0 {
         key ^= POLYGLOT_RANDOM_U64[768];
     } // WK
-    if b.castle & 2 != 0 {
+    if b.castle() & 2 != 0 {
         key ^= POLYGLOT_RANDOM_U64[769];
     } // WQ
-    if b.castle & 4 != 0 {
+    if b.castle() & 4 != 0 {
         key ^= POLYGLOT_RANDOM_U64[770];
     } // BK
-    if b.castle & 8 != 0 {
+    if b.castle() & 8 != 0 {
         key ^= POLYGLOT_RANDOM_U64[771];
     } // BQ
 
-    if let Some(ep) = b.en_passant {
+    if let Some(ep) = b.en_passant() {
         let ep_file = usize::from(ep.file());
         let ep_sq_bb = ep.bb();
-        let attacking_pawns_bb = b.piece_bb[Piece::from_kind(PieceKind::Pawn, b.turn).index()];
+        let attacking_pawns_bb = b.piece_bb()[Piece::from_kind(PieceKind::Pawn, b.turn()).index()];
 
-        let ep_mask: Bitboard = if b.turn == Color::White {
+        let ep_mask: Bitboard = if b.turn() == Color::White {
             ((ep_sq_bb >> 9) & !0x8080808080808080) | ((ep_sq_bb >> 7) & !0x0101010101010101)
         } else {
             ((ep_sq_bb << 7) & !0x8080808080808080) | ((ep_sq_bb << 9) & !0x0101010101010101)
@@ -263,7 +263,7 @@ pub fn calculate_key(b: &Board) -> u64 {
         }
     }
 
-    if b.turn == Color::White {
+    if b.turn() == Color::White {
         key ^= POLYGLOT_RANDOM_U64[780];
     }
 

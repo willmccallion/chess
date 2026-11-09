@@ -335,7 +335,7 @@ impl App {
     }
 
     pub fn is_engine_turn(&self) -> bool {
-        self.config.mode == Mode::Watch || self.board.turn != self.human
+        self.config.mode == Mode::Watch || self.board.turn() != self.human
     }
 
     fn is_human_turn(&self) -> bool {
@@ -400,8 +400,8 @@ impl App {
     pub fn think_budget(&self, now: Instant) -> TimeBudget {
         match (&self.clocks, self.config.time) {
             (Some(clocks), _) => clocks
-                .time_control(self.board.turn, now)
-                .budget(self.board.turn),
+                .time_control(self.board.turn(), now)
+                .budget(self.board.turn()),
             (None, TimeSetting::PerMove { ms }) => TimeBudget::fixed(ms),
             (None, TimeSetting::Clock(clock)) => TimeBudget::fixed(clock.base_ms / 40),
         }
@@ -409,7 +409,7 @@ impl App {
 
     /// Records a search report for the position `root` it was produced in.
     pub fn record_engine_info(&mut self, source: TaskKind, root: &Board, info: &IterationInfo) {
-        let score = match (info.score, root.turn) {
+        let score = match (info.score, root.turn()) {
             (score, Color::White) => score,
             (Score::Centipawns(cp), Color::Black) => Score::Centipawns(-cp),
             (Score::MateIn(moves), Color::Black) => Score::MateIn(-moves),
@@ -433,7 +433,7 @@ impl App {
     }
 
     fn play(&mut self, m: Move, now: Instant) {
-        let mover = self.board.turn;
+        let mover = self.board.turn();
         if let Some(clocks) = self.clocks.as_mut()
             && !clocks.complete_move(mover, now)
         {
@@ -461,7 +461,7 @@ impl App {
         if self.outcome.is_some() {
             return;
         }
-        let to_move = self.board.turn;
+        let to_move = self.board.turn();
         if let Some(clocks) = &self.clocks
             && clocks.remaining_ms(to_move, to_move, now) <= 0
         {
@@ -474,7 +474,7 @@ impl App {
             return;
         }
         self.paused = !self.paused;
-        let to_move = self.board.turn;
+        let to_move = self.board.turn();
         if let Some(clocks) = self.clocks.as_mut() {
             if self.paused {
                 clocks.pause(to_move, now);
@@ -509,7 +509,7 @@ impl App {
             return;
         }
         self.history.pop();
-        while self.board_after_history().turn != self.human && !self.history.is_empty() {
+        while self.board_after_history().turn() != self.human && !self.history.is_empty() {
             self.history.pop();
         }
         self.board = self.board_after_history();
@@ -670,7 +670,7 @@ mod tests {
 
         assert_eq!(app.history().len(), 1);
         assert_eq!(app.history()[0].1, "e4");
-        assert_eq!(app.board().turn, Color::Black);
+        assert_eq!(app.board().turn(), Color::Black);
     }
 
     #[test]
@@ -743,7 +743,7 @@ mod tests {
         assert_eq!(targets, vec![square("d6"), square("e6")]);
         assert_eq!(app.history()[0].1, "exd6");
         assert_eq!(
-            app.board().piece_on[square("d5").index()],
+            app.board().piece_on()[square("d5").index()],
             crate::types::Piece::Empty
         );
     }
@@ -775,7 +775,7 @@ mod tests {
         app.undo(now);
 
         assert_eq!(app.history(), []);
-        assert_eq!(app.board().turn, Color::White);
+        assert_eq!(app.board().turn(), Color::White);
     }
 
     #[test]

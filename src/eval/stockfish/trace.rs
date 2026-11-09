@@ -49,7 +49,7 @@ fn aligned_pawns(value: i32, board: &Board) -> String {
 pub fn format_trace(big: &BigNetwork, board: &Board) -> String {
     let outputs = evaluate_all_buckets(&big.net, Some(&big.threats), board);
     let used = bucket_for(board.position_view());
-    let side = if board.turn == Color::White {
+    let side = if board.turn() == Color::White {
         "White"
     } else {
         "Black"
@@ -71,7 +71,7 @@ pub fn format_trace(big: &BigNetwork, board: &Board) -> String {
         );
     }
     let NetOutput { psqt, positional } = outputs[used];
-    let white_relative = if board.turn == Color::White {
+    let white_relative = if board.turn() == Color::White {
         psqt + positional
     } else {
         -(psqt + positional)

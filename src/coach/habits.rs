@@ -78,12 +78,12 @@ pub fn opening_habits(start: &Board, moves: &[Move], side: Color) -> Vec<HabitNo
     let mut own_moves = 0;
     let mut castled = false;
     for (ply, &m) in moves.iter().enumerate() {
-        if board.turn != side {
+        if board.turn() != side {
             board.make_move(m);
             continue;
         }
         own_moves += 1;
-        let kind = board.piece_on[m.from.index()].kind();
+        let kind = board.piece_on()[m.from.index()].kind();
         let undeveloped = undeveloped_minors(&board, side);
         if kind == Some(PieceKind::Queen)
             && !m.is_capture()
@@ -129,7 +129,7 @@ fn undeveloped_minors(board: &Board, side: Color) -> usize {
         Color::White => (0, Piece::WN, Piece::WB),
         Color::Black => (7, Piece::BN, Piece::BB),
     };
-    let home = |file: u8, piece: Piece| board.piece_on[usize::from(rank * 8 + file)] == piece;
+    let home = |file: u8, piece: Piece| board.piece_on()[usize::from(rank * 8 + file)] == piece;
     [(1, knight), (6, knight), (2, bishop), (5, bishop)]
         .into_iter()
         .filter(|&(file, piece)| home(file, piece))
@@ -137,7 +137,7 @@ fn undeveloped_minors(board: &Board, side: Color) -> usize {
 }
 
 const fn queens_on(board: &Board) -> bool {
-    board.piece_bb[Piece::WQ.index()] | board.piece_bb[Piece::BQ.index()] != 0
+    board.piece_bb()[Piece::WQ.index()] | board.piece_bb()[Piece::BQ.index()] != 0
 }
 
 fn king_on_home_square(board: &Board, side: Color) -> bool {

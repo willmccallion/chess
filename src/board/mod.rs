@@ -26,23 +26,25 @@ enum MoveKinds {
     Quiet,
 }
 
+/// A position and the game that reached it. Its bitboards, mailbox and key
+/// agree with each other; only moves and the constructors change them.
 #[derive(Clone)]
 pub struct Board {
-    pub piece_bb: [Bitboard; 13],
-    pub piece_on: [Piece; 64],
+    piece_bb: [Bitboard; 13],
+    piece_on: [Piece; 64],
     /// Each colour's pieces, indexed by `Color`.
-    pub color_bb: [Bitboard; 2],
-    pub all_pieces: Bitboard,
-    pub turn: Color,
-    pub castle: u8,
+    color_bb: [Bitboard; 2],
+    all_pieces: Bitboard,
+    turn: Color,
+    castle: u8,
     /// The square a pawn may capture onto en passant.
-    pub en_passant: Option<Square>,
-    pub halfmove_clock: i32,
-    pub fullmove_number: i32,
+    en_passant: Option<Square>,
+    halfmove_clock: i32,
+    fullmove_number: i32,
     /// Plies since the last null move; positions before it cannot repeat.
-    pub plies_from_null: u32,
-    pub history: Vec<ZKey>,
-    pub zobrist: ZKey,
+    plies_from_null: u32,
+    history: Vec<ZKey>,
+    zobrist: ZKey,
     eval_state: EvalState,
 }
 
@@ -58,8 +60,71 @@ const fn rights_kept_at(square: usize) -> u8 {
     }
 }
 
+/// Hash of a pawn structure: white's pawns and black's.
+pub(crate) const fn pawn_structure_key(white_pawns: Bitboard, black_pawns: Bitboard) -> u64 {
+    let white = white_pawns.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let black = black_pawns.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    let mixed = (white ^ black.rotate_left(31)) ^ ((white ^ black) >> 29);
+    mixed.wrapping_mul(0x1656_67B1_9E37_79F9)
+}
+
 impl Board {
-    pub fn empty() -> Self {
+    /// The piece on each square, a1 first.
+    #[inline(always)]
+    pub const fn piece_on(&self) -> &[Piece; 64] {
+        &self.piece_on
+    }
+
+    /// Each piece's squares, by [`Piece::index`].
+    #[inline(always)]
+    pub const fn piece_bb(&self) -> &[Bitboard; 13] {
+        &self.piece_bb
+    }
+
+    #[inline(always)]
+    pub const fn all_pieces(&self) -> Bitboard {
+        self.all_pieces
+    }
+
+    #[inline(always)]
+    pub const fn turn(&self) -> Color {
+        self.turn
+    }
+
+    /// The castling rights left, as the `WK_CASTLE` and other flags.
+    #[inline(always)]
+    pub const fn castle(&self) -> u8 {
+        self.castle
+    }
+
+    /// The square a pawn may capture onto en passant.
+    #[inline(always)]
+    pub const fn en_passant(&self) -> Option<Square> {
+        self.en_passant
+    }
+
+    #[inline(always)]
+    pub const fn halfmove_clock(&self) -> i32 {
+        self.halfmove_clock
+    }
+
+    #[inline(always)]
+    pub const fn fullmove_number(&self) -> i32 {
+        self.fullmove_number
+    }
+
+    /// The keys of the positions played to reach this one, this one last.
+    #[inline(always)]
+    pub fn history(&self) -> &[ZKey] {
+        &self.history
+    }
+
+    #[inline(always)]
+    pub const fn zobrist(&self) -> ZKey {
+        self.zobrist
+    }
+
+    pub(crate) fn empty() -> Self {
         Self {
             piece_bb: [0; 13],
             piece_on: [Piece::Empty; 64],
@@ -80,10 +145,10 @@ impl Board {
     /// Hash of the pawn structure (both colors).
     #[inline(always)]
     pub const fn pawn_key(&self) -> u64 {
-        let white = self.piece_bb[Piece::WP.index()].wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        let black = self.piece_bb[Piece::BP.index()].wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
-        let mixed = (white ^ black.rotate_left(31)) ^ ((white ^ black) >> 29);
-        mixed.wrapping_mul(0x1656_67B1_9E37_79F9)
+        pawn_structure_key(
+            self.piece_bb[Piece::WP.index()],
+            self.piece_bb[Piece::BP.index()],
+        )
     }
 
     #[inline(always)]
@@ -164,12 +229,12 @@ impl Board {
     }
 
     #[inline]
-    pub const fn place_piece(&mut self, p: Piece, sq: usize) {
+    const fn place_piece(&mut self, p: Piece, sq: usize) {
         self.piece_on[sq] = p;
     }
 
     #[inline]
-    pub fn rebuild_derived(&mut self) {
+    fn rebuild_derived(&mut self) {
         self.piece_bb = [0; 13];
         self.color_bb = [0; 2];
 
@@ -187,7 +252,7 @@ impl Board {
     }
 
     #[inline]
-    pub fn recompute_zobrist(&mut self) {
+    fn recompute_zobrist(&mut self) {
         let mut h = 0u64;
         for sq in 0..64 {
             let p = self.piece_on[sq];

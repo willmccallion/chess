@@ -239,6 +239,6 @@ pub fn evaluate_all_buckets(
             .map(|[white, black]| [SumsView::from(white), SumsView::from(black)]),
     };
     (0..net.stacks.len())
-        .map(|bucket| evaluate_bucket(net, &sums, board.turn, bucket))
+        .map(|bucket| evaluate_bucket(net, &sums, board.turn(), bucket))
         .collect()
 }

@@ -214,7 +214,7 @@ impl ReviewScreen {
             .analysis
             .iter()
             .zip(&self.positions)
-            .map(|(a, board)| a.eval.win_chance_for(board.turn, Color::White).percent())
+            .map(|(a, board)| a.eval.win_chance_for(board.turn(), Color::White).percent())
             .collect();
         sparkline(&chances, width)
     }
@@ -261,8 +261,12 @@ impl ReviewScreen {
         ) {
             lines.push(dim(format!(
                 "Evaluation {} → {}   ·   win chance {:.0}% → {:.0}%",
-                before.eval.text_for_white(self.positions[review.ply].turn),
-                after.eval.text_for_white(self.positions[self.cursor].turn),
+                before
+                    .eval
+                    .text_for_white(self.positions[review.ply].turn()),
+                after
+                    .eval
+                    .text_for_white(self.positions[self.cursor].turn()),
                 review.before.percent(),
                 review.after.percent()
             )));
@@ -588,7 +592,7 @@ impl Screen for ReviewScreen {
         if let Some(bar_area) = layout.eval_bar {
             let shown = self.cursor;
             let share = self.analysis.get(shown).map_or(0.5, |a| {
-                let turn = self.positions[shown].turn;
+                let turn = self.positions[shown].turn();
                 match a.eval {
                     Eval::Checkmated => {
                         if turn == Color::White {

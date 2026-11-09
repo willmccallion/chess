@@ -93,14 +93,14 @@ fn attackers_of(
 impl Board {
     /// `None` when the side to move has no king (only reachable from a malformed position).
     pub fn legality_info(&self) -> Option<LegalityInfo> {
-        let us = self.turn;
+        let us = self.turn();
         let them = us.other();
         let king_bb = self.pieces(PieceKind::King, us);
         if king_bb == 0 {
             return None;
         }
         let king_sq = king_bb.trailing_zeros() as usize;
-        let checkers = attackers_of(self, king_sq, them, self.all_pieces, 0);
+        let checkers = attackers_of(self, king_sq, them, self.all_pieces(), 0);
 
         let queens = self.pieces(PieceKind::Queen, them);
         let snipers = (magics::get_rook_attacks(king_sq, 0)
@@ -114,7 +114,7 @@ impl Board {
         while remaining != 0 {
             let sniper = remaining.trailing_zeros() as usize;
             remaining &= remaining - 1;
-            let blockers = tables.between[king_sq][sniper] & self.all_pieces;
+            let blockers = tables.between[king_sq][sniper] & self.all_pieces();
             if blockers.is_power_of_two() && blockers & ours != 0 {
                 pinned |= blockers;
             }
@@ -131,19 +131,19 @@ impl Board {
     pub fn is_legal(&self, m: Move, info: &LegalityInfo) -> bool {
         let from = m.from.index();
         let to = m.to.index();
-        let them = self.turn.other();
+        let them = self.turn().other();
 
         if from == info.king_sq {
             if m.is_castle() {
                 return true;
             }
-            let occupied = self.all_pieces ^ (1u64 << from);
+            let occupied = self.all_pieces() ^ (1u64 << from);
             return attackers_of(self, to, them, occupied, 1u64 << to) == 0;
         }
 
         if m.is_en_passant() {
-            let captured = 1u64 << m.captured_square(self.turn);
-            let occupied = (self.all_pieces ^ (1u64 << from) ^ captured) | (1u64 << to);
+            let captured = 1u64 << m.captured_square(self.turn());
+            let occupied = (self.all_pieces() ^ (1u64 << from) ^ captured) | (1u64 << to);
             return attackers_of(self, info.king_sq, them, occupied, captured) == 0;
         }
 
@@ -172,11 +172,11 @@ mod tests {
 
     /// Legality by make/unmake, the reference the bitboard test must agree with.
     fn legal_by_making(board: &mut Board, m: crate::types::Move) -> bool {
-        let mover = board.turn;
+        let mover = board.turn();
         let undo = board.make_move(m);
         let legal = board
             .king_square(mover)
-            .is_some_and(|king| !board.is_square_attacked(king, board.turn));
+            .is_some_and(|king| !board.is_square_attacked(king, board.turn()));
         board.unmake_move(m, undo);
         legal
     }

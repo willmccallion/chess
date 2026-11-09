@@ -230,7 +230,7 @@ pub fn draw_board(frame: &mut Frame, layout: &ScreenLayout, scene: &BoardScene) 
         Some(geometry) => {
             view::draw_board(frame.buffer_mut(), scene, geometry);
             if scene.promotion_open {
-                view::draw_promotion_choice(frame, scene.board.turn, scene.piece_style, geometry);
+                view::draw_promotion_choice(frame, scene.board.turn(), scene.piece_style, geometry);
             }
         }
         None => frame.render_widget(

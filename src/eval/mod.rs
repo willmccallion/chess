@@ -484,7 +484,7 @@ fn evaluate_with<E: Evaluator>(
 /// The static evaluation as a person reads it, e.g. `+35 cp (white to move)`.
 pub fn describe_evaluation(board: &mut Board) -> String {
     let score = evaluate(board);
-    let side = match board.turn {
+    let side = match board.turn() {
         Color::White => "white",
         Color::Black => "black",
     };

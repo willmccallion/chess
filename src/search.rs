@@ -437,7 +437,7 @@ struct Search<'a> {
 /// half-moves without a capture or pawn move, unless the side to move is
 /// checkmated, which the mate decides.
 fn is_fifty_move_draw(board: &Board) -> bool {
-    board.halfmove_clock >= 100 && (!board.in_check() || board.has_legal_move())
+    board.halfmove_clock() >= 100 && (!board.in_check() || board.has_legal_move())
 }
 
 /// Makes `m` if it is legal in `pos`.
@@ -451,7 +451,7 @@ fn make_if_legal(pos: &mut Board, m: Move) -> Option<Undo> {
 const fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
     (
         prev.is_capture() as usize,
-        board.piece_on[prev.to.index()].index(),
+        board.piece_on()[prev.to.index()].index(),
         prev.to.index(),
     )
 }
@@ -524,11 +524,11 @@ const fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
 }
 
 const fn has_non_pawn_material(board: &Board) -> bool {
-    let our_pieces = board.pieces_of(board.turn);
-    let pawns_and_kings = board.piece_bb[Piece::WP.index()]
-        | board.piece_bb[Piece::BP.index()]
-        | board.piece_bb[Piece::WK.index()]
-        | board.piece_bb[Piece::BK.index()];
+    let our_pieces = board.pieces_of(board.turn());
+    let pawns_and_kings = board.piece_bb()[Piece::WP.index()]
+        | board.piece_bb()[Piece::BP.index()]
+        | board.piece_bb()[Piece::WK.index()]
+        | board.piece_bb()[Piece::BK.index()];
     our_pieces & !pawns_and_kings != 0
 }
 
@@ -619,7 +619,7 @@ impl Search<'_> {
         let correction = self
             .thread_data
             .correction
-            .correction(self.board.turn, self.board.pawn_key());
+            .correction(self.board.turn(), self.board.pawn_key());
         (raw_eval + correction).clamp(-MATE_THRESHOLD + 1, MATE_THRESHOLD - 1)
     }
 
@@ -628,9 +628,9 @@ impl Search<'_> {
         if !self.board.is_legal(m, legality) {
             return None;
         }
-        let moved_piece = self.board.piece_on[m.from.index()];
+        let moved_piece = self.board.piece_on()[m.from.index()];
         let undo = self.board.make_move(m);
-        self.tt.prefetch(self.board.zobrist);
+        self.tt.prefetch(self.board.zobrist());
         self.stack[self.ply].current_move = Some(m);
         self.stack[self.ply].moved_piece = moved_piece;
         self.ply += 1;
@@ -692,7 +692,7 @@ impl Search<'_> {
             return false;
         }
         let victim_falls_short = m.promotion().is_none()
-            && self.board.piece_on[m.to.index()]
+            && self.board.piece_on()[m.to.index()]
                 .kind()
                 .is_some_and(|kind| {
                     stand_pat + PIECE_VALUES[kind as usize] + self.params.delta_margin < alpha
@@ -730,7 +730,7 @@ impl Search<'_> {
         }
         let pawn_key = self.board.pawn_key();
         self.thread_data.correction.update(
-            self.board.turn,
+            self.board.turn(),
             pawn_key,
             outcome.best_score - static_eval,
             outcome.depth,
@@ -743,10 +743,10 @@ impl Search<'_> {
         if !m.is_quiet() || !self.board.is_pseudo_legal(m) {
             return;
         }
-        let piece = self.board.piece_on[m.from.index()];
+        let piece = self.board.piece_on()[m.from.index()];
         let continuations = self.continuation_keys();
         self.thread_data.histories.update_quiet(
-            self.board.turn,
+            self.board.turn(),
             m,
             piece,
             &continuations,
@@ -768,7 +768,7 @@ impl Search<'_> {
         }
         let continuations = self.continuation_keys_at(parent_ply);
         self.thread_data.histories.update_quiet(
-            self.board.turn.other(),
+            self.board.turn().other(),
             prior,
             parent.moved_piece,
             &continuations,
@@ -782,8 +782,8 @@ impl Search<'_> {
     }
 
     fn update_capture_history(&mut self, m: Move, bonus: i32) {
-        let piece = self.board.piece_on[m.from.index()];
-        if let Some(victim) = captured_kind(self.board.piece_on[m.to.index()], m) {
+        let piece = self.board.piece_on()[m.from.index()];
+        if let Some(victim) = captured_kind(self.board.piece_on()[m.to.index()], m) {
             self.thread_data
                 .histories
                 .update_capture(piece, m.to, victim, bonus);
@@ -794,7 +794,7 @@ impl Search<'_> {
     fn update_cutoff_stats(&mut self, best: Move, depth: i32, tried: &TriedMoves) {
         let bonus = stat_bonus(depth, &self.params);
         let continuations = self.continuation_keys();
-        let color = self.board.turn;
+        let color = self.board.turn();
 
         if best.is_capture() {
             self.update_capture_history(best, bonus);
@@ -808,12 +808,12 @@ impl Search<'_> {
                 let (capture, piece, to) = counter_move_slot(&self.board, prev);
                 self.thread_data.counter_moves[capture][piece][to] = Some(best);
             }
-            let piece = self.board.piece_on[best.from.index()];
+            let piece = self.board.piece_on()[best.from.index()];
             self.thread_data
                 .histories
                 .update_quiet(color, best, piece, &continuations, bonus);
             for &quiet in tried.quiets.as_slice() {
-                let piece = self.board.piece_on[quiet.from.index()];
+                let piece = self.board.piece_on()[quiet.from.index()];
                 self.thread_data.histories.update_quiet(
                     color,
                     quiet,
@@ -845,7 +845,7 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
 
     let is_pv = beta - alpha > 1;
     let alpha_orig = alpha;
-    let key = search.board.zobrist;
+    let key = search.board.zobrist();
     let tt_entry = search.tt.probe(key);
     let tt_pv = tt_entry.is_some_and(|e| e.is_pv());
     if let Some(entry) = tt_entry {
@@ -1088,7 +1088,7 @@ fn probcut(
         }
         if score >= probcut_beta {
             search.tt.store(
-                search.board.zobrist,
+                search.board.zobrist(),
                 TTWrite {
                     depth: (probe_depth + 1) as i16,
                     score: score_to_tt(score, search.ply),
@@ -1497,7 +1497,7 @@ fn enter_node(
     }
 
     let is_pv = beta - alpha > 1;
-    let key = search.board.zobrist;
+    let key = search.board.zobrist();
     let excluded_move = search.stack[search.ply].excluded_move;
     if excluded_move.is_none() {
         search.stack[search.ply].double_extensions = if is_root {
@@ -1683,11 +1683,13 @@ fn search_moves(search: &mut Search, node: &Node) -> Result<ControlFlow<i32, Mov
             state.quiets_seen += 1;
         }
         let quiet_history = if is_quiet {
-            let piece = search.board.piece_on[m.from.index()];
-            search
-                .thread_data
-                .histories
-                .quiet_history(search.board.turn, piece, m, &continuations)
+            let piece = search.board.piece_on()[m.from.index()];
+            search.thread_data.histories.quiet_history(
+                search.board.turn(),
+                piece,
+                m,
+                &continuations,
+            )
         } else {
             0
         };
@@ -1867,7 +1869,7 @@ fn finish_node(search: &mut Search, node: &Node, searched: &MoveLoop) -> i32 {
 pub fn get_pv_from_tt(mut pos: Board, tt: &SharedTransTable, max_len: usize) -> Vec<Move> {
     let mut pv = Vec::with_capacity(max_len);
     for _ in 0..max_len {
-        let Some(m) = tt.probe(pos.zobrist).and_then(|e| e.best_move()) else {
+        let Some(m) = tt.probe(pos.zobrist()).and_then(|e| e.best_move()) else {
             break;
         };
         if make_if_legal(&mut pos, m).is_none() {

@@ -255,7 +255,7 @@ fn play_training_game(
             return Some(GameRecord { positions, result });
         }
         let (best, score) = think(&board, tt, threads, config.nodes)?;
-        let verdict = Verdict::from_search(score, board.turn);
+        let verdict = Verdict::from_search(score, board.turn());
         // A best move that changes material teaches the network little about
         // quiet play.
         if let Verdict::Centipawns(cp) = verdict

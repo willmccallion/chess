@@ -173,7 +173,7 @@ struct EndgameDrill {
 impl EndgameDrill {
     fn new(drill: &'static Drill) -> Option<Self> {
         let board = drill.board().ok()?;
-        let you = board.turn;
+        let you = board.turn();
         Some(Self {
             drill,
             you,
@@ -200,7 +200,7 @@ impl EndgameDrill {
     }
 
     fn your_turn(&self) -> bool {
-        self.state == State::Playing && self.panel.board().turn == self.you
+        self.state == State::Playing && self.panel.board().turn() == self.you
     }
 
     fn play_yours(&mut self, m: Move, data: &mut CoachData) {
@@ -249,7 +249,7 @@ impl EndgameDrill {
 
     fn goal_reached(&self) -> Option<(bool, String)> {
         let board = self.panel.board();
-        let after_their_move = board.turn == self.you;
+        let after_their_move = board.turn() == self.you;
         match self.drill.goal {
             Goal::Promote if after_their_move && has_won_queen_ending(board, self.you) => Some((
                 true,

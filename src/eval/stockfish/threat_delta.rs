@@ -278,16 +278,16 @@ mod tests {
 
     fn relations(board: &Board) -> Vec<Relation> {
         let mut out = Vec::new();
-        let mut pieces = board.all_pieces;
+        let mut pieces = board.all_pieces();
         while pieces != 0 {
             let from = pieces.trailing_zeros() as usize;
             pieces &= pieces - 1;
-            let attacker = board.piece_on[from];
-            let mut targets = attacks_of(attacker, from, board.all_pieces) & board.all_pieces;
+            let attacker = board.piece_on()[from];
+            let mut targets = attacks_of(attacker, from, board.all_pieces()) & board.all_pieces();
             while targets != 0 {
                 let to = targets.trailing_zeros() as usize;
                 targets &= targets - 1;
-                out.push((attacker, from as u8, board.piece_on[to], to as u8));
+                out.push((attacker, from as u8, board.piece_on()[to], to as u8));
             }
         }
         out.sort_unstable_by_key(|r| (r.0 as u8, r.1, r.2 as u8, r.3));

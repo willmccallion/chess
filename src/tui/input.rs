@@ -53,7 +53,7 @@ impl MoveInput {
         {
             return self.move_piece(board, legal, from, square);
         }
-        if board.piece_on[square.index()].color() == Some(board.turn) {
+        if board.piece_on()[square.index()].color() == Some(board.turn()) {
             self.selected = Some(square);
             self.dragging = true;
         } else {
@@ -116,8 +116,8 @@ fn moves_between(board: &Board, legal: &[Move], from: Square, to: Square) -> Vec
     if !direct.is_empty() {
         return direct;
     }
-    let mover = board.piece_on[from.index()];
-    let target = board.piece_on[to.index()];
+    let mover = board.piece_on()[from.index()];
+    let target = board.piece_on()[to.index()];
     let king_onto_own_rook = mover.kind() == Some(PieceKind::King)
         && target.kind() == Some(PieceKind::Rook)
         && target.color() == mover.color();

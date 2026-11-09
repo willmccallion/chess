@@ -153,7 +153,7 @@ pub fn drill_by_id(id: &str) -> Option<&'static Drill> {
 
 /// Whether `side` has a queen while the other side has only its king.
 pub fn has_won_queen_ending(board: &Board, side: Color) -> bool {
-    let queen = board.piece_bb[Piece::from_kind(PieceKind::Queen, side).index()] != 0;
+    let queen = board.piece_bb()[Piece::from_kind(PieceKind::Queen, side).index()] != 0;
     let other_pieces = board.pieces_of(side.other());
     queen && other_pieces.is_power_of_two()
 }

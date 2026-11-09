@@ -32,7 +32,7 @@ struct SanParts {
 fn parse_san_loosely(board: &Board, legal: &[Move], san: &str) -> Option<Move> {
     let parts = san_parts(san)?;
     let mut matching = legal.iter().copied().filter(|m| {
-        board.piece_on[m.from.index()].kind() == Some(parts.kind)
+        board.piece_on()[m.from.index()].kind() == Some(parts.kind)
             && m.to == parts.to
             && !m.is_castle()
             && m.promotion() == parts.promotion
@@ -123,9 +123,9 @@ pub fn line_in_san(root: &Board, moves: &[Move]) -> String {
 /// `san` with its move number when it needs one: always for White, and for Black when
 /// it starts a line (`12... Nf6`).
 pub fn numbered(board: &Board, san: &str, starts_line: bool) -> String {
-    match board.turn {
-        Color::White => format!("{}. {san}", board.fullmove_number),
-        Color::Black if starts_line => format!("{}... {san}", board.fullmove_number),
+    match board.turn() {
+        Color::White => format!("{}. {san}", board.fullmove_number()),
+        Color::Black if starts_line => format!("{}... {san}", board.fullmove_number()),
         Color::Black => san.to_string(),
     }
 }
