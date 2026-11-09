@@ -242,9 +242,9 @@ pub fn calculate_key(b: &Board) -> u64 {
         key ^= POLYGLOT_RANDOM_U64[771];
     } // BQ
 
-    if b.en_passant_sq != -1 {
-        let ep_file = (b.en_passant_sq % 8) as usize;
-        let ep_sq_bb = 1u64 << b.en_passant_sq;
+    if let Some(ep) = b.en_passant {
+        let ep_file = usize::from(ep.file());
+        let ep_sq_bb = ep.bb();
         let attacking_pawns_bb = b.piece_bb[Piece::from_kind(PieceKind::Pawn, b.turn).index()];
 
         let ep_mask: Bitboard = if b.turn == Color::White {

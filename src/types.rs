@@ -4,8 +4,6 @@ use std::mem::MaybeUninit;
 pub type Bitboard = u64;
 pub type ZKey = u64;
 
-pub const NO_SQ: i32 = -1;
-
 /// A square of the board, numbered from a1 = 0 along each rank to h8 = 63.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 #[repr(transparent)]
@@ -588,7 +586,7 @@ impl<'a> IntoIterator for &'a MoveList {
 pub struct Undo {
     pub captured_piece: Piece,
     pub old_castle: u8,
-    pub old_en_passant_sq: i32,
+    pub old_en_passant: Option<Square>,
     pub old_halfmove_clock: i32,
     pub old_plies_from_null: u32,
     pub old_zobrist: ZKey,

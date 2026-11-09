@@ -1,6 +1,6 @@
 use crate::board::Board;
 use crate::magics;
-use crate::types::{BK_CASTLE, BQ_CASTLE, Color, NO_SQ, Piece, PieceKind, WK_CASTLE, WQ_CASTLE};
+use crate::types::{BK_CASTLE, BQ_CASTLE, Color, Piece, PieceKind, Square, WK_CASTLE, WQ_CASTLE};
 
 pub fn parse_fen(fen: &str) -> Result<Board, String> {
     let mut b = Board::empty();
@@ -37,7 +37,7 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
     let ep_sq = if ep == "-" {
         None
     } else {
-        Some(parse_square(ep).ok_or_else(|| format!("bad en-passant square {ep:?}"))?)
+        Some(Square::parse(ep).ok_or_else(|| format!("bad en-passant square {ep:?}"))?)
     };
 
     b.halfmove_clock = halfmove.parse().unwrap_or(0);
@@ -45,9 +45,7 @@ pub fn parse_fen(fen: &str) -> Result<Board, String> {
 
     b.rebuild_derived();
     validate_kings(&b)?;
-    b.en_passant_sq = ep_sq
-        .filter(|&sq| is_capturable_en_passant(&b, sq))
-        .unwrap_or(NO_SQ);
+    b.en_passant = ep_sq.filter(|&sq| is_capturable_en_passant(&b, sq));
     b.recompute_zobrist();
     b.history.push(b.zobrist);
 
@@ -82,36 +80,27 @@ fn place_pieces(b: &mut Board, placement: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The square a coordinate such as `e3` names.
-fn parse_square(text: &str) -> Option<i32> {
-    let mut chars = text.chars();
-    let (file, rank) = (chars.next()?, chars.next()?);
-    if chars.next().is_some() {
-        return None;
-    }
-    let file = "abcdefgh".find(file.to_ascii_lowercase())?;
-    let rank = "12345678".find(rank)?;
-    Some((rank * 8 + file) as i32)
-}
-
 /// Whether the side to move can capture en passant on `sq`: the enemy pawn
 /// that just stepped two squares stands in front of it, it and the square
 /// the pawn left are empty, and a pawn of the side to move attacks it.
 /// Like Stockfish, any other en-passant square in a FEN is dropped.
-fn is_capturable_en_passant(b: &Board, sq: i32) -> bool {
-    let (ep_rank, pushed_pawn, origin, attackers) = match b.turn {
-        Color::White => (5, sq - 8, sq + 8, magics::BLACK_PAWN_ATTACKS[sq as usize]),
-        Color::Black => (2, sq + 8, sq - 8, magics::WHITE_PAWN_ATTACKS[sq as usize]),
+fn is_capturable_en_passant(b: &Board, sq: Square) -> bool {
+    let (ep_rank, toward_pusher, attackers) = match b.turn {
+        Color::White => (5, -8, magics::BLACK_PAWN_ATTACKS[sq.index()]),
+        Color::Black => (2, 8, magics::WHITE_PAWN_ATTACKS[sq.index()]),
     };
-    if sq / 8 != ep_rank {
+    if sq.rank() != ep_rank {
         return false;
     }
+    let (Some(pushed_pawn), Some(origin)) = (sq.offset(toward_pusher), sq.offset(-toward_pusher))
+    else {
+        return false;
+    };
     let mover_pawn = Piece::from_kind(PieceKind::Pawn, b.turn.other());
-    let capturer_pawns = b.piece_bb[Piece::from_kind(PieceKind::Pawn, b.turn).index()];
-    b.piece_on[pushed_pawn as usize] == mover_pawn
-        && b.piece_on[sq as usize].is_empty()
-        && b.piece_on[origin as usize].is_empty()
-        && attackers & capturer_pawns != 0
+    b.piece_on[pushed_pawn.index()] == mover_pawn
+        && b.piece_on[sq.index()].is_empty()
+        && b.piece_on[origin.index()].is_empty()
+        && attackers & b.pieces(PieceKind::Pawn, b.turn) != 0
 }
 
 /// Each side needs exactly one king, and the side that just moved cannot be in check.
@@ -184,13 +173,9 @@ pub fn to_fen(b: &Board) -> String {
     }
 
     s.push(' ');
-    if b.en_passant_sq == NO_SQ {
-        s.push('-');
-    } else {
-        let f = (b.en_passant_sq % 8) as u8 + b'a';
-        let r = (b.en_passant_sq / 8) as u8 + b'1';
-        s.push(f as char);
-        s.push(r as char);
+    match b.en_passant {
+        Some(ep) => s.push_str(&ep.to_string()),
+        None => s.push('-'),
     }
 
     s.push(' ');
@@ -226,7 +211,7 @@ mod tests {
     fn drops_an_en_passant_square_no_pawn_can_capture_on() {
         let board = parse_fen("4k3/8/8/3P4/8/8/8/4K3 w - e6 0 1").unwrap();
 
-        assert_eq!(board.en_passant_sq, NO_SQ);
+        assert_eq!(board.en_passant, None);
     }
 
     #[test]

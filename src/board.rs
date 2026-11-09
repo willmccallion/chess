@@ -31,7 +31,8 @@ pub struct Board {
     pub all_pieces: Bitboard,
     pub turn: Color,
     pub castle: u8,
-    pub en_passant_sq: i32,
+    /// The square a pawn may capture onto en passant.
+    pub en_passant: Option<Square>,
     pub halfmove_clock: i32,
     pub fullmove_number: i32,
     /// Plies since the last null move; positions before it cannot repeat.
@@ -50,7 +51,7 @@ impl Board {
             all_pieces: 0,
             turn: Color::White,
             castle: 0,
-            en_passant_sq: NO_SQ,
+            en_passant: None,
             halfmove_clock: 0,
             fullmove_number: 1,
             plies_from_null: 0,
@@ -155,8 +156,8 @@ impl Board {
             }
         }
         h ^= zobrist::ZOB.castle[(self.castle & 0xF) as usize];
-        if self.en_passant_sq != NO_SQ {
-            h ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
+        if let Some(ep) = self.en_passant {
+            h ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
         if self.turn == Color::Black {
             h ^= zobrist::ZOB.side;
@@ -364,7 +365,7 @@ impl Board {
                         ));
                     }
                 }
-                if self.en_passant_sq == cap {
+                if self.en_passant == Some(Square::new(cap as u8)) {
                     out.push(Move::en_passant(
                         Square::new(from as u8),
                         Square::new(cap as u8),
@@ -503,8 +504,8 @@ impl Board {
         if m.capture {
             if m.en_passant {
                 // En-passant: target square must be empty (pawn is beside us),
-                // en_passant_sq must match, and the captured pawn must exist.
-                if self.en_passant_sq != to as i32 {
+                // the en-passant square must match, and the captured pawn must exist.
+                if self.en_passant != Some(m.to) {
                     return false;
                 }
                 if to_piece != Piece::Empty {
@@ -582,7 +583,7 @@ impl Board {
         let mut undo = Undo {
             captured_piece: Piece::Empty,
             old_castle: self.castle,
-            old_en_passant_sq: self.en_passant_sq,
+            old_en_passant: self.en_passant,
             old_halfmove_clock: self.halfmove_clock,
             old_plies_from_null: self.plies_from_null,
             old_zobrist: self.zobrist,
@@ -607,10 +608,9 @@ impl Board {
             undo.captured_piece = self.piece_on[cap_sq];
         }
 
-        if self.en_passant_sq != NO_SQ {
-            self.zobrist ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
+        if let Some(ep) = self.en_passant.take() {
+            self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
-        self.en_passant_sq = NO_SQ;
 
         self.zobrist ^= zobrist::ZOB.piece_key(moving, from);
         self.piece_on[from] = Piece::Empty;
@@ -658,13 +658,9 @@ impl Board {
         }
 
         if m.double_push {
-            let ep = if self.turn == Color::White {
-                from + 8
-            } else {
-                from - 8
-            };
-            self.en_passant_sq = ep as i32;
-            self.zobrist ^= zobrist::ZOB.ep_file[ep % 8];
+            let ep = Square::from_file_rank(m.from.file(), (m.from.rank() + m.to.rank()) / 2);
+            self.en_passant = Some(ep);
+            self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
 
         if matches!(moving.kind(), Some(PieceKind::Pawn)) || m.capture {
@@ -729,7 +725,7 @@ impl Board {
             all_pieces: self.all_pieces,
             turn: self.turn,
             castle: self.castle,
-            en_passant_sq: self.en_passant_sq,
+            en_passant: self.en_passant,
             halfmove_clock: self.halfmove_clock,
             fullmove_number: self.fullmove_number,
             plies_from_null: self.plies_from_null,
@@ -779,7 +775,7 @@ impl Board {
         }
 
         self.castle = u.old_castle;
-        self.en_passant_sq = u.old_en_passant_sq;
+        self.en_passant = u.old_en_passant;
         self.halfmove_clock = u.old_halfmove_clock;
         self.plies_from_null = u.old_plies_from_null;
 
@@ -826,16 +822,15 @@ impl Board {
         let undo = Undo {
             captured_piece: Piece::Empty,
             old_castle: self.castle,
-            old_en_passant_sq: self.en_passant_sq,
+            old_en_passant: self.en_passant,
             old_halfmove_clock: self.halfmove_clock,
             old_plies_from_null: self.plies_from_null,
             old_zobrist: self.zobrist,
         };
         self.plies_from_null = 0;
 
-        if self.en_passant_sq != NO_SQ {
-            self.zobrist ^= zobrist::ZOB.ep_file[(self.en_passant_sq % 8) as usize];
-            self.en_passant_sq = NO_SQ;
+        if let Some(ep) = self.en_passant.take() {
+            self.zobrist ^= zobrist::ZOB.ep_file[usize::from(ep.file())];
         }
 
         self.turn = self.turn.other();
@@ -851,7 +846,7 @@ impl Board {
         self.history.pop();
         self.zobrist = u.old_zobrist;
         self.turn = self.turn.other();
-        self.en_passant_sq = u.old_en_passant_sq;
+        self.en_passant = u.old_en_passant;
         self.halfmove_clock = u.old_halfmove_clock;
         self.plies_from_null = u.old_plies_from_null;
     }
