@@ -610,13 +610,9 @@ impl TuneArgs {
             }],
         };
         let engine = engine.unwrap_or_else(own_binary);
-        let start = match resume {
-            Some(path) => std::fs::read_to_string(&path)
-                .map_err(|e| format!("{}: {e}", path.display()))
-                .and_then(|text| spsa::read_estimate(&text))
-                .unwrap_or_else(|e| exit_with_error(&e)),
-            None => Vec::new(),
-        };
+        let start = resume.map_or_else(Vec::new, |path| {
+            read_estimate_file(&path).unwrap_or_else(|e| exit_with_error(&e))
+        });
         let openings = openings::sample_openings(&openings, 100_000, seed)
             .unwrap_or_else(|e| exit_with_error(&e));
         let tune_options: Vec<String> = std::iter::once(TUNE_HASH_OPTION.to_string())
@@ -636,20 +632,26 @@ impl TuneArgs {
             output,
             start,
         };
-        match spsa::run(config) {
-            Ok(theta) => {
-                println!("final estimate (rounded):");
-                for (spec, value) in PARAM_SPECS.iter().zip(theta) {
-                    println!(
-                        "  {:<24} {:>6} (default {})",
-                        spec.name,
-                        value.round() as i32,
-                        spec.default
-                    );
-                }
-            }
-            Err(e) => exit_with_error(&e),
-        }
+        let theta = spsa::run(config).unwrap_or_else(|e| exit_with_error(&e));
+        print_final_estimate(&theta);
+    }
+}
+
+/// The parameter estimate a tuning run saved to `path`.
+fn read_estimate_file(path: &std::path::Path) -> Result<Vec<(String, f64)>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    spsa::read_estimate(&text)
+}
+
+fn print_final_estimate(theta: &[f64]) {
+    println!("final estimate (rounded):");
+    for (spec, value) in PARAM_SPECS.iter().zip(theta) {
+        println!(
+            "  {:<24} {:>6} (default {})",
+            spec.name,
+            value.round() as i32,
+            spec.default
+        );
     }
 }
 
