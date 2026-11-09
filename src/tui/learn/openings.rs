@@ -7,6 +7,7 @@ use super::line::LineScreen;
 use super::{Nav, Screen};
 use crate::coach::profile::{LineStatus, line_status};
 use crate::coach::repertoire::{CHAPTERS, Chapter, Line as RepLine};
+use crate::coach::srs::UnixTime;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -156,6 +157,46 @@ const fn visible_skip(selected: usize, rows: usize) -> usize {
     (selected + 2).saturating_sub(rows)
 }
 
+/// A chapter heading, or a line with its status, marked when `chosen`.
+fn row_line(row: &Row, chosen: bool, data: &CoachData, now: UnixTime) -> Line<'static> {
+    match row {
+        Row::Chapter(chapter) => {
+            let side = if chapter.side == crate::types::Color::White {
+                "as White"
+            } else {
+                "as Black"
+            };
+            Line::from(vec![
+                Span::styled(
+                    chapter.name,
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {side}"), Style::new().fg(DIM)),
+            ])
+        }
+        Row::Line(_, line) => {
+            let name_style = if chosen {
+                Style::new().fg(TEXT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(TEXT)
+            };
+            Line::from(vec![
+                Span::styled(
+                    if chosen { "  ▸ " } else { "    " },
+                    Style::new().fg(ACCENT),
+                ),
+                status_span(line_status(line, &data.schedules, now)),
+                Span::raw("  "),
+                Span::styled(line.name, name_style),
+                Span::styled(
+                    format!("  {} moves", line.your_move_count()),
+                    Style::new().fg(DIM),
+                ),
+            ])
+        }
+    }
+}
+
 impl Screen for Openings {
     fn draw(&self, frame: &mut Frame, data: &CoachData, _now: Instant) {
         let area = frame.area();
@@ -177,45 +218,7 @@ impl Screen for Openings {
             .enumerate()
             .skip(skip)
             .take(rows)
-            .map(|(i, row)| match row {
-                Row::Chapter(chapter) => {
-                    let side = if chapter.side == crate::types::Color::White {
-                        "as White"
-                    } else {
-                        "as Black"
-                    };
-                    Line::from(vec![
-                        Span::styled(
-                            chapter.name,
-                            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(format!("  {side}"), Style::new().fg(DIM)),
-                    ])
-                }
-                Row::Line(_, line) => {
-                    let chosen = i == self.selected;
-                    Line::from(vec![
-                        Span::styled(
-                            if chosen { "  ▸ " } else { "    " },
-                            Style::new().fg(ACCENT),
-                        ),
-                        status_span(line_status(line, &data.schedules, now)),
-                        Span::raw("  "),
-                        Span::styled(
-                            line.name,
-                            if chosen {
-                                Style::new().fg(TEXT).add_modifier(Modifier::BOLD)
-                            } else {
-                                Style::new().fg(TEXT)
-                            },
-                        ),
-                        Span::styled(
-                            format!("  {} moves", line.your_move_count()),
-                            Style::new().fg(DIM),
-                        ),
-                    ])
-                }
-            })
+            .map(|(i, row)| row_line(row, i == self.selected, data, now))
             .collect();
         frame.render_widget(Paragraph::new(lines).block(panel("Lines")), list_area);
         let status = Rect::new(
