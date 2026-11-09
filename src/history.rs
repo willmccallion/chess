@@ -74,6 +74,24 @@ impl Histories {
         i32::from(self.capture[piece.index()][to.index()][victim as usize])
     }
 
+    /// A quiet move's history: its butterfly entry and its continuation
+    /// entries after the moves `continuations` name.
+    #[inline(always)]
+    pub fn quiet_history(
+        &self,
+        color: Color,
+        piece: Piece,
+        m: Move,
+        continuations: &[Option<ContinuationKey>],
+    ) -> i32 {
+        let continuation: i32 = continuations
+            .iter()
+            .flatten()
+            .map(|&key| self.continuation(key, piece, m.to))
+            .sum();
+        self.butterfly(color, m) + continuation
+    }
+
     pub fn update_quiet(
         &mut self,
         color: Color,

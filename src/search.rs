@@ -1193,12 +1193,8 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, cut_no
 
         let quiet_history = if is_quiet {
             let piece = s.board.piece_on[m.from.index()];
-            s.td.histories.butterfly(s.board.turn, m)
-                + continuations
-                    .iter()
-                    .flatten()
-                    .map(|&key| s.td.histories.continuation(key, piece, m.to))
-                    .sum::<i32>()
+            s.td.histories
+                .quiet_history(s.board.turn, piece, m, &continuations)
         } else {
             0
         };

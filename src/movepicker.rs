@@ -138,13 +138,9 @@ impl OrderingContext<'_> {
     fn quiet_score(&self, board: &Board, threats: &QuietThreats, m: Move) -> i32 {
         let piece = board.piece_on[m.from.index()];
         let threat = piece.kind().map_or(0, |kind| threats.adjustment(kind, m));
-        let continuation: i32 = self
-            .continuations
-            .iter()
-            .flatten()
-            .map(|&key| self.histories.continuation(key, piece, m.to))
-            .sum();
-        self.histories.butterfly(board.turn, m) + continuation + threat
+        self.histories
+            .quiet_history(board.turn, piece, m, &self.continuations)
+            + threat
     }
 
     fn capture_score(&self, board: &Board, m: Move) -> i32 {
