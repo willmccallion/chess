@@ -9,6 +9,7 @@ use crate::time::TimeBudget;
 use crate::tt::{Bound, SharedTransTable, TTEntry, TTWrite};
 use crate::types::{MAX_MOVES, Move, MoveList, Piece, StackVec, Undo};
 use crate::uci_io::format_uci;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
@@ -650,6 +651,41 @@ impl Search<'_> {
         self.continuation_keys_at(self.ply)
     }
 
+    /// The score that ends a node below the root before it is searched (a
+    /// draw, or the evaluation at the ply limit), or else its window narrowed
+    /// to the mate scores still reachable, which ends it when empty.
+    fn window_below_root(&mut self, alpha: i32, beta: i32) -> ControlFlow<i32, (i32, i32)> {
+        if self.board.is_repetition(self.ply) || is_fifty_move_draw(&self.board) {
+            return ControlFlow::Break(DRAW_SCORE);
+        }
+        if self.ply >= MAX_PLY - 1 {
+            return ControlFlow::Break(cp_to_search_units(evaluate(&mut self.board)));
+        }
+        let alpha = alpha.max(-MATE_SCORE + self.ply as i32);
+        let beta = beta.min(MATE_SCORE - self.ply as i32 - 1);
+        if alpha >= beta {
+            return ControlFlow::Break(alpha);
+        }
+        ControlFlow::Continue((alpha, beta))
+    }
+
+    /// The TT's score for this node when `entry` is deep enough and its bound
+    /// settles the window, crediting the TT move when that score fails high.
+    fn tt_cutoff(&mut self, entry: TTEntry, depth: i32, alpha: i32, beta: i32) -> Option<i32> {
+        let tt_score = score_from_tt(entry.score(), self.ply);
+        if i32::from(entry.depth()) < depth
+            || !tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta)
+        {
+            return None;
+        }
+        if tt_score >= beta
+            && let Some(m) = entry.best_move()
+        {
+            self.reward_tt_cutoff_move(m, depth);
+        }
+        Some(tt_score)
+    }
+
     /// Credits a quiet TT move whose stored score still fails high.
     fn reward_tt_cutoff_move(&mut self, m: Move, depth: i32) {
         if !m.is_quiet() || !self.board.is_pseudo_legal(m) {
@@ -1160,16 +1196,9 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
 
     let is_root = s.ply == 0;
     if !is_root {
-        if s.board.is_repetition(s.ply) || is_fifty_move_draw(&s.board) {
-            return DRAW_SCORE;
-        }
-        if s.ply >= MAX_PLY - 1 {
-            return cp_to_search_units(evaluate(&mut s.board));
-        }
-        alpha = alpha.max(-MATE_SCORE + s.ply as i32);
-        beta = beta.min(MATE_SCORE - s.ply as i32 - 1);
-        if alpha >= beta {
-            return alpha;
+        match s.window_below_root(alpha, beta) {
+            ControlFlow::Break(score) => return score,
+            ControlFlow::Continue(window) => (alpha, beta) = window,
         }
     }
 
@@ -1192,20 +1221,12 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
         s.stack[s.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
     }
     let tt_pv = s.stack[s.ply].tt_pv;
-    if let Some(entry) = tt_entry {
-        let tt_score = score_from_tt(entry.score(), s.ply);
-        if !is_pv
-            && excluded_move.is_none()
-            && i32::from(entry.depth()) >= depth
-            && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta)
-        {
-            if tt_score >= beta
-                && let Some(m) = tt_move
-            {
-                s.reward_tt_cutoff_move(m, depth);
-            }
-            return tt_score;
-        }
+    if !is_pv
+        && excluded_move.is_none()
+        && let Some(entry) = tt_entry
+        && let Some(score) = s.tt_cutoff(entry, depth, alpha, beta)
+    {
+        return score;
     }
 
     let Some(legality) = s.board.legality_info() else {
