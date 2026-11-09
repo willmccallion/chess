@@ -623,20 +623,14 @@ fn print_game_line(
 }
 
 /// Plays games with one pair of engines until the tournament runs out of
-/// them, restarting both engines after a crash.
+/// them. After a crash both engines restart; if that fails the worker stops,
+/// since every game on a dead engine would only be another crash.
 fn run_worker(tournament: &Tournament) {
     let config = &tournament.config;
-    let mut e1 = match spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None) {
-        Ok(e) => e,
+    let (mut e1, mut e2) = match start_engines(config) {
+        Ok(engines) => engines,
         Err(e) => {
-            eprintln!("Failed to start engine1: {}", e);
-            return;
-        }
-    };
-    let mut e2 = match spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Failed to start engine2: {}", e);
+            eprintln!("{e}");
             return;
         }
     };
@@ -651,21 +645,26 @@ fn run_worker(tournament: &Tournament) {
         tournament.record(game_idx, &outcome);
 
         if outcome.reason == GameEndReason::EngineCrash {
-            if let Ok(new_e1) =
-                spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
-            {
-                e1 = new_e1;
-            }
-            if let Ok(new_e2) =
-                spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
-            {
-                e2 = new_e2;
-            }
+            (e1, e2) = match start_engines(config) {
+                Ok(engines) => engines,
+                Err(e) => {
+                    eprintln!("{e}; this worker plays no more games");
+                    return;
+                }
+            };
         }
     }
 
     e1.quit();
     e2.quit();
+}
+
+fn start_engines(config: &TournamentConfig) -> Result<(UciEngine, UciEngine), String> {
+    let e1 = spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
+        .map_err(|e| format!("Failed to start engine1: {e}"))?;
+    let e2 = spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
+        .map_err(|e| format!("Failed to start engine2: {e}"))?;
+    Ok((e1, e2))
 }
 
 #[cfg(test)]
@@ -849,5 +848,61 @@ mod tests {
         let config = config_with(&[], OPENING_B);
 
         assert_eq!(config.start_for_game(5).fen(), OPENING_B);
+    }
+
+    /// Answers the UCI handshake and dies on its first `go`; every later
+    /// start fails at once.
+    const CRASHES_THEN_WONT_START: &str = r#"#!/bin/sh
+marker="$0.started"
+[ -e "$marker" ] && exit 1
+: > "$marker"
+while read -r line; do
+    case "$line" in
+        uci) echo uciok ;;
+        isready) echo readyok ;;
+        go*) exit 0 ;;
+        quit) exit 0 ;;
+    esac
+done
+"#;
+
+    /// Answers the UCI handshake and plays 1. e4 whenever asked to move.
+    const PLAYS_E4: &str = r#"#!/bin/sh
+while read -r line; do
+    case "$line" in
+        uci) echo uciok ;;
+        isready) echo readyok ;;
+        go*) echo "bestmove e2e4" ;;
+        quit) exit 0 ;;
+    esac
+done
+"#;
+
+    #[cfg(unix)]
+    fn write_engine(dir: &std::path::Path, name: &str, script: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_worker_stops_when_a_crashed_engine_cannot_be_restarted() {
+        let dir = std::env::temp_dir().join(format!("chess-respawn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = config_with(&[], START_FEN);
+        config.engine1_path = write_engine(&dir, "crashing", CRASHES_THEN_WONT_START);
+        config.engine2_path = write_engine(&dir, "e4", PLAYS_E4);
+        config.rounds = 4;
+        let tournament = Tournament::new(config);
+
+        run_worker(&tournament);
+
+        let score = tournament.score.into_inner().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(score.completed(), 1);
+        assert_eq!(score.terminations[&GameEndReason::EngineCrash], 1);
     }
 }
