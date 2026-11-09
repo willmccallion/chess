@@ -77,7 +77,7 @@ impl TournamentConfig {
 
 /// The standings so far, from engine 1's side.
 #[derive(Default)]
-struct Score {
+struct Standings {
     e1: Wdl,
     e1_as_white: Wdl,
     e1_as_black: Wdl,
@@ -91,7 +91,7 @@ struct Score {
     sprt_decision: Option<SprtDecision>,
 }
 
-impl Score {
+impl Standings {
     /// Counts game `game_idx`, played by engine 1 as white when `e1_is_white`;
     /// returns true when it completes a pair.
     fn record(&mut self, outcome: &GameOutcome, e1_is_white: bool, game_idx: usize) -> bool {
@@ -207,32 +207,32 @@ pub(crate) fn spawn_and_init_pinned(
     Ok(engine)
 }
 
-fn print_summary(s: &Score, e1_name: &str, e2_name: &str, elapsed: f64) {
+fn print_summary(standings: &Standings, e1_name: &str, e2_name: &str, elapsed: f64) {
     println!();
     println!("{SUMMARY_RULE}");
     println!("  TOURNAMENT RESULTS");
     println!("{SUMMARY_RULE}");
     println!();
-    print_score_lines(s, elapsed);
-    print_head_to_head(s, e1_name, e2_name);
-    print_colour_breakdown(s, e1_name);
-    print_terminations(s);
-    print_game_lengths(s);
+    print_score_lines(standings, elapsed);
+    print_head_to_head(standings, e1_name, e2_name);
+    print_colour_breakdown(standings, e1_name);
+    print_terminations(standings);
+    print_game_lengths(standings);
     println!("{SUMMARY_RULE}");
 }
 
 const SUMMARY_RULE: &str = "=================================================================";
 
 /// The score with its Elo estimate, then the game, pair, SPRT and speed counts.
-fn print_score_lines(s: &Score, elapsed: f64) {
-    let total = s.completed();
-    let elo = format_elo(s.e1.wins, s.e1.losses, s.e1.draws);
-    let err = match s.penta.elo() {
+fn print_score_lines(standings: &Standings, elapsed: f64) {
+    let total = standings.completed();
+    let elo = format_elo(standings.e1.wins, standings.e1.losses, standings.e1.draws);
+    let err = match standings.penta.elo() {
         Some((_, pair_error)) => Some(pair_error),
-        None => elo_error_95(s.e1.wins, s.e1.losses, s.e1.draws),
+        None => elo_error_95(standings.e1.wins, standings.e1.losses, standings.e1.draws),
     };
     let draw_rate = if total > 0 {
-        s.e1.draws as f64 / total as f64 * 100.0
+        standings.e1.draws as f64 / total as f64 * 100.0
     } else {
         0.0
     };
@@ -242,15 +242,15 @@ fn print_score_lines(s: &Score, elapsed: f64) {
     };
     println!(
         "  Score: {:.1} - {:.1}  [{elo_str}]",
-        s.e1.points(),
-        s.e1.opponent().points()
+        standings.e1.points(),
+        standings.e1.opponent().points()
     );
     println!("  Games: {}    Draw rate: {:.1}%", total, draw_rate);
-    if s.penta.pairs() > 0 {
-        let [ll, ld, even, wd, ww] = s.penta.counts();
+    if standings.penta.pairs() > 0 {
+        let [ll, ld, even, wd, ww] = standings.penta.counts();
         println!(
             "  Pairs: {}    Pentanomial [LL LD DD/WL WD WW]: [{} {} {} {} {}]",
-            s.penta.pairs(),
+            standings.penta.pairs(),
             ll,
             ld,
             even,
@@ -258,7 +258,7 @@ fn print_score_lines(s: &Score, elapsed: f64) {
             ww
         );
     }
-    if let Some(decision) = s.sprt_decision {
+    if let Some(decision) = standings.sprt_decision {
         let verdict = match decision {
             SprtDecision::AcceptH1 => "H1 accepted (engine1 is stronger)",
             SprtDecision::AcceptH0 => "H0 accepted (no gain shown)",
@@ -273,7 +273,7 @@ fn print_score_lines(s: &Score, elapsed: f64) {
     println!();
 }
 
-fn print_head_to_head(s: &Score, e1_name: &str, e2_name: &str) {
+fn print_head_to_head(standings: &Standings, e1_name: &str, e2_name: &str) {
     let w = e1_name.len().max(e2_name.len()).max(6);
     let border = format!("  +-{0:-<w$}-+------+------+------+--------+-------+", "");
     println!("{border}");
@@ -282,8 +282,8 @@ fn print_head_to_head(s: &Score, e1_name: &str, e2_name: &str) {
         "Engine", "W", "L", "D", "Score", "Pts",
     );
     println!("{border}");
-    print_head_to_head_row(e1_name, s.e1, w);
-    print_head_to_head_row(e2_name, s.e1.opponent(), w);
+    print_head_to_head_row(e1_name, standings.e1, w);
+    print_head_to_head_row(e2_name, standings.e1.opponent(), w);
     println!("{border}");
     println!();
 }
@@ -300,7 +300,7 @@ fn print_head_to_head_row(name: &str, wdl: Wdl, w: usize) {
 }
 
 /// Engine 1's results as white and as black.
-fn print_colour_breakdown(s: &Score, e1_name: &str) {
+fn print_colour_breakdown(standings: &Standings, e1_name: &str) {
     let border = "  +-----------+------+------+------+--------+";
     println!("  White/Black Breakdown (from {}'s perspective):", e1_name);
     println!("{border}");
@@ -309,8 +309,8 @@ fn print_colour_breakdown(s: &Score, e1_name: &str) {
         "W", "L", "D", "Score"
     );
     println!("{border}");
-    print_colour_row("As white", s.e1_as_white);
-    print_colour_row("As black", s.e1_as_black);
+    print_colour_row("As white", standings.e1_as_white);
+    print_colour_row("As black", standings.e1_as_black);
     println!("{border}");
     println!();
 }
@@ -329,7 +329,7 @@ fn print_colour_row(label: &str, wdl: Wdl) {
 }
 
 /// How many games ended each way, in a fixed order.
-fn print_terminations(s: &Score) {
+fn print_terminations(standings: &Standings) {
     const ENDINGS: [(&str, GameEndReason); 9] = [
         ("Checkmate", GameEndReason::Checkmate),
         ("Stalemate", GameEndReason::Stalemate),
@@ -343,23 +343,23 @@ fn print_terminations(s: &Score) {
     ];
     println!("  Terminations:");
     for (name, reason) in ENDINGS {
-        let count = s.terminations.get(&reason).copied().unwrap_or(0);
+        let count = standings.terminations.get(&reason).copied().unwrap_or(0);
         if count > 0 {
             println!(
                 "    {:<21} {:>4}  ({})",
                 name,
                 count,
-                format_pct(count, s.completed()),
+                format_pct(count, standings.completed()),
             );
         }
     }
     println!();
 }
 
-fn print_game_lengths(s: &Score) {
-    let total = s.completed();
+fn print_game_lengths(standings: &Standings) {
+    let total = standings.completed();
     let avg_len = if total > 0 {
-        s.total_plies as f64 / total as f64
+        standings.total_plies as f64 / total as f64
     } else {
         0.0
     };
@@ -369,13 +369,13 @@ fn print_game_lengths(s: &Score) {
         avg_len,
         avg_len / 2.0
     );
-    if let Some(shortest) = s.shortest_game {
+    if let Some(shortest) = standings.shortest_game {
         println!("    Shortest: {} plies ({} moves)", shortest, shortest / 2);
     }
     println!(
         "    Longest:  {} plies ({} moves)",
-        s.longest_game,
-        s.longest_game / 2
+        standings.longest_game,
+        standings.longest_game / 2
     );
     println!();
 }
@@ -399,12 +399,21 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
     });
     let elapsed = start_time.elapsed().as_secs_f64();
 
-    let Tournament { config, score, .. } = tournament;
-    let mut score = score.into_inner().unwrap_or_else(PoisonError::into_inner);
-    if config.sprt.is_some() && score.sprt_decision.is_none() {
-        score.sprt_decision = Some(SprtDecision::Continue);
+    let Tournament {
+        config, standings, ..
+    } = tournament;
+    let mut standings = standings
+        .into_inner()
+        .unwrap_or_else(PoisonError::into_inner);
+    if config.sprt.is_some() && standings.sprt_decision.is_none() {
+        standings.sprt_decision = Some(SprtDecision::Continue);
     }
-    print_summary(&score, &config.engine1.name, &config.engine2.name, elapsed);
+    print_summary(
+        &standings,
+        &config.engine1.name,
+        &config.engine2.name,
+        elapsed,
+    );
     Ok(())
 }
 
@@ -476,7 +485,7 @@ fn print_header(config: &TournamentConfig) {
 struct Tournament {
     config: TournamentConfig,
     next_game: AtomicUsize,
-    score: Mutex<Score>,
+    standings: Mutex<Standings>,
     stop: AtomicBool,
 }
 
@@ -485,7 +494,7 @@ impl Tournament {
         Self {
             config,
             next_game: AtomicUsize::new(0),
-            score: Mutex::new(Score::default()),
+            standings: Mutex::new(Standings::default()),
             stop: AtomicBool::new(false),
         }
     }
@@ -504,34 +513,37 @@ impl Tournament {
     /// if the game completes a pair.
     fn record(&self, game_idx: usize, outcome: &GameOutcome) {
         let e1_is_white = e1_plays_white(game_idx);
-        let mut score = self.score.lock().unwrap_or_else(PoisonError::into_inner);
-        let pair_completed = score.record(outcome, e1_is_white, game_idx);
-        print_game_line(&self.config, &score, e1_is_white, outcome);
+        let mut standings = self
+            .standings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let pair_completed = standings.record(outcome, e1_is_white, game_idx);
+        print_game_line(&self.config, &standings, e1_is_white, outcome);
         if pair_completed {
-            self.check_sprt(&mut score);
+            self.check_sprt(&mut standings);
         }
     }
 
     /// Prints the log-likelihood ratio and stops the tournament once SPRT
     /// accepts a hypothesis.
-    fn check_sprt(&self, score: &mut Score) {
+    fn check_sprt(&self, standings: &mut Standings) {
         let Some(sprt) = self.config.sprt else {
             return;
         };
-        if score.sprt_decision.is_some() {
+        if standings.sprt_decision.is_some() {
             return;
         }
-        let llr = sprt.llr(&score.penta);
+        let llr = sprt.llr(&standings.penta);
         println!(
             "  SPRT: LLR {:.2} [{:.2}, {:.2}] after {} pairs",
             llr,
             sprt.lower_bound(),
             sprt.upper_bound(),
-            score.penta.pairs()
+            standings.penta.pairs()
         );
         let decision = sprt.decide(llr);
         if decision != SprtDecision::Continue {
-            score.sprt_decision = Some(decision);
+            standings.sprt_decision = Some(decision);
             self.stop.store(true, Ordering::Relaxed);
         }
     }
@@ -539,7 +551,7 @@ impl Tournament {
 
 fn print_game_line(
     config: &TournamentConfig,
-    score: &Score,
+    standings: &Standings,
     e1_is_white: bool,
     outcome: &GameOutcome,
 ) {
@@ -556,7 +568,7 @@ fn print_game_line(
     };
     println!(
         "Game {:>3}/{}: {} vs {} -> {} ({}, {} plies)  [{} {:.1} - {:.1} {}] [{}]",
-        score.completed(),
+        standings.completed(),
         config.rounds,
         white_name,
         black_name,
@@ -564,10 +576,10 @@ fn print_game_line(
         outcome.reason,
         outcome.move_count,
         e1_name,
-        score.e1.points(),
-        score.e1.opponent().points(),
+        standings.e1.points(),
+        standings.e1.opponent().points(),
         e2_name,
-        format_elo(score.e1.wins, score.e1.losses, score.e1.draws),
+        format_elo(standings.e1.wins, standings.e1.losses, standings.e1.draws),
     );
 }
 
@@ -734,14 +746,14 @@ mod tests {
 
     #[test]
     fn recorded_games_count_by_colour_ending_and_length() {
-        let mut score = Score::default();
+        let mut standings = Standings::default();
 
-        let first = score.record(
+        let first = standings.record(
             &outcome(GameResult::WhiteWin, GameEndReason::Checkmate, 40),
             true,
             0,
         );
-        let second = score.record(
+        let second = standings.record(
             &outcome(GameResult::WhiteWin, GameEndReason::FlagFall, 10),
             false,
             1,
@@ -753,41 +765,45 @@ mod tests {
             draws,
         };
         assert_eq!((first, second), (false, true));
-        assert_eq!(score.e1, wdl(1, 1, 0));
+        assert_eq!(standings.e1, wdl(1, 1, 0));
         assert_eq!(
-            (score.e1_as_white, score.e1_as_black),
+            (standings.e1_as_white, standings.e1_as_black),
             (wdl(1, 0, 0), wdl(0, 1, 0))
         );
-        assert_eq!(score.terminations[&GameEndReason::Checkmate], 1);
-        assert_eq!(score.terminations[&GameEndReason::FlagFall], 1);
+        assert_eq!(standings.terminations[&GameEndReason::Checkmate], 1);
+        assert_eq!(standings.terminations[&GameEndReason::FlagFall], 1);
         assert_eq!(
-            (score.shortest_game, score.longest_game, score.total_plies),
+            (
+                standings.shortest_game,
+                standings.longest_game,
+                standings.total_plies
+            ),
             (Some(10), 40, 50)
         );
-        assert_eq!(score.penta.counts(), [0, 0, 1, 0, 0]);
+        assert_eq!(standings.penta.counts(), [0, 0, 1, 0, 0]);
     }
 
     #[test]
     fn a_tournament_without_games_has_no_shortest_game() {
-        assert_eq!(Score::default().shortest_game, None);
+        assert_eq!(Standings::default().shortest_game, None);
     }
 
     #[test]
     fn the_two_games_of_a_pair_count_once_whichever_finishes_first() {
-        let mut score = Score::default();
+        let mut standings = Standings::default();
 
         let first_halves = [
-            score.record_pair_game(3, 1.0),
-            score.record_pair_game(0, 0.5),
+            standings.record_pair_game(3, 1.0),
+            standings.record_pair_game(0, 0.5),
         ];
         let second_halves = [
-            score.record_pair_game(2, 1.0),
-            score.record_pair_game(1, 0.0),
+            standings.record_pair_game(2, 1.0),
+            standings.record_pair_game(1, 0.0),
         ];
 
         assert_eq!(first_halves, [false, false]);
         assert_eq!(second_halves, [true, true]);
-        assert_eq!(score.penta.counts(), [0, 1, 0, 0, 1]);
+        assert_eq!(standings.penta.counts(), [0, 1, 0, 0, 1]);
     }
 
     #[test]
@@ -863,9 +879,9 @@ done
 
         run_worker(&tournament);
 
-        let score = tournament.score.into_inner().unwrap();
+        let standings = tournament.standings.into_inner().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(score.completed(), 1);
-        assert_eq!(score.terminations[&GameEndReason::EngineCrash], 1);
+        assert_eq!(standings.completed(), 1);
+        assert_eq!(standings.terminations[&GameEndReason::EngineCrash], 1);
     }
 }
