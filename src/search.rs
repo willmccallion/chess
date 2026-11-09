@@ -1007,6 +1007,57 @@ fn singular_extension(
     }
 }
 
+/// What the move loop does with a move before searching it.
+enum Pruning {
+    Search,
+    Skip,
+    /// Skip it and every quiet move after it.
+    SkipQuiets,
+}
+
+/// What the move-pruning rules weigh about a move and its node.
+#[derive(Clone, Copy)]
+struct PruningCandidate {
+    depth: i32,
+    eval: i32,
+    alpha: i32,
+    is_quiet: bool,
+    quiets_seen: i32,
+    lmp_limit: i32,
+    quiet_history: i32,
+}
+
+impl Search<'_> {
+    /// Applies late-move, history, futility and SEE pruning to `m`.
+    fn prune_move(&self, m: Move, c: PruningCandidate) -> Pruning {
+        let p = &self.params;
+        let shallow = c.depth <= p.move_pruning_max_depth;
+        if !c.is_quiet {
+            let losing = shallow && !see_ge(&self.board, m, -p.see_capture_margin * c.depth);
+            return if losing {
+                Pruning::Skip
+            } else {
+                Pruning::Search
+            };
+        }
+        if c.quiets_seen > c.lmp_limit {
+            return Pruning::SkipQuiets;
+        }
+        if c.depth <= p.history_pruning_max_depth
+            && c.quiet_history < -p.history_pruning_margin * c.depth
+        {
+            return Pruning::Skip;
+        }
+        if shallow && c.eval + p.futility_base + p.futility_per_depth * c.depth <= c.alpha {
+            return Pruning::SkipQuiets;
+        }
+        if shallow && !see_ge(&self.board, m, -p.see_quiet_margin * c.depth * c.depth) {
+            return Pruning::Skip;
+        }
+        Pruning::Search
+    }
+}
+
 /// What a late move's reduction weighs about the move and its node.
 #[derive(Clone, Copy)]
 struct LateMove {
@@ -1294,31 +1345,22 @@ fn negamax(s: &mut Search, mut alpha: i32, mut beta: i32, mut depth: i32, node: 
 
         let can_prune = !is_root && !in_check && moves_searched > 0 && best_score > -MATE_THRESHOLD;
         if can_prune && let Some(eval) = eval {
-            if is_quiet {
-                if quiets_seen > lmp_limit {
+            let candidate = PruningCandidate {
+                depth,
+                eval,
+                alpha,
+                is_quiet,
+                quiets_seen,
+                lmp_limit,
+                quiet_history,
+            };
+            match s.prune_move(m, candidate) {
+                Pruning::Search => {}
+                Pruning::Skip => continue,
+                Pruning::SkipQuiets => {
                     picker.skip_quiets();
                     continue;
                 }
-                if depth <= s.params.history_pruning_max_depth
-                    && quiet_history < -s.params.history_pruning_margin * depth
-                {
-                    continue;
-                }
-                if depth <= s.params.move_pruning_max_depth
-                    && eval + s.params.futility_base + s.params.futility_per_depth * depth <= alpha
-                {
-                    picker.skip_quiets();
-                    continue;
-                }
-                if depth <= s.params.move_pruning_max_depth
-                    && !see_ge(&s.board, m, -s.params.see_quiet_margin * depth * depth)
-                {
-                    continue;
-                }
-            } else if depth <= s.params.move_pruning_max_depth
-                && !see_ge(&s.board, m, -s.params.see_capture_margin * depth)
-            {
-                continue;
             }
         }
 
