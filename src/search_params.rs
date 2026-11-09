@@ -1,6 +1,6 @@
 //! Search parameters that can be changed at runtime, for SPSA tuning.
 
-use crate::search::Depth;
+use crate::search::{Depth, SearchScore};
 use crate::types::Centipawns;
 
 /// A tunable parameter: its UCI option name, default, range and SPSA perturbation size.
@@ -37,6 +37,16 @@ impl ParamValue for Depth {
 
     fn raw(self) -> i32 {
         self.plies()
+    }
+}
+
+impl ParamValue for SearchScore {
+    fn from_raw(raw: i32) -> Self {
+        Self::new(raw)
+    }
+
+    fn raw(self) -> i32 {
+        self.units()
     }
 }
 
@@ -91,31 +101,31 @@ macro_rules! search_params {
 }
 
 search_params! {
-    rfp_margin("RfpMargin"): i32 = 77, 20..=200, step 8;
+    rfp_margin("RfpMargin"): SearchScore = 77, 20..=200, step 8;
     rfp_max_depth("RfpMaxDepth"): Depth = 7, 4..=12, step 1;
-    razor_margin("RazorMargin"): i32 = 399, 100..=800, step 40;
-    razor_depth_sq_margin("RazorDepthSqMargin"): i32 = 247, 50..=500, step 25;
+    razor_margin("RazorMargin"): SearchScore = 399, 100..=800, step 40;
+    razor_depth_sq_margin("RazorDepthSqMargin"): SearchScore = 247, 50..=500, step 25;
     nmp_base_reduction("NmpBaseReduction"): Depth = 4, 2..=6, step 1;
     nmp_depth_divisor("NmpDepthDivisor"): i32 = 2, 2..=6, step 1;
-    nmp_eval_divisor("NmpEvalDivisor"): i32 = 204, 80..=400, step 20;
-    futility_base("FutilityBase"): i32 = 97, 30..=250, step 10;
-    futility_per_depth("FutilityPerDepth"): i32 = 99, 30..=250, step 10;
+    nmp_eval_divisor("NmpEvalDivisor"): SearchScore = 204, 80..=400, step 20;
+    futility_base("FutilityBase"): SearchScore = 97, 30..=250, step 10;
+    futility_per_depth("FutilityPerDepth"): SearchScore = 99, 30..=250, step 10;
     lmp_base("LmpBase"): i32 = 5, 1..=8, step 1;
     see_quiet_margin("SeeQuietMargin"): Centipawns = 51, 10..=150, step 5;
     see_capture_margin("SeeCaptureMargin"): Centipawns = 90, 20..=200, step 8;
     history_pruning_margin("HistoryPruningMargin"): i32 = 2071, 512..=6000, step 200;
-    delta_margin("DeltaMargin"): i32 = 208, 50..=500, step 20;
-    probcut_margin("ProbcutMargin"): i32 = 193, 80..=400, step 15;
-    aspiration_delta("AspirationDelta"): i32 = 22, 8..=60, step 3;
-    singular_beta_per_depth_x16("SingularBetaPerDepth"): i32 = 33, 8..=64, step 3;
-    double_extension_margin("DoubleExtensionMargin"): i32 = 20, 0..=60, step 3;
+    delta_margin("DeltaMargin"): SearchScore = 208, 50..=500, step 20;
+    probcut_margin("ProbcutMargin"): SearchScore = 193, 80..=400, step 15;
+    aspiration_delta("AspirationDelta"): SearchScore = 22, 8..=60, step 3;
+    singular_beta_per_depth_x16("SingularBetaPerDepth"): SearchScore = 33, 8..=64, step 3;
+    double_extension_margin("DoubleExtensionMargin"): SearchScore = 20, 0..=60, step 3;
     lmr_quiet_base_x100("LmrQuietBase"): i32 = 79, 0..=200, step 8;
     lmr_quiet_divisor_x100("LmrQuietDivisor"): i32 = 239, 150..=400, step 15;
     lmr_capture_base_x100("LmrCaptureBase"): i32 = 1, -100..=150, step 8;
     lmr_capture_divisor_x100("LmrCaptureDivisor"): i32 = 302, 150..=500, step 20;
     lmr_history_divisor("LmrHistoryDivisor"): i32 = 8233, 2048..=20000, step 600;
-    deeper_margin("DeeperMargin"): i32 = 69, 20..=150, step 6;
-    shallower_margin("ShallowerMargin"): i32 = 9, 0..=30, step 2;
+    deeper_margin("DeeperMargin"): SearchScore = 69, 20..=150, step 6;
+    shallower_margin("ShallowerMargin"): SearchScore = 9, 0..=30, step 2;
     nmp_min_depth("NmpMinDepth"): Depth = 2, 1..=6, step 1;
     nmp_eval_max("NmpEvalMax"): Depth = 3, 1..=6, step 1;
     iir_min_depth("IirMinDepth"): Depth = 3, 2..=8, step 1;
@@ -191,7 +201,7 @@ mod tests {
         assert!(!params.set("NoSuchParam", 1));
 
         assert_eq!(params.get("RfpMargin"), Some(200));
-        assert_eq!(params.rfp_margin, 200);
+        assert_eq!(params.rfp_margin, SearchScore::new(200));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Each slot stores `key ^ data` next to `data`; a torn write from a racing thread
 //! fails the key check on the next probe instead of returning a corrupt entry.
 
-use crate::search::Depth;
+use crate::search::{Depth, SearchScore, TtScore};
 use crate::types::{Move, ZKey};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -53,8 +53,8 @@ const HASHFULL_SAMPLE_CLUSTERS: usize = 1000;
 pub struct TTWrite {
     /// How deep the search went below this node; kept within 0 to 255 plies.
     pub depth: Depth,
-    pub score: i32,
-    pub eval: Option<i32>,
+    pub score: TtScore,
+    pub eval: Option<SearchScore>,
     pub bound: Bound,
     pub best_move: Option<Move>,
     pub is_pv: bool,
@@ -76,8 +76,8 @@ impl TTEntry {
             best_move,
             is_pv,
         } = write;
-        let packed_score = u64::from(score as i16 as u16);
-        let packed_eval = u64::from(eval.map_or(NO_EVAL, |e| e as i16) as u16);
+        let packed_score = u64::from(score.to_bits() as u16);
+        let packed_eval = u64::from(eval.map_or(NO_EVAL, |e| e.units() as i16) as u16);
         let packed_move = u64::from(best_move.map_or(0u16, u16::from));
         let packed_depth = u64::from(u8::try_from(depth.plies().max(0)).unwrap_or(u8::MAX));
         let data = (packed_score << SCORE_SHIFT)
@@ -91,14 +91,14 @@ impl TTEntry {
     }
 
     #[inline(always)]
-    pub fn score(&self) -> i32 {
-        i32::from(((self.data >> SCORE_SHIFT) & SCORE_MASK) as u16 as i16)
+    pub const fn score(&self) -> TtScore {
+        TtScore::from_bits(((self.data >> SCORE_SHIFT) & SCORE_MASK) as u16 as i16)
     }
 
     #[inline(always)]
-    pub fn eval(&self) -> Option<i32> {
+    pub fn eval(&self) -> Option<SearchScore> {
         let eval = ((self.data >> EVAL_SHIFT) & EVAL_MASK) as u16 as i16;
-        (eval != NO_EVAL).then_some(i32::from(eval))
+        (eval != NO_EVAL).then_some(SearchScore::new(i32::from(eval)))
     }
 
     #[inline(always)]
@@ -336,8 +336,8 @@ mod tests {
             0xDEAD_BEEF_1234_5678,
             TTWrite {
                 depth: Depth::new(17),
-                score: -1234,
-                eval: Some(56),
+                score: TtScore::from_bits(-1234),
+                eval: Some(SearchScore::new(56)),
                 bound: Bound::Lower,
                 best_move: Some(mv),
                 is_pv: true,
@@ -346,8 +346,8 @@ mod tests {
         let entry = tt.probe(0xDEAD_BEEF_1234_5678).unwrap();
 
         assert_eq!(entry.depth(), Depth::new(17));
-        assert_eq!(entry.score(), -1234);
-        assert_eq!(entry.eval(), Some(56));
+        assert_eq!(entry.score(), TtScore::from_bits(-1234));
+        assert_eq!(entry.eval(), Some(SearchScore::new(56)));
         assert_eq!(entry.bound(), Bound::Lower);
         assert_eq!(entry.best_move(), Some(mv));
         assert!(entry.is_pv());
@@ -362,7 +362,7 @@ mod tests {
             5,
             TTWrite {
                 depth: Depth::new(6),
-                score: 10,
+                score: TtScore::from_bits(10),
                 eval: None,
                 bound: Bound::Lower,
                 best_move: Some(mv),
@@ -373,7 +373,7 @@ mod tests {
             5,
             TTWrite {
                 depth: Depth::new(7),
-                score: -3,
+                score: TtScore::from_bits(-3),
                 eval: None,
                 bound: Bound::Upper,
                 best_move: None,
@@ -393,7 +393,7 @@ mod tests {
             42,
             TTWrite {
                 depth: Depth::new(-2),
-                score: 0,
+                score: TtScore::from_bits(0),
                 eval: None,
                 bound: Bound::Lower,
                 best_move: None,
@@ -411,7 +411,7 @@ mod tests {
             42,
             TTWrite {
                 depth: Depth::new(3),
-                score: 0,
+                score: TtScore::from_bits(0),
                 eval: None,
                 bound: Bound::Upper,
                 best_move: None,
@@ -430,7 +430,7 @@ mod tests {
             7,
             TTWrite {
                 depth: Depth::new(1),
-                score: 10,
+                score: TtScore::from_bits(10),
                 eval: None,
                 bound: Bound::Exact,
                 best_move: None,
@@ -449,7 +449,7 @@ mod tests {
             99,
             TTWrite {
                 depth: Depth::new(10),
-                score: 1,
+                score: TtScore::from_bits(1),
                 eval: None,
                 bound: Bound::Exact,
                 best_move: None,
@@ -461,7 +461,7 @@ mod tests {
             99,
             TTWrite {
                 depth: Depth::new(4),
-                score: 2,
+                score: TtScore::from_bits(2),
                 eval: None,
                 bound: Bound::Exact,
                 best_move: None,
@@ -481,7 +481,7 @@ mod tests {
                 key,
                 TTWrite {
                     depth: Depth::new(*depth),
-                    score: 0,
+                    score: TtScore::from_bits(0),
                     eval: None,
                     bound: Bound::Exact,
                     best_move: None,
@@ -493,7 +493,7 @@ mod tests {
             keys[4],
             TTWrite {
                 depth: Depth::new(5),
-                score: 0,
+                score: TtScore::from_bits(0),
                 eval: None,
                 bound: Bound::Exact,
                 best_move: None,

@@ -1,6 +1,6 @@
 //! Move-ordering statistics updated from search results.
 
-use crate::search::Depth;
+use crate::search::{Depth, SearchScore};
 use crate::search_params::SearchParams;
 use crate::types::{Color, Move, Piece, PieceKind, Square};
 
@@ -158,9 +158,9 @@ impl CorrectionHistory {
         color as usize * CORRECTION_ENTRIES + Self::slot(pawn_key)
     }
 
-    /// Search units to add to the static eval of a position with this pawn structure.
-    pub fn correction(&self, color: Color, pawn_key: u64) -> i32 {
-        self.entries[Self::index(color, pawn_key)] / CORRECTION_GRAIN
+    /// What to add to the static eval of a position with this pawn structure.
+    pub fn correction(&self, color: Color, pawn_key: u64) -> SearchScore {
+        SearchScore::new(self.entries[Self::index(color, pawn_key)] / CORRECTION_GRAIN)
     }
 
     /// Moves the stored correction toward `error` (search score minus corrected eval),
@@ -169,14 +169,14 @@ impl CorrectionHistory {
         &mut self,
         color: Color,
         pawn_key: u64,
-        error: i32,
+        error: SearchScore,
         depth: Depth,
         max_weight: i32,
     ) {
         let weight = (depth.plies() + 1).min(max_weight);
         let limit = CORRECTION_LIMIT * CORRECTION_GRAIN;
         let entry = &mut self.entries[Self::index(color, pawn_key)];
-        let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
+        let target = (error.units() * CORRECTION_GRAIN).clamp(-limit, limit);
         let blended = (*entry * (CORRECTION_WEIGHT_SCALE - weight) + target * weight)
             / CORRECTION_WEIGHT_SCALE;
         *entry = blended.clamp(-limit, limit);
@@ -197,16 +197,22 @@ mod tests {
     fn correction_moves_toward_observed_error_and_stays_bounded() {
         let mut correction = CorrectionHistory::new();
         for _ in 0..200 {
-            correction.update(Color::White, 99, 80, Depth::new(10), 16);
+            correction.update(Color::White, 99, SearchScore::new(80), Depth::new(10), 16);
         }
-        let learned = correction.correction(Color::White, 99);
+        let learned = correction.correction(Color::White, 99).units();
         assert!((70..=80).contains(&learned), "{learned}");
-        assert_eq!(correction.correction(Color::Black, 99), 0);
+        assert_eq!(correction.correction(Color::Black, 99).units(), 0);
 
         for _ in 0..200 {
-            correction.update(Color::White, 99, 10_000, Depth::new(20), 16);
+            correction.update(
+                Color::White,
+                99,
+                SearchScore::new(10_000),
+                Depth::new(20),
+                16,
+            );
         }
-        let saturated = correction.correction(Color::White, 99);
+        let saturated = correction.correction(Color::White, 99).units();
         assert!(
             (CORRECTION_LIMIT - 2..=CORRECTION_LIMIT).contains(&saturated),
             "{saturated}"

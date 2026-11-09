@@ -16,14 +16,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 mod depth;
+mod score;
 pub use depth::Depth;
+pub use score::{SearchScore, TtScore};
 
-pub const MATE_SCORE: i32 = 30_000;
-const MATE_THRESHOLD: i32 = MATE_SCORE - 512;
-/// Past every score a search can return, mates included: the widest window.
-const SCORE_BOUND: i32 = MATE_SCORE + 1;
 const MAX_PLY: usize = 128;
-const DRAW_SCORE: i32 = 0;
 
 const ASPIRATION_MIN_DEPTH: Depth = Depth::new(4);
 const MAX_DOUBLE_EXTENSIONS: u8 = 6;
@@ -31,23 +28,13 @@ const MAX_DOUBLE_EXTENSIONS: u8 = 6;
 const DOUBLE_EXTENSION: Depth = Depth::new(2);
 /// How much shallower than the node a TT entry may be and still rule out `ProbCut`.
 const PROBCUT_TT_DEPTH_MARGIN: Depth = Depth::new(3);
+/// How far a reduced search must beat the best score, per ply of depth, beyond
+/// `deeper_margin`, to be searched again a ply deeper.
+const DEEPER_MARGIN_PER_PLY: SearchScore = SearchScore::new(2);
 
 const MAX_TRIED_MOVES: usize = 64;
 
 const LMR_TABLE_SIZE: usize = 64;
-
-/// The search measures scores in units of 3/4 centipawn: its margins were set for an
-/// evaluation about 4/3 the size of Stockfish 18's centipawns.
-const SEARCH_UNITS_PER_CP_NUM: i32 = 4;
-const SEARCH_UNITS_PER_CP_DEN: i32 = 3;
-
-const fn cp_to_search_units(cp: Centipawns) -> i32 {
-    cp.get() * SEARCH_UNITS_PER_CP_NUM / SEARCH_UNITS_PER_CP_DEN
-}
-
-const fn search_units_to_cp(score: i32) -> Centipawns {
-    Centipawns::new(score * SEARCH_UNITS_PER_CP_DEN / SEARCH_UNITS_PER_CP_NUM)
-}
 
 const SEARCH_THREAD_STACK: usize = 32 * 1024 * 1024;
 const NO_DEADLINE: u64 = u64::MAX;
@@ -56,7 +43,7 @@ const NEW_ITERATION_FRACTION: f64 = 0.6;
 const NODE_SHARE_PIVOT: f64 = 1.6;
 const NODE_SHARE_MIN_SCALE: f64 = 0.6;
 const NODE_SHARE_MAX_SCALE: f64 = 1.6;
-const SCORE_DROP_CAP: i32 = 100;
+const SCORE_DROP_CAP: SearchScore = SearchScore::new(100);
 const SCORE_DROP_DIVISOR: f64 = 200.0;
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
@@ -182,7 +169,7 @@ struct ThreadOutcome {
     best_move: Option<Move>,
     nodes: u64,
     /// Search score of the last completed iteration.
-    score: Option<i32>,
+    score: Option<SearchScore>,
 }
 
 /// Move-ordering statistics one search thread keeps between `go` commands.
@@ -374,7 +361,7 @@ struct IterationSummary {
     /// Fraction of all root nodes so far that went into the best move's subtree.
     best_move_node_share: f64,
     /// How far the score fell since the previous iteration (0 if it rose).
-    score_drop: i32,
+    score_drop: SearchScore,
 }
 
 /// Spend less time when one move absorbs most of the search, more when it is contested.
@@ -383,14 +370,15 @@ fn node_share_scale(best_move_node_share: f64) -> f64 {
 }
 
 /// Spend more time when the evaluation is falling.
-fn score_drop_scale(score_drop: i32) -> f64 {
-    1.0 + f64::from(score_drop.clamp(0, SCORE_DROP_CAP)) / SCORE_DROP_DIVISOR
+fn score_drop_scale(score_drop: SearchScore) -> f64 {
+    1.0 + f64::from(score_drop.clamp(SearchScore::ZERO, SCORE_DROP_CAP).units())
+        / SCORE_DROP_DIVISOR
 }
 
 /// What the search knows about one ply of the current line.
 #[derive(Copy, Clone)]
 struct StackEntry {
-    static_eval: Option<i32>,
+    static_eval: Option<SearchScore>,
     /// Move played from this ply (`None` for a null move or before one is made).
     current_move: Option<Move>,
     /// Piece that made `current_move`.
@@ -431,7 +419,7 @@ struct Search<'a> {
     seldepth: usize,
     /// Best root move found so far: the first one searched, then each that
     /// raised alpha in a finished subtree.
-    root_best: Option<(Move, i32)>,
+    root_best: Option<(Move, SearchScore)>,
     /// Nodes searched under each root move during this `go`.
     root_move_nodes: Vec<(Move, u64)>,
     /// The root moves `go searchmoves` allows, or `None` for all of them.
@@ -463,31 +451,13 @@ const fn counter_move_slot(board: &Board, prev: Move) -> (usize, usize, usize) {
     )
 }
 
-/// Mate scores are stored relative to the node, not the root.
 #[inline(always)]
-const fn score_to_tt(score: i32, ply: usize) -> i32 {
-    if score > MATE_THRESHOLD {
-        score + ply as i32
-    } else if score < -MATE_THRESHOLD {
-        score - ply as i32
-    } else {
-        score
-    }
-}
-
-#[inline(always)]
-const fn score_from_tt(score: i32, ply: usize) -> i32 {
-    if score > MATE_THRESHOLD {
-        score - ply as i32
-    } else if score < -MATE_THRESHOLD {
-        score + ply as i32
-    } else {
-        score
-    }
-}
-
-#[inline(always)]
-const fn tt_cutoff_allowed(bound: Bound, score: i32, alpha: i32, beta: i32) -> bool {
+fn tt_cutoff_allowed(
+    bound: Bound,
+    score: SearchScore,
+    alpha: SearchScore,
+    beta: SearchScore,
+) -> bool {
     match bound {
         Bound::Exact => true,
         Bound::Lower => score >= beta,
@@ -499,7 +469,7 @@ const fn tt_cutoff_allowed(bound: Bound, score: i32, alpha: i32, beta: i32) -> b
 /// side the bound looks: anywhere when exact, above for a lower bound,
 /// below for an upper one.
 #[inline(always)]
-const fn bound_beyond(bound: Bound, score: i32, eval: i32) -> bool {
+fn bound_beyond(bound: Bound, score: SearchScore, eval: SearchScore) -> bool {
     match bound {
         Bound::Exact => true,
         Bound::Lower => score > eval,
@@ -510,17 +480,17 @@ const fn bound_beyond(bound: Bound, score: i32, eval: i32) -> bool {
 /// `eval`, or the TT entry's score where its bound places the position's
 /// value past `eval`.
 #[inline(always)]
-fn refined_eval(entry: Option<TTEntry>, eval: i32, ply: usize) -> i32 {
+fn refined_eval(entry: Option<TTEntry>, eval: SearchScore, ply: usize) -> SearchScore {
     match entry {
-        Some(entry) if bound_beyond(entry.bound(), score_from_tt(entry.score(), ply), eval) => {
-            score_from_tt(entry.score(), ply)
+        Some(entry) if bound_beyond(entry.bound(), entry.score().at_ply(ply), eval) => {
+            entry.score().at_ply(ply)
         }
         _ => eval,
     }
 }
 
 #[inline(always)]
-const fn bound_for(best_score: i32, alpha_orig: i32, beta: i32) -> Bound {
+fn bound_for(best_score: SearchScore, alpha_orig: SearchScore, beta: SearchScore) -> Bound {
     if best_score <= alpha_orig {
         Bound::Upper
     } else if best_score >= beta {
@@ -541,7 +511,7 @@ const fn has_non_pawn_material(board: &Board) -> bool {
 
 impl Search<'_> {
     /// Static eval is better than two plies ago (four if that node was in check).
-    fn is_improving(&self, static_eval: Option<i32>) -> bool {
+    fn is_improving(&self, static_eval: Option<SearchScore>) -> bool {
         let Some(eval) = static_eval else {
             return false;
         };
@@ -617,17 +587,20 @@ impl Search<'_> {
     }
 
     /// Static eval for the current node, reusing the TT's copy when it has one.
-    fn static_eval(&mut self, tt_eval: Option<i32>) -> i32 {
-        tt_eval.unwrap_or_else(|| cp_to_search_units(evaluate(&mut self.board)))
+    fn static_eval(&mut self, tt_eval: Option<SearchScore>) -> SearchScore {
+        tt_eval.unwrap_or_else(|| SearchScore::from_centipawns(evaluate(&mut self.board)))
     }
 
     /// Static eval adjusted by what searches have learned about this pawn structure.
-    fn corrected_eval(&self, raw_eval: i32) -> i32 {
+    fn corrected_eval(&self, raw_eval: SearchScore) -> SearchScore {
         let correction = self
             .thread_data
             .correction
             .correction(self.board.turn(), self.board.pawn_key());
-        (raw_eval + correction).clamp(-MATE_THRESHOLD + 1, MATE_THRESHOLD - 1)
+        (raw_eval + correction).clamp(
+            -SearchScore::MATE_THRESHOLD + SearchScore::UNIT,
+            SearchScore::MATE_THRESHOLD - SearchScore::UNIT,
+        )
     }
 
     /// Makes `m` (pseudo-legal in the current position) unless it leaves the king in check.
@@ -675,15 +648,19 @@ impl Search<'_> {
     /// The score that ends a node below the root before it is searched (a
     /// draw, or the evaluation at the ply limit), or else its window narrowed
     /// to the mate scores still reachable, which ends it when empty.
-    fn window_below_root(&mut self, alpha: i32, beta: i32) -> ControlFlow<i32, (i32, i32)> {
+    fn window_below_root(
+        &mut self,
+        alpha: SearchScore,
+        beta: SearchScore,
+    ) -> ControlFlow<SearchScore, (SearchScore, SearchScore)> {
         if self.board.is_repetition(self.ply) || is_fifty_move_draw(&self.board) {
-            return ControlFlow::Break(DRAW_SCORE);
+            return ControlFlow::Break(SearchScore::DRAW);
         }
         if self.ply >= MAX_PLY - 1 {
-            return ControlFlow::Break(cp_to_search_units(evaluate(&mut self.board)));
+            return ControlFlow::Break(SearchScore::from_centipawns(evaluate(&mut self.board)));
         }
-        let alpha = alpha.max(-MATE_SCORE + self.ply as i32);
-        let beta = beta.min(MATE_SCORE - self.ply as i32 - 1);
+        let alpha = alpha.max(SearchScore::mated_at(self.ply));
+        let beta = beta.min(SearchScore::mate_at(self.ply + 1));
         if alpha >= beta {
             return ControlFlow::Break(alpha);
         }
@@ -694,7 +671,7 @@ impl Search<'_> {
     /// one whose victim, with a margin, cannot lift `stand_pat` to `alpha`.
     /// The victim's SEE value, near centipawns, is added to a score in search
     /// units as it is; `delta_margin` was tuned that way.
-    fn is_futile_capture(&self, m: Move, stand_pat: i32, alpha: i32) -> bool {
+    fn is_futile_capture(&self, m: Move, stand_pat: SearchScore, alpha: SearchScore) -> bool {
         if !m.is_capture() {
             return false;
         }
@@ -702,15 +679,24 @@ impl Search<'_> {
             && self.board.piece_on()[m.to.index()]
                 .kind()
                 .is_some_and(|kind| {
-                    stand_pat + PIECE_VALUES[kind as usize].get() + self.params.delta_margin < alpha
+                    stand_pat
+                        + SearchScore::unscaled(PIECE_VALUES[kind as usize])
+                        + self.params.delta_margin
+                        < alpha
                 });
         victim_falls_short || !see_ge(&self.board, m, Centipawns::ZERO)
     }
 
     /// The TT's score for this node when `entry` is deep enough and its bound
     /// settles the window, crediting the TT move when that score fails high.
-    fn tt_cutoff(&mut self, entry: TTEntry, depth: Depth, alpha: i32, beta: i32) -> Option<i32> {
-        let tt_score = score_from_tt(entry.score(), self.ply);
+    fn tt_cutoff(
+        &mut self,
+        entry: TTEntry,
+        depth: Depth,
+        alpha: SearchScore,
+        beta: SearchScore,
+    ) -> Option<SearchScore> {
+        let tt_score = entry.score().at_ply(self.ply);
         if entry.depth() < depth || !tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
             return None;
         }
@@ -724,11 +710,11 @@ impl Search<'_> {
 
     /// Moves the correction history toward the gap between `static_eval` and
     /// a quiet, non-mate search result that lies past it.
-    fn update_correction(&mut self, static_eval: i32, outcome: NodeOutcome) {
+    fn update_correction(&mut self, static_eval: SearchScore, outcome: NodeOutcome) {
         if outcome
             .best_move
             .is_some_and(super::types::Move::is_capture)
-            || outcome.best_score.abs() >= MATE_THRESHOLD
+            || outcome.best_score.abs() >= SearchScore::MATE_THRESHOLD
             || !bound_beyond(outcome.bound, outcome.best_score, static_eval)
         {
             return;
@@ -835,7 +821,11 @@ impl Search<'_> {
     }
 }
 
-fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborted> {
+fn quiesce(
+    search: &mut Search,
+    mut alpha: SearchScore,
+    beta: SearchScore,
+) -> Result<SearchScore, Aborted> {
     use crate::movepicker::QMovePicker;
 
     search.seldepth = search.seldepth.max(search.ply);
@@ -845,16 +835,16 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
         return Err(Aborted);
     }
     if search.ply >= MAX_PLY - 1 {
-        return Ok(cp_to_search_units(evaluate(&mut search.board)));
+        return Ok(SearchScore::from_centipawns(evaluate(&mut search.board)));
     }
 
-    let is_pv = beta - alpha > 1;
+    let is_pv = beta - alpha > SearchScore::UNIT;
     let alpha_orig = alpha;
     let key = search.board.zobrist();
     let tt_entry = search.tt.probe(key);
     let tt_pv = tt_entry.is_some_and(|e| e.is_pv());
     if let Some(entry) = tt_entry {
-        let tt_score = score_from_tt(entry.score(), search.ply);
+        let tt_score = entry.score().at_ply(search.ply);
         if !is_pv && tt_cutoff_allowed(entry.bound(), tt_score, alpha, beta) {
             return Ok(tt_score);
         }
@@ -873,7 +863,7 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
                 key,
                 TTWrite {
                     depth: Depth::ZERO,
-                    score: score_to_tt(stand_pat, search.ply),
+                    score: stand_pat.to_tt(search.ply),
                     eval: Some(node_eval.raw),
                     bound: Bound::Lower,
                     best_move: None,
@@ -920,7 +910,7 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
         key,
         TTWrite {
             depth: Depth::ZERO,
-            score: score_to_tt(best_score, search.ply),
+            score: best_score.to_tt(search.ply),
             eval: Some(node_eval.raw),
             bound,
             best_move,
@@ -933,10 +923,10 @@ fn quiesce(search: &mut Search, mut alpha: i32, beta: i32) -> Result<i32, Aborte
 /// Quiescence when in check: every evasion is searched so mates are found.
 fn quiesce_evasions(
     search: &mut Search,
-    mut alpha: i32,
-    beta: i32,
+    mut alpha: SearchScore,
+    beta: SearchScore,
     legality: &LegalityInfo,
-) -> Result<i32, Aborted> {
+) -> Result<SearchScore, Aborted> {
     let mut evasions = ScoredMoves::new();
     evasions.fill(
         |moves| search.board.generate_pseudo_legal_moves(moves),
@@ -949,7 +939,7 @@ fn quiesce_evasions(
         },
     );
 
-    let mut best_score = -MATE_SCORE + search.ply as i32;
+    let mut best_score = SearchScore::mated_at(search.ply);
     while let Some(m) = evasions.pick_best() {
         let Some(undo) = search.make_move(m, legality) else {
             continue;
@@ -980,9 +970,9 @@ fn quiesce_evasions(
 #[derive(Clone, Copy)]
 struct NodePruning {
     depth: Depth,
-    eval: i32,
-    alpha: i32,
-    beta: i32,
+    eval: SearchScore,
+    alpha: SearchScore,
+    beta: SearchScore,
     improving: bool,
     node: NodeKind,
     /// The node is searched without its TT move to test that move's singularity.
@@ -991,7 +981,7 @@ struct NodePruning {
 
 /// The score a node returns without searching its moves, when its static
 /// evaluation is far enough outside the window.
-fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
+fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<SearchScore>, Aborted> {
     let razor_margin =
         search.params.razor_margin + search.params.razor_depth_sq_margin * n.depth.plies().pow(2);
     if n.eval < n.alpha - razor_margin {
@@ -1010,7 +1000,7 @@ fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborte
 
 /// Passes the move and searches the reply shallower; a side that still fails
 /// high after giving its opponent a free move fails high here too.
-fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, Aborted> {
+fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<SearchScore>, Aborted> {
     let previous_was_null = search.ply > 0 && search.stack[search.ply - 1].current_move.is_none();
     if n.depth < search.params.nmp_min_depth
         || n.is_singular_search
@@ -1025,7 +1015,13 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, 
         + Depth::new((n.eval - n.beta) / search.params.nmp_eval_divisor)
             .min(search.params.nmp_eval_max);
     let undo = search.make_null_move();
-    let null_score = negamax(search, -n.beta, -n.beta + 1, n.depth - r, n.node.opposite());
+    let null_score = negamax(
+        search,
+        -n.beta,
+        -n.beta + SearchScore::UNIT,
+        n.depth - r,
+        n.node.opposite(),
+    );
     search.unmake_null_move(undo);
     let null_score = -null_score?;
     if search.time.check_hard_limit() {
@@ -1035,7 +1031,7 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, 
         return Ok(None);
     }
     // A mate found after passing proves nothing about the real moves.
-    Ok(Some(if null_score > MATE_THRESHOLD {
+    Ok(Some(if null_score > SearchScore::MATE_THRESHOLD {
         n.beta
     } else {
         null_score
@@ -1046,8 +1042,8 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<i32>, 
 #[derive(Clone, Copy)]
 struct ProbCutNode {
     depth: Depth,
-    beta: i32,
-    static_eval: i32,
+    beta: SearchScore,
+    static_eval: SearchScore,
     node: NodeKind,
     tt_entry: Option<TTEntry>,
 }
@@ -1059,16 +1055,16 @@ fn probcut(
     search: &mut Search,
     legality: &LegalityInfo,
     n: ProbCutNode,
-) -> Result<Option<i32>, Aborted> {
+) -> Result<Option<SearchScore>, Aborted> {
     use crate::movepicker::QMovePicker;
 
-    if n.depth < search.params.probcut_min_depth || n.beta.abs() >= MATE_THRESHOLD {
+    if n.depth < search.params.probcut_min_depth || n.beta.abs() >= SearchScore::MATE_THRESHOLD {
         return Ok(None);
     }
     let probcut_beta = n.beta + search.params.probcut_margin;
     let tt_rules_out_probcut = n.tt_entry.is_some_and(|entry| {
         entry.depth() >= n.depth - PROBCUT_TT_DEPTH_MARGIN
-            && score_from_tt(entry.score(), search.ply) < probcut_beta
+            && entry.score().at_ply(search.ply) < probcut_beta
     });
     if tt_rules_out_probcut {
         return Ok(None);
@@ -1079,7 +1075,7 @@ fn probcut(
         if !see_ge(
             &search.board,
             m,
-            Centipawns::new(probcut_beta - n.static_eval),
+            (probcut_beta - n.static_eval).as_unscaled_centipawns(),
         ) {
             continue;
         }
@@ -1098,7 +1094,7 @@ fn probcut(
                 search.board.zobrist(),
                 TTWrite {
                     depth: probe_depth + Depth::ONE,
-                    score: score_to_tt(score, search.ply),
+                    score: score.to_tt(search.ply),
                     eval: None,
                     bound: Bound::Lower,
                     best_move: Some(m),
@@ -1115,18 +1111,18 @@ fn probcut(
 /// that beats `probcut_beta`, a reduced search's.
 fn probe_capture(
     search: &mut Search,
-    probcut_beta: i32,
+    probcut_beta: SearchScore,
     probe_depth: Depth,
     node: NodeKind,
-) -> Result<i32, Aborted> {
-    let q_score = -quiesce(search, -probcut_beta, -probcut_beta + 1)?;
+) -> Result<SearchScore, Aborted> {
+    let q_score = -quiesce(search, -probcut_beta, -probcut_beta + SearchScore::UNIT)?;
     if q_score < probcut_beta {
         return Ok(q_score);
     }
     Ok(-negamax(
         search,
         -probcut_beta,
-        -probcut_beta + 1,
+        -probcut_beta + SearchScore::UNIT,
         probe_depth,
         node.opposite(),
     )?)
@@ -1136,7 +1132,7 @@ enum Singularity {
     /// Search the move this much deeper (negative: shallower).
     Extend(Depth),
     /// Even without the TT move the node fails high; return this score.
-    MultiCut(i32),
+    MultiCut(SearchScore),
 }
 
 /// Verifies whether the TT move is singular by searching the node without it.
@@ -1145,18 +1141,18 @@ fn singular_extension(
     tt_move: Move,
     tt_entry: Option<crate::tt::TTEntry>,
     depth: Depth,
-    beta: i32,
+    beta: SearchScore,
     is_pv: bool,
     node: NodeKind,
 ) -> Result<Singularity, Aborted> {
     let Some(entry) = tt_entry else {
         return Ok(Singularity::Extend(Depth::ZERO));
     };
-    let tt_score = score_from_tt(entry.score(), search.ply);
+    let tt_score = entry.score().at_ply(search.ply);
     let reliable = depth >= search.params.singular_min_depth
         && entry.depth() >= depth - search.params.singular_tt_depth_margin
         && entry.bound() != Bound::Upper
-        && tt_score.abs() < MATE_THRESHOLD;
+        && tt_score.abs() < SearchScore::MATE_THRESHOLD;
     if !reliable {
         return Ok(Singularity::Extend(Depth::ZERO));
     }
@@ -1166,7 +1162,7 @@ fn singular_extension(
     search.stack[search.ply].excluded_move = Some(tt_move);
     let singular_score = negamax(
         search,
-        singular_beta - 1,
+        singular_beta - SearchScore::UNIT,
         singular_beta,
         singular_depth,
         node,
@@ -1203,8 +1199,8 @@ enum Pruning {
 #[derive(Clone, Copy)]
 struct PruningCandidate {
     depth: Depth,
-    eval: i32,
-    alpha: i32,
+    eval: SearchScore,
+    alpha: SearchScore,
     is_quiet: bool,
     quiets_seen: i32,
     lmp_limit: i32,
@@ -1256,11 +1252,11 @@ impl Search<'_> {
 #[derive(Clone, Copy)]
 struct NodeEval {
     /// The evaluation itself, which the TT keeps.
-    raw: i32,
+    raw: SearchScore,
     /// `raw` adjusted by what searches learned about the pawn structure.
-    corrected: i32,
+    corrected: SearchScore,
     /// `corrected`, or the TT score where its bound places the value past it.
-    refined: i32,
+    refined: SearchScore,
 }
 
 /// The first quiet moves and captures a node searched without a cutoff, whose
@@ -1289,7 +1285,7 @@ impl TriedMoves {
 #[derive(Clone, Copy)]
 struct NodeOutcome {
     depth: Depth,
-    best_score: i32,
+    best_score: SearchScore,
     best_move: Option<Move>,
     bound: Bound,
 }
@@ -1297,9 +1293,9 @@ struct NodeOutcome {
 /// A node's window and the best score its moves have reached so far.
 #[derive(Clone, Copy)]
 struct NodeBounds {
-    alpha: i32,
-    beta: i32,
-    best_score: i32,
+    alpha: SearchScore,
+    beta: SearchScore,
+    best_score: SearchScore,
 }
 
 /// Searches a move after the first, already made on the board: with a null
@@ -1310,7 +1306,7 @@ fn search_late_move(
     node_ply: usize,
     m: LateMove,
     bounds: NodeBounds,
-) -> Result<i32, Aborted> {
+) -> Result<SearchScore, Aborted> {
     let NodeBounds {
         alpha,
         beta,
@@ -1318,15 +1314,24 @@ fn search_late_move(
     } = bounds;
     let reduction = search.late_move_reduction(node_ply, m);
     let reduced_depth = m.new_depth - reduction;
-    let mut score = -negamax(search, -alpha - 1, -alpha, reduced_depth, NodeKind::Cut)?;
+    let mut score = -negamax(
+        search,
+        -alpha - SearchScore::UNIT,
+        -alpha,
+        reduced_depth,
+        NodeKind::Cut,
+    )?;
     if score > alpha && reduction > Depth::ZERO {
-        let deeper = score > best_score + search.params.deeper_margin + 2 * m.new_depth.plies();
+        let deeper = score
+            > best_score
+                + search.params.deeper_margin
+                + DEEPER_MARGIN_PER_PLY * m.new_depth.plies();
         let shallower = score < best_score + search.params.shallower_margin;
         let research_depth = m.new_depth + Depth::new(i32::from(deeper) - i32::from(shallower));
         if research_depth > reduced_depth {
             score = -negamax(
                 search,
-                -alpha - 1,
+                -alpha - SearchScore::UNIT,
                 -alpha,
                 research_depth,
                 m.node.opposite(),
@@ -1447,11 +1452,11 @@ impl NodeKind {
 
 fn negamax(
     search: &mut Search,
-    alpha: i32,
-    beta: i32,
+    alpha: SearchScore,
+    beta: SearchScore,
     depth: Depth,
     kind: NodeKind,
-) -> Result<i32, Aborted> {
+) -> Result<SearchScore, Aborted> {
     let node = match enter_node(search, alpha, beta, depth, kind)? {
         ControlFlow::Break(score) => return Ok(score),
         ControlFlow::Continue(node) => node,
@@ -1471,8 +1476,8 @@ struct Node {
     kind: NodeKind,
     depth: Depth,
     /// The window's lower bound before any move raised it.
-    alpha: i32,
-    beta: i32,
+    alpha: SearchScore,
+    beta: SearchScore,
     is_root: bool,
     is_pv: bool,
     in_check: bool,
@@ -1494,11 +1499,11 @@ struct Node {
 /// or hands on what the move loop needs.
 fn enter_node(
     search: &mut Search,
-    mut alpha: i32,
-    mut beta: i32,
+    mut alpha: SearchScore,
+    mut beta: SearchScore,
     mut depth: Depth,
     kind: NodeKind,
-) -> Result<ControlFlow<i32, Node>, Aborted> {
+) -> Result<ControlFlow<SearchScore, Node>, Aborted> {
     search.seldepth = search.seldepth.max(search.ply);
     if search.time.check_hard_limit() {
         return Err(Aborted);
@@ -1512,7 +1517,7 @@ fn enter_node(
         }
     }
 
-    let is_pv = beta - alpha > 1;
+    let is_pv = beta - alpha > SearchScore::UNIT;
     let key = search.board.zobrist();
     let excluded_move = search.stack[search.ply].excluded_move;
     if excluded_move.is_none() {
@@ -1610,8 +1615,8 @@ fn enter_node(
 
 /// The move loop's running state.
 struct MoveLoop {
-    alpha: i32,
-    best_score: i32,
+    alpha: SearchScore,
+    best_score: SearchScore,
     best_move: Option<Move>,
     moves_searched: i32,
     quiets_seen: i32,
@@ -1621,7 +1626,13 @@ struct MoveLoop {
 impl MoveLoop {
     /// Takes a searched move's `score`; true when it fails high, after the
     /// cutoff has been credited.
-    fn take_score(&mut self, search: &mut Search, node: &Node, m: Move, score: i32) -> bool {
+    fn take_score(
+        &mut self,
+        search: &mut Search,
+        node: &Node,
+        m: Move,
+        score: SearchScore,
+    ) -> bool {
         if score <= self.best_score {
             return false;
         }
@@ -1656,15 +1667,18 @@ struct Candidate {
 enum MoveSearch {
     /// It leaves the king in check.
     Illegal,
-    Scored(i32),
+    Scored(SearchScore),
     /// The singularity search showed the node fails high without the move.
-    MultiCut(i32),
+    MultiCut(SearchScore),
 }
 
 /// Searches the node's moves in the picker's order, pruning those the node
 /// allows, until one fails high or none is left. Ends the node at once on
 /// a multi-cut.
-fn search_moves(search: &mut Search, node: &Node) -> Result<ControlFlow<i32, MoveLoop>, Aborted> {
+fn search_moves(
+    search: &mut Search,
+    node: &Node,
+) -> Result<ControlFlow<SearchScore, MoveLoop>, Aborted> {
     let killers = search.killers[search.ply];
     let counter_move = search.counter_move();
     let mut picker = MovePicker::new(node.tt_move, killers[0], killers[1], counter_move);
@@ -1673,7 +1687,7 @@ fn search_moves(search: &mut Search, node: &Node) -> Result<ControlFlow<i32, Mov
         (search.params.lmp_base + node.depth.plies().pow(2)) / (2 - i32::from(node.improving));
     let mut state = MoveLoop {
         alpha: node.alpha,
-        best_score: -SCORE_BOUND,
+        best_score: -SearchScore::BOUND,
         best_move: None,
         moves_searched: 0,
         quiets_seen: 0,
@@ -1710,7 +1724,7 @@ fn search_moves(search: &mut Search, node: &Node) -> Result<ControlFlow<i32, Mov
         let can_prune = !node.is_root
             && !node.in_check
             && state.moves_searched > 0
-            && state.best_score > -MATE_THRESHOLD;
+            && state.best_score > -SearchScore::MATE_THRESHOLD;
         if can_prune && let Some(e) = node.eval {
             let candidate = PruningCandidate {
                 depth: node.depth,
@@ -1837,14 +1851,14 @@ fn search_move(
 /// The node's score once its moves are searched, which it records: mate or
 /// stalemate when it had no legal move, else the best score, credited to the
 /// histories and stored in the TT.
-fn finish_node(search: &mut Search, node: &Node, searched: &MoveLoop) -> i32 {
+fn finish_node(search: &mut Search, node: &Node, searched: &MoveLoop) -> SearchScore {
     if searched.moves_searched == 0 {
         return if node.excluded_move.is_some() {
             searched.alpha
         } else if node.in_check {
-            -MATE_SCORE + search.ply as i32
+            SearchScore::mated_at(search.ply)
         } else {
-            DRAW_SCORE
+            SearchScore::DRAW
         };
     }
     if node.excluded_move.is_some() {
@@ -1868,7 +1882,7 @@ fn finish_node(search: &mut Search, node: &Node, searched: &MoveLoop) -> i32 {
         node.key,
         TTWrite {
             depth: node.depth,
-            score: score_to_tt(searched.best_score, search.ply),
+            score: searched.best_score.to_tt(search.ply),
             eval: node.eval.map(|e| e.raw),
             bound,
             best_move: searched.best_move,
@@ -1902,12 +1916,16 @@ pub enum Score {
 }
 
 impl Score {
-    const fn from_search(score: i32) -> Self {
-        if score.abs() > MATE_THRESHOLD {
-            let mate_in = (MATE_SCORE - score.abs() + 1) / 2;
-            Self::MateIn(if score > 0 { mate_in } else { -mate_in })
+    fn from_search(score: SearchScore) -> Self {
+        if score.abs() > SearchScore::MATE_THRESHOLD {
+            let mate_in = (SearchScore::MATE.units() - score.abs().units() + 1) / 2;
+            Self::MateIn(if score > SearchScore::DRAW {
+                mate_in
+            } else {
+                -mate_in
+            })
         } else {
-            Self::Centipawns(search_units_to_cp(score))
+            Self::Centipawns(score.to_centipawns())
         }
     }
 }
@@ -1955,7 +1973,12 @@ pub fn print_uci_info(info: &IterationInfo) {
     );
 }
 
-fn iteration_info(search: &Search, depth: Depth, best_move: Move, score: i32) -> IterationInfo {
+fn iteration_info(
+    search: &Search,
+    depth: Depth,
+    best_move: Move,
+    score: SearchScore,
+) -> IterationInfo {
     let elapsed_ms = search.time.control.elapsed_ms();
     let nodes = search.time.nodes_of_all_threads();
     let nps = (nodes * 1000).checked_div(elapsed_ms).unwrap_or(0);
@@ -2021,7 +2044,7 @@ fn iterative_deepening(
         lmr: LmrTables::new(&params),
     };
 
-    let mut score = 0;
+    let mut score = SearchScore::ZERO;
     let mut completed_score = None;
     for depth in (1..=limits.max_depth.plies()).map(Depth::new) {
         search.seldepth = 0;
@@ -2042,13 +2065,13 @@ fn iterative_deepening(
             score_drop: if depth > Depth::ONE {
                 previous_score - score
             } else {
-                0
+                SearchScore::ZERO
             },
         };
         if search.time.should_stop_iterating(depth, &summary) {
             break;
         }
-        if score.abs() > MATE_THRESHOLD {
+        if score.abs() > SearchScore::MATE_THRESHOLD {
             break;
         }
     }
@@ -2063,15 +2086,19 @@ fn iterative_deepening(
 /// Searches the root to `depth` in a window around `previous`, the score of
 /// the last depth, widening it after each fail until the score lands inside.
 /// A fail high also searches a ply shallower. `None` if the search aborts.
-fn aspiration_search(search: &mut Search, depth: Depth, previous: i32) -> Option<i32> {
+fn aspiration_search(
+    search: &mut Search,
+    depth: Depth,
+    previous: SearchScore,
+) -> Option<SearchScore> {
     let mut delta = search.params.aspiration_delta;
     let (mut alpha, mut beta) = if depth >= ASPIRATION_MIN_DEPTH {
         (
-            (previous - delta).max(-SCORE_BOUND),
-            (previous + delta).min(SCORE_BOUND),
+            (previous - delta).max(-SearchScore::BOUND),
+            (previous + delta).min(SearchScore::BOUND),
         )
     } else {
-        (-SCORE_BOUND, SCORE_BOUND)
+        (-SearchScore::BOUND, SearchScore::BOUND)
     };
     let mut fail_highs = 0;
     loop {
@@ -2081,11 +2108,11 @@ fn aspiration_search(search: &mut Search, depth: Depth, previous: i32) -> Option
             return None;
         };
         if score <= alpha {
-            beta = i32::midpoint(alpha, beta);
-            alpha = (score - delta).max(-SCORE_BOUND);
+            beta = alpha.midpoint(beta);
+            alpha = (score - delta).max(-SearchScore::BOUND);
             fail_highs = 0;
         } else if score >= beta {
-            beta = (score + delta).min(SCORE_BOUND);
+            beta = (score + delta).min(SearchScore::BOUND);
             fail_highs += 1;
         } else {
             return Some(score);
@@ -2254,7 +2281,7 @@ mod time_tests {
         }
     }
 
-    fn iteration(best_move_node_share: f64, score_drop: i32) -> IterationSummary {
+    fn iteration(best_move_node_share: f64, score_drop: SearchScore) -> IterationSummary {
         IterationSummary {
             best_move: Some(Move::quiet(Square::new(12), Square::new(28))),
             best_move_node_share,
@@ -2274,7 +2301,7 @@ mod time_tests {
         control.set_budget_from_now(BUDGET);
         let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.9, 0));
+        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.9, SearchScore::ZERO));
 
         assert!(!stop);
     }
@@ -2285,7 +2312,7 @@ mod time_tests {
         control.set_budget_from_now(BUDGET);
         let mut time = TimeManager::new(Arc::new(control), true, None);
 
-        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.9, 0));
+        let stop = time.should_stop_iterating(Depth::new(10), &iteration(0.9, SearchScore::ZERO));
 
         assert!(
             !stop,
@@ -2310,63 +2337,17 @@ mod time_tests {
 }
 
 #[cfg(test)]
-mod mate_score_tests {
+mod score_report_tests {
     use super::*;
-
-    #[test]
-    fn a_tt_score_reads_back_as_stored_at_the_same_ply() {
-        let scores = [
-            0,
-            250,
-            -250,
-            MATE_THRESHOLD,
-            -MATE_THRESHOLD,
-            MATE_THRESHOLD + 1,
-            -MATE_THRESHOLD - 1,
-            MATE_SCORE - 1,
-            -MATE_SCORE + 1,
-        ];
-        for score in scores {
-            for ply in [0, 7, 120] {
-                assert_eq!(
-                    score_from_tt(score_to_tt(score, ply), ply),
-                    score,
-                    "{score} at {ply}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn a_mate_keeps_its_distance_from_the_node_whatever_ply_reads_it() {
-        let mate_two_below_ply_3 = MATE_SCORE - (3 + 2);
-        let mated_two_below_ply_3 = -MATE_SCORE + (3 + 2);
-
-        let stored = [mate_two_below_ply_3, mated_two_below_ply_3].map(|s| score_to_tt(s, 3));
-        let read_at_ply_10 = stored.map(|s| score_from_tt(s, 10));
-
-        assert_eq!(
-            read_at_ply_10,
-            [MATE_SCORE - (10 + 2), -MATE_SCORE + (10 + 2)]
-        );
-    }
-
-    #[test]
-    fn scores_short_of_mate_pass_through_the_tt_unchanged() {
-        for score in [MATE_THRESHOLD, -MATE_THRESHOLD, 0] {
-            assert_eq!(score_to_tt(score, 50), score);
-            assert_eq!(score_from_tt(score, 50), score);
-        }
-    }
 
     #[test]
     fn a_search_score_is_reported_as_moves_to_mate_or_centipawns() {
         let reported = [
-            MATE_SCORE - 1,
-            MATE_SCORE - 3,
-            -MATE_SCORE,
-            -MATE_SCORE + 2,
-            cp_to_search_units(Centipawns::new(300)),
+            SearchScore::mate_at(1),
+            SearchScore::mate_at(3),
+            SearchScore::mated_at(0),
+            SearchScore::mated_at(2),
+            SearchScore::from_centipawns(Centipawns::new(300)),
         ]
         .map(Score::from_search);
 
