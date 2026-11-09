@@ -532,6 +532,25 @@ impl Search<'_> {
         }
     }
 
+    /// Starts the node's stack entry: the double extensions on its path, and
+    /// whether it is or was on a PV.
+    fn start_stack_entry(&mut self, is_pv: bool, tt_entry: Option<TTEntry>) {
+        let inherited = match self.ply.checked_sub(1) {
+            Some(parent) => self.stack[parent].double_extensions,
+            None => 0,
+        };
+        let entry = &mut self.stack[self.ply];
+        entry.double_extensions = inherited;
+        entry.tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
+    }
+
+    /// Clears what the node's children and grandchildren would inherit from
+    /// the last node searched at their plies.
+    fn clear_child_slots(&mut self) {
+        self.killers[(self.ply + 1).min(MAX_PLY - 1)] = [None; 2];
+        self.stack[(self.ply + 2).min(MAX_PLY)].cutoff_count = 0;
+    }
+
     fn is_allowed_root_move(&self, m: Move) -> bool {
         self.allowed_root_moves
             .is_none_or(|allowed| allowed.contains(&m))
@@ -967,46 +986,55 @@ fn quiesce_evasions(
     Ok(best_score)
 }
 
-/// What razoring, reverse futility and null-move pruning weigh about a
-/// non-PV node with a static evaluation.
-#[derive(Clone, Copy)]
-struct NodePruning {
-    depth: Depth,
-    eval: SearchScore,
-    alpha: SearchScore,
-    beta: SearchScore,
-    improving: bool,
-    node: NodeKind,
-    /// The node is searched without its TT move to test that move's singularity.
-    is_singular_search: bool,
+/// The score that ends a non-PV node not in check before its moves: from
+/// razoring, reverse futility or null-move pruning, or else from `ProbCut`.
+fn prune_before_moves(search: &mut Search, n: &Node) -> Result<Option<SearchScore>, Aborted> {
+    let Some(eval) = n.eval.filter(|_| !n.is_pv) else {
+        return Ok(None);
+    };
+    if let Some(score) = prune_node(search, n, eval.refined)? {
+        return Ok(Some(score));
+    }
+    if n.excluded_move.is_some() {
+        return Ok(None);
+    }
+    probcut(search, n, eval.corrected)
 }
 
 /// The score a node returns without searching its moves, when its static
-/// evaluation is far enough outside the window.
-fn prune_node(search: &mut Search, n: NodePruning) -> Result<Option<SearchScore>, Aborted> {
+/// evaluation `eval` is far enough outside the window.
+fn prune_node(
+    search: &mut Search,
+    n: &Node,
+    eval: SearchScore,
+) -> Result<Option<SearchScore>, Aborted> {
     let razor_margin =
         search.params.razor_margin + search.params.razor_depth_sq_margin * n.depth.plies().pow(2);
-    if n.eval < n.alpha - razor_margin {
+    if eval < n.alpha - razor_margin {
         let q_score = quiesce(search, n.alpha, n.beta)?;
         if q_score < n.alpha {
             return Ok(Some(q_score));
         }
     }
     if n.depth <= search.params.rfp_max_depth
-        && n.eval - search.params.rfp_margin * (n.depth.plies() - i32::from(n.improving)) >= n.beta
+        && eval - search.params.rfp_margin * (n.depth.plies() - i32::from(n.improving)) >= n.beta
     {
-        return Ok(Some(n.eval));
+        return Ok(Some(eval));
     }
-    null_move_cutoff(search, n)
+    null_move_cutoff(search, n, eval)
 }
 
 /// Passes the move and searches the reply shallower; a side that still fails
 /// high after giving its opponent a free move fails high here too.
-fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<SearchScore>, Aborted> {
+fn null_move_cutoff(
+    search: &mut Search,
+    n: &Node,
+    eval: SearchScore,
+) -> Result<Option<SearchScore>, Aborted> {
     let previous_was_null = search.ply > 0 && search.stack[search.ply - 1].current_move.is_none();
     if n.depth < search.params.nmp_min_depth
-        || n.is_singular_search
-        || n.eval < n.beta
+        || n.excluded_move.is_some()
+        || eval < n.beta
         || previous_was_null
         || !has_non_pawn_material(&search.board)
     {
@@ -1014,7 +1042,7 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<Search
     }
     let r = search.params.nmp_base_reduction
         + n.depth / search.params.nmp_depth_divisor
-        + Depth::new((n.eval - n.beta) / search.params.nmp_eval_divisor)
+        + Depth::new((eval - n.beta) / search.params.nmp_eval_divisor)
             .min(search.params.nmp_eval_max);
     let undo = search.make_null_move();
     let null_score = negamax(
@@ -1022,7 +1050,7 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<Search
         -n.beta,
         -n.beta + SearchScore::UNIT,
         n.depth - r,
-        n.node.opposite(),
+        n.kind.opposite(),
     );
     search.unmake_null_move(undo);
     let null_score = -null_score?;
@@ -1040,23 +1068,13 @@ fn null_move_cutoff(search: &mut Search, n: NodePruning) -> Result<Option<Search
     }))
 }
 
-/// What `ProbCut` weighs about a non-PV node not in check.
-#[derive(Clone, Copy)]
-struct ProbCutNode {
-    depth: Depth,
-    beta: SearchScore,
-    static_eval: SearchScore,
-    node: NodeKind,
-    tt_entry: Option<TTEntry>,
-}
-
 /// Looks for a capture that beats beta by a margin in quiescence and then in a
 /// reduced search; if one exists the node almost certainly fails high at full
 /// depth too. Skipped near mate scores and where the TT entry already falls short.
 fn probcut(
     search: &mut Search,
-    legality: &LegalityInfo,
-    n: ProbCutNode,
+    n: &Node,
+    static_eval: SearchScore,
 ) -> Result<Option<SearchScore>, Aborted> {
     use crate::movepicker::QMovePicker;
 
@@ -1077,14 +1095,14 @@ fn probcut(
         if !see_ge(
             &search.board,
             m,
-            (probcut_beta - n.static_eval).as_unscaled_centipawns(),
+            (probcut_beta - static_eval).as_unscaled_centipawns(),
         ) {
             continue;
         }
-        let Some(undo) = search.make_move(m, legality) else {
+        let Some(undo) = search.make_move(m, &n.legality) else {
             continue;
         };
-        let score = probe_capture(search, probcut_beta, probe_depth, n.node);
+        let score = probe_capture(search, probcut_beta, probe_depth, n.kind);
         search.unmake_move(m, undo);
         let score = score?;
 
@@ -1503,7 +1521,7 @@ fn enter_node(
     search: &mut Search,
     mut alpha: SearchScore,
     mut beta: SearchScore,
-    mut depth: Depth,
+    depth: Depth,
     kind: NodeKind,
 ) -> Result<ControlFlow<SearchScore, Node>, Aborted> {
     search.seldepth = search.seldepth.max(search.ply);
@@ -1522,81 +1540,31 @@ fn enter_node(
     let is_pv = beta - alpha > SearchScore::UNIT;
     let key = search.board.zobrist();
     let excluded_move = search.stack[search.ply].excluded_move;
-    if excluded_move.is_none() {
-        search.stack[search.ply].double_extensions = if is_root {
-            0
-        } else {
-            search.stack[search.ply - 1].double_extensions
-        };
-    }
-
     let tt_entry = search.tt.probe(key);
-    let tt_move = tt_entry.and_then(|e| e.best_move());
     if excluded_move.is_none() {
-        search.stack[search.ply].tt_pv = is_pv || tt_entry.is_some_and(|e| e.is_pv());
-    }
-    if !is_pv
-        && excluded_move.is_none()
-        && let Some(entry) = tt_entry
-        && let Some(score) = search.tt_cutoff(entry, depth, alpha, beta)
-    {
-        return Ok(ControlFlow::Break(score));
+        search.start_stack_entry(is_pv, tt_entry);
+        if !is_pv
+            && let Some(entry) = tt_entry
+            && let Some(score) = search.tt_cutoff(entry, depth, alpha, beta)
+        {
+            return Ok(ControlFlow::Break(score));
+        }
     }
 
     let legality = search.board.legality_info();
     let in_check = legality.in_check();
-    if in_check {
-        depth += Depth::ONE;
-    }
+    let depth = if in_check { depth + Depth::ONE } else { depth };
     if depth <= Depth::ZERO {
         return quiesce(search, alpha, beta).map(ControlFlow::Break);
     }
 
     search.time.count_node();
-    search.killers[(search.ply + 1).min(MAX_PLY - 1)] = [None; 2];
-    search.stack[(search.ply + 2).min(MAX_PLY)].cutoff_count = 0;
-
+    search.clear_child_slots();
     let eval = (!in_check).then(|| search.evaluate_node(tt_entry));
     let corrected_eval = eval.map(|e| e.corrected);
     search.stack[search.ply].static_eval = corrected_eval;
-    let improving = search.is_improving(corrected_eval);
 
-    if !is_pv && let Some(e) = eval {
-        let candidate = NodePruning {
-            depth,
-            eval: e.refined,
-            alpha,
-            beta,
-            improving,
-            node: kind,
-            is_singular_search: excluded_move.is_some(),
-        };
-        if let Some(score) = prune_node(search, candidate)? {
-            return Ok(ControlFlow::Break(score));
-        }
-    }
-
-    if !is_pv
-        && excluded_move.is_none()
-        && let Some(static_eval) = corrected_eval
-    {
-        let candidate = ProbCutNode {
-            depth,
-            beta,
-            static_eval,
-            node: kind,
-            tt_entry,
-        };
-        if let Some(score) = probcut(search, &legality, candidate)? {
-            return Ok(ControlFlow::Break(score));
-        }
-    }
-
-    if depth >= search.params.iir_min_depth && tt_move.is_none() && excluded_move.is_none() {
-        depth -= Depth::ONE;
-    }
-
-    Ok(ControlFlow::Continue(Node {
+    let mut node = Node {
         kind,
         depth,
         alpha,
@@ -1607,12 +1575,22 @@ fn enter_node(
         excluded_move,
         key,
         tt_entry,
-        tt_move,
+        tt_move: tt_entry.and_then(|e| e.best_move()),
         tt_pv: search.stack[search.ply].tt_pv,
         eval,
-        improving,
+        improving: search.is_improving(corrected_eval),
         legality,
-    }))
+    };
+    if let Some(score) = prune_before_moves(search, &node)? {
+        return Ok(ControlFlow::Break(score));
+    }
+    if node.depth >= search.params.iir_min_depth
+        && node.tt_move.is_none()
+        && excluded_move.is_none()
+    {
+        node.depth -= Depth::ONE;
+    }
+    Ok(ControlFlow::Continue(node))
 }
 
 /// The move loop's running state.
