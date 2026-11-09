@@ -15,6 +15,31 @@ rand = "0.8"
 byteorder = "1.4"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
 
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+# Noisy: pure functions and documented error types say enough.
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+# The search's hot path is inlined on purpose; change it only with a benchmark.
+inline_always = "allow"
+# Board, eval and network code converts between square, score and weight
+# widths on purpose; newtypes are replacing these casts.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+# mul_add would change floating-point results that tests and tuning rely on.
+suboptimal_flops = "allow"
+# Chess names come in families (from/to, wtime/btime) that this flags.
+similar_names = "allow"
+# map_or_else reads worse than if let ... else for most of these.
+option_if_let_else = "allow"
+# Fields carry their units (white_ms, black_ms), as the names should.
+struct_field_names = "allow"
+# Every map here uses the default hasher.
+implicit_hasher = "allow"
+
 [profile.dev]
 opt-level = 2
 
