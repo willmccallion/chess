@@ -3,8 +3,8 @@
 use super::super::engine::SearchLimit;
 use super::super::view::{ACCENT, BoardScene, DIM, board_layout, draw_eval_bar, white_share};
 use super::common::{
-    BAD, GOOD, INFO, MARK_GOOD, MARK_HINT, TEXT, WARN, bar, class_color, class_mark, colored, dim,
-    draw_board, draw_help, draw_status, heading, move_marks, panel, sparkline,
+    BAD, Direction, GOOD, INFO, MARK_GOOD, MARK_HINT, TEXT, WARN, bar, class_color, class_mark,
+    colored, dim, draw_board, draw_help, draw_status, heading, move_marks, panel, sparkline,
 };
 use super::data::CoachData;
 use super::game::eval_after_search;
@@ -125,16 +125,17 @@ impl ReviewScreen {
             .filter(|r| r.mover == self.record.human && r.class.is_error())
     }
 
-    fn jump_to_error(&mut self, forward: bool) {
-        let target = if forward {
-            self.your_errors()
+    fn jump_to_error(&mut self, direction: Direction) {
+        let target = match direction {
+            Direction::Forward => self
+                .your_errors()
                 .map(|r| r.ply + 1)
-                .find(|&c| c > self.cursor)
-        } else {
-            self.your_errors()
+                .find(|&c| c > self.cursor),
+            Direction::Back => self
+                .your_errors()
                 .map(|r| r.ply + 1)
                 .filter(|&c| c < self.cursor)
-                .last()
+                .last(),
         };
         if let Some(cursor) = target {
             self.cursor = cursor;
@@ -524,11 +525,10 @@ impl Explore {
         }
     }
 
-    fn step(&mut self, forward: bool) {
-        self.step = if forward {
-            (self.step + 1).min(self.moves.len())
-        } else {
-            self.step.saturating_sub(1)
+    fn step(&mut self, direction: Direction) {
+        self.step = match direction {
+            Direction::Forward => (self.step + 1).min(self.moves.len()),
+            Direction::Back => self.step.saturating_sub(1),
         };
     }
 
@@ -666,8 +666,8 @@ impl Screen for ReviewScreen {
         if let Some(explore) = self.explore.as_mut() {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => self.explore = None,
-                KeyCode::Right | KeyCode::Char('l' | ' ') => explore.step(true),
-                KeyCode::Left | KeyCode::Char('h') => explore.step(false),
+                KeyCode::Right | KeyCode::Char('l' | ' ') => explore.step(Direction::Forward),
+                KeyCode::Left | KeyCode::Char('h') => explore.step(Direction::Back),
                 KeyCode::Char('t') => self.start_explore(Branch::WhatHappens),
                 KeyCode::Char('b') => self.start_explore(Branch::Better),
                 KeyCode::Char('f') => self.flipped = !self.flipped,
@@ -684,8 +684,8 @@ impl Screen for ReviewScreen {
             KeyCode::Left | KeyCode::Char('h') => {
                 self.cursor = self.cursor.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => self.jump_to_error(true),
-            KeyCode::Up | KeyCode::Char('k') => self.jump_to_error(false),
+            KeyCode::Down | KeyCode::Char('j') => self.jump_to_error(Direction::Forward),
+            KeyCode::Up | KeyCode::Char('k') => self.jump_to_error(Direction::Back),
             KeyCode::Home | KeyCode::Char('g') => self.cursor = 0,
             KeyCode::End | KeyCode::Char('G') => self.cursor = last,
             KeyCode::Char('t') => self.start_explore(Branch::WhatHappens),
@@ -846,8 +846,8 @@ mod tests {
         screen.start_explore(Branch::Better);
         let first = screen.explore.as_ref().map(|e| (e.step, e.moves.len()));
         if let Some(explore) = screen.explore.as_mut() {
-            explore.step(true);
-            explore.step(true);
+            explore.step(Direction::Forward);
+            explore.step(Direction::Forward);
         }
 
         assert_eq!(first, Some((1, 2)));

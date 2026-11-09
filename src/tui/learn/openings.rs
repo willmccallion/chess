@@ -1,7 +1,7 @@
 //! The repertoire by chapter, with where you stand on each line.
 
 use super::super::view::{ACCENT, DIM};
-use super::common::{GOOD, INFO, TEXT, WARN, centred, dim, panel};
+use super::common::{Direction, GOOD, INFO, TEXT, WARN, centred, dim, panel};
 use super::data::{CoachData, now};
 use super::line::LineScreen;
 use super::{Nav, Screen};
@@ -68,13 +68,12 @@ impl Openings {
             .collect()
     }
 
-    fn step(&mut self, forward: bool) {
+    fn step(&mut self, direction: Direction) {
         let lines = self.line_indices();
         let position = lines.iter().position(|&i| i == self.selected).unwrap_or(0);
-        let next = if forward {
-            (position + 1).min(lines.len() - 1)
-        } else {
-            position.saturating_sub(1)
+        let next = match direction {
+            Direction::Forward => (position + 1).min(lines.len() - 1),
+            Direction::Back => position.saturating_sub(1),
         };
         self.selected = lines[next];
     }
@@ -94,16 +93,23 @@ impl Openings {
     }
 
     /// Opens the selected line: a lesson if it's new, a drill otherwise.
-    fn open(&self, data: &CoachData, force_lesson: bool) -> Nav {
+    fn open(&self, data: &CoachData) -> Nav {
         let Some(line) = self.selected_line() else {
             return Nav::Stay;
         };
-        let new = line_status(line, &data.schedules, now()) == LineStatus::New;
-        if new || force_lesson {
+        if line_status(line, &data.schedules, now()) == LineStatus::New {
             Nav::Push(Box::new(LineScreen::lesson(line, Vec::new())))
         } else {
             Nav::Push(Box::new(LineScreen::drill(line, Vec::new())))
         }
+    }
+
+    /// Opens the selected line's lesson, new or not.
+    fn open_lesson(&self) -> Nav {
+        let Some(line) = self.selected_line() else {
+            return Nav::Stay;
+        };
+        Nav::Push(Box::new(LineScreen::lesson(line, Vec::new())))
     }
 
     /// Drills every due line, one after another.
@@ -228,15 +234,15 @@ impl Screen for Openings {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => Nav::Back,
             KeyCode::Up | KeyCode::Char('k') => {
-                self.step(false);
+                self.step(Direction::Back);
                 Nav::Stay
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.step(true);
+                self.step(Direction::Forward);
                 Nav::Stay
             }
-            KeyCode::Enter | KeyCode::Right => self.open(data, false),
-            KeyCode::Char('l') => self.open(data, true),
+            KeyCode::Enter | KeyCode::Right => self.open(data),
+            KeyCode::Char('l') => self.open_lesson(),
             KeyCode::Char('d') => match self.selected_line() {
                 Some(line) => Nav::Push(Box::new(LineScreen::drill(line, Vec::new()))),
                 None => Nav::Stay,
@@ -258,7 +264,7 @@ impl Screen for Openings {
         let index = visible_skip(self.selected, rows) + usize::from(offset);
         if usize::from(offset) < rows && matches!(self.rows.get(index), Some(Row::Line(..))) {
             self.selected = index;
-            return self.open(data, false);
+            return self.open(data);
         }
         Nav::Stay
     }

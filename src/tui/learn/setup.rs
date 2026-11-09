@@ -1,7 +1,7 @@
 //! Choosing how the next game against the coach is played.
 
 use super::super::view::{ACCENT, DIM};
-use super::common::{TEXT, centred, dim, panel};
+use super::common::{Direction, TEXT, centred, dim, panel};
 use super::data::CoachData;
 use super::game::{CoachGame, GameSettings};
 use super::{Nav, Screen};
@@ -78,27 +78,30 @@ impl Setup {
         }
     }
 
-    fn change(&mut self, forward: bool) {
+    fn change(&mut self, direction: Direction) {
         match ROWS[self.row] {
             Row::Level => {
-                self.level = match (self.level, forward) {
-                    (None, true) => Some(Level::WEAKEST),
-                    (None, false) => Some(Level::STRONGEST),
-                    (Some(level), true) if level == Level::STRONGEST => None,
-                    (Some(level), false) if level == Level::WEAKEST => None,
-                    (Some(level), true) => Some(level.harder()),
-                    (Some(level), false) => Some(level.easier()),
+                self.level = match (self.level, direction) {
+                    (None, Direction::Forward) => Some(Level::WEAKEST),
+                    (None, Direction::Back) => Some(Level::STRONGEST),
+                    (Some(level), Direction::Forward) if level == Level::STRONGEST => None,
+                    (Some(level), Direction::Back) if level == Level::WEAKEST => None,
+                    (Some(level), Direction::Forward) => Some(level.harder()),
+                    (Some(level), Direction::Back) => Some(level.easier()),
                 };
             }
             Row::Side => {
-                self.side = match (self.side, forward) {
-                    (SideChoice::White, true) | (SideChoice::Random, false) => SideChoice::Black,
-                    (SideChoice::Black, true) | (SideChoice::White, false) => SideChoice::Random,
-                    (SideChoice::Random, true) | (SideChoice::Black, false) => SideChoice::White,
+                self.side = match (self.side, direction) {
+                    (SideChoice::White, Direction::Forward)
+                    | (SideChoice::Random, Direction::Back) => SideChoice::Black,
+                    (SideChoice::Black, Direction::Forward)
+                    | (SideChoice::White, Direction::Back) => SideChoice::Random,
+                    (SideChoice::Random, Direction::Forward)
+                    | (SideChoice::Black, Direction::Back) => SideChoice::White,
                 };
                 self.opening = None;
             }
-            Row::Clock => self.clock = cycle(self.clock, CLOCKS.len(), forward),
+            Row::Clock => self.clock = cycle(self.clock, CLOCKS.len(), direction),
             Row::BlunderCheck => self.blunder_check = !self.blunder_check,
             Row::Opening => {
                 let choices = self.opening_choices();
@@ -106,9 +109,9 @@ impl Setup {
                     .opening
                     .and_then(|o| choices.iter().position(|&c| c == o));
                 let next = match position {
-                    None if forward => choices.first().copied(),
+                    None if direction == Direction::Forward => choices.first().copied(),
                     None => choices.last().copied(),
-                    Some(i) if forward => choices.get(i + 1).copied(),
+                    Some(i) if direction == Direction::Forward => choices.get(i + 1).copied(),
                     Some(0) => None,
                     Some(i) => choices.get(i - 1).copied(),
                 };
@@ -196,11 +199,10 @@ impl Setup {
     }
 }
 
-const fn cycle(index: usize, len: usize, forward: bool) -> usize {
-    if forward {
-        (index + 1) % len
-    } else {
-        (index + len - 1) % len
+const fn cycle(index: usize, len: usize, direction: Direction) -> usize {
+    match direction {
+        Direction::Forward => (index + 1) % len,
+        Direction::Back => (index + len - 1) % len,
     }
 }
 
@@ -286,19 +288,19 @@ impl Screen for Setup {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => Nav::Back,
             KeyCode::Up | KeyCode::Char('k') => {
-                self.row = cycle(self.row, ROWS.len(), false);
+                self.row = cycle(self.row, ROWS.len(), Direction::Back);
                 Nav::Stay
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                self.row = cycle(self.row, ROWS.len(), true);
+                self.row = cycle(self.row, ROWS.len(), Direction::Forward);
                 Nav::Stay
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                self.change(false);
+                self.change(Direction::Back);
                 Nav::Stay
             }
             KeyCode::Right | KeyCode::Char('l' | ' ') => {
-                self.change(true);
+                self.change(Direction::Forward);
                 Nav::Stay
             }
             KeyCode::Enter => {
@@ -323,7 +325,7 @@ impl Screen for Setup {
             let settings = self.settings(data);
             return Nav::Replace(Box::new(CoachGame::new(settings, data)));
         }
-        self.change(true);
+        self.change(Direction::Forward);
         Nav::Stay
     }
 }

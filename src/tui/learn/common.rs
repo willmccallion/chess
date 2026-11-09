@@ -63,6 +63,13 @@ pub struct BoardPanel {
     pub typed: Option<String>,
 }
 
+/// Which way a key moves through a list or a line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Back,
+    Forward,
+}
+
 /// What a key did on a board.
 pub enum BoardKey {
     NotHandled,

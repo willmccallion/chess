@@ -59,6 +59,13 @@ enum Mode {
     },
 }
 
+/// Whether a move list shows the moves still to come.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Upcoming {
+    Shown,
+    Hidden,
+}
+
 pub struct LineScreen {
     line: &'static RepLine,
     moves: Vec<Move>,
@@ -210,12 +217,12 @@ impl LineScreen {
             .map_or("", |c| c.name)
     }
 
-    /// The line's moves up to `current`; the rest too unless `hide_rest`, so a drill is
-    /// played from memory.
-    fn move_list(&self, current: usize, hide_rest: bool) -> Line<'static> {
+    /// The line's moves up to `current`, then the rest as `upcoming` says: a
+    /// drill hides them so the line is played from memory.
+    fn move_list(&self, current: usize, upcoming: Upcoming) -> Line<'static> {
         let mut spans = Vec::new();
         for (ply, step) in self.line.steps.iter().enumerate() {
-            if hide_rest && ply >= current {
+            if upcoming == Upcoming::Hidden && ply >= current {
                 spans.push(Span::styled("…", Style::new().fg(DIM)));
                 break;
             }
@@ -261,7 +268,7 @@ impl LineScreen {
 
     /// The moves up to `cursor`, the last one's note, and at the end the plan.
     fn lesson_lines(&self, cursor: usize) -> Vec<Line<'static>> {
-        let mut lines = vec![self.move_list(cursor, false), Line::raw("")];
+        let mut lines = vec![self.move_list(cursor, Upcoming::Shown), Line::raw("")];
         match cursor.checked_sub(1).and_then(|ply| self.step_text(ply)) {
             Some((san, note)) => {
                 let yours = self.line.is_yours(cursor - 1);
@@ -301,7 +308,7 @@ impl LineScreen {
             "Their move…"
         };
         let mut lines = vec![
-            self.move_list(ply, true),
+            self.move_list(ply, Upcoming::Hidden),
             Line::raw(""),
             heading(text),
             dim(format!(
@@ -322,7 +329,10 @@ impl LineScreen {
         saved: &Result<(), String>,
         data: &CoachData,
     ) -> Vec<Line<'static>> {
-        let mut lines = vec![self.move_list(self.moves.len(), false), Line::raw("")];
+        let mut lines = vec![
+            self.move_list(self.moves.len(), Upcoming::Shown),
+            Line::raw(""),
+        ];
         if misses == 0 {
             lines.push(Line::styled(
                 "Perfect! Every move from memory.",
