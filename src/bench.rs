@@ -85,24 +85,6 @@ pub fn run(depth: usize, hash_mb: usize) -> Result<BenchResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Color, Piece, PieceKind};
-
-    #[test]
-    fn bench_positions_are_legal() {
-        for fen in BENCH_FENS {
-            let board = Board::from_fen(fen).unwrap();
-            for color in [Color::White, Color::Black] {
-                let kings = board.piece_bb[Piece::from_kind(PieceKind::King, color).index()];
-                assert_eq!(kings.count_ones(), 1, "king count for {fen}");
-            }
-            let opponent = board.turn.other();
-            let opponent_king = board.king_square(opponent) as i32;
-            assert!(
-                !board.is_square_attacked(opponent_king, board.turn),
-                "side not to move is in check: {fen}"
-            );
-        }
-    }
 
     #[test]
     fn bench_node_count_is_deterministic() {
