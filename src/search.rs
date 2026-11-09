@@ -2075,6 +2075,32 @@ fn aspiration_search(search: &mut Search, depth: usize, previous: i32) -> Option
     }
 }
 
+/// The answer when there is nothing to search: no move when there is none
+/// (after waiting for `stop` if asked to), or the only move when time is
+/// short anyway.
+fn answer_without_searching(
+    root_moves: &[Move],
+    limits: &SearchLimits,
+    control: &SearchControl,
+) -> Option<SearchResult> {
+    let best_move = match root_moves {
+        [] => {
+            if limits.wait_for_stop {
+                wait_until_released(control);
+            }
+            None
+        }
+        [only] if control.is_timed() && !limits.wait_for_stop => Some(*only),
+        _ => return None,
+    };
+    Some(SearchResult {
+        best_move,
+        ponder_move: None,
+        nodes: 0,
+        score: None,
+    })
+}
+
 fn ponder_move_after(board: &Board, best_move: Move, tt: &SharedTransTable) -> Option<Move> {
     let mut after_best = board.clone();
     after_best.make_move(best_move);
@@ -2117,24 +2143,8 @@ pub fn search_reporting(
         legal = legal_moves(board);
         legal.as_slice()
     };
-    if root_moves.is_empty() {
-        if limits.wait_for_stop {
-            wait_until_released(control);
-        }
-        return SearchResult {
-            best_move: None,
-            ponder_move: None,
-            nodes: 0,
-            score: None,
-        };
-    }
-    if root_moves.len() == 1 && control.is_timed() && !limits.wait_for_stop {
-        return SearchResult {
-            best_move: Some(root_moves[0]),
-            ponder_move: None,
-            nodes: 0,
-            score: None,
-        };
+    if let Some(answer) = answer_without_searching(root_moves, limits, control) {
+        return answer;
     }
 
     let (main_td, helper_tds) = threads.data.split_at_mut(1);
