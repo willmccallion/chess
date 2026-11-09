@@ -250,3 +250,71 @@ pub fn play_game(white: &mut UciEngine, black: &mut UciEngine, config: &GameConf
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome_of(fen: &str) -> Option<(GameResult, GameEndReason)> {
+        position_outcome(&Board::from_fen(fen).unwrap())
+    }
+
+    #[test]
+    fn a_mated_side_loses() {
+        let fools_mate = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3";
+
+        assert_eq!(
+            outcome_of(fools_mate),
+            Some((GameResult::BlackWin, GameEndReason::Checkmate))
+        );
+    }
+
+    #[test]
+    fn a_side_with_no_move_and_no_check_is_stalemated() {
+        assert_eq!(
+            outcome_of("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"),
+            Some((GameResult::Draw, GameEndReason::Stalemate))
+        );
+    }
+
+    #[test]
+    fn the_third_occurrence_of_a_position_is_a_draw_and_the_second_is_not() {
+        let mut board = Board::from_fen(START_FEN).unwrap();
+        let mut outcomes = Vec::new();
+        for text in [
+            "g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8",
+        ] {
+            let m = parse_uci_move(&mut board, text).unwrap();
+            board.make_move(m);
+            outcomes.push(position_outcome(&board));
+        }
+
+        assert_eq!(outcomes[3], None, "the start position's second occurrence");
+        assert_eq!(
+            outcomes[7],
+            Some((GameResult::Draw, GameEndReason::Repetition))
+        );
+    }
+
+    #[test]
+    fn a_hundred_plies_without_capture_or_pawn_move_is_a_draw() {
+        assert_eq!(
+            outcome_of("4k3/8/8/8/8/8/R7/4K3 w - - 100 80"),
+            Some((GameResult::Draw, GameEndReason::FiftyMoveRule))
+        );
+    }
+
+    #[test]
+    fn a_lone_knight_cannot_mate() {
+        assert_eq!(
+            outcome_of("4k3/8/8/8/8/8/8/4K1N1 w - - 0 1"),
+            Some((GameResult::Draw, GameEndReason::InsufficientMaterial))
+        );
+    }
+
+    #[test]
+    fn a_position_with_moves_and_material_goes_on() {
+        assert_eq!(outcome_of(START_FEN), None);
+        assert_eq!(outcome_of("4k3/8/8/8/8/8/R7/4K3 w - - 99 80"), None);
+    }
+}
