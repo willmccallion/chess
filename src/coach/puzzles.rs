@@ -276,13 +276,6 @@ const THEME_NAMES: &[(&str, &str)] = &[
     ("kingsideAttack", "Kingside attack"),
 ];
 
-pub fn theme_name(theme: &str) -> Option<&'static str> {
-    THEME_NAMES
-        .iter()
-        .find(|(key, _)| *key == theme)
-        .map(|(_, name)| *name)
-}
-
 /// A puzzle's themes in words, most telling first.
 pub fn describe_themes(themes: &[String]) -> String {
     let names: Vec<&str> = THEME_NAMES

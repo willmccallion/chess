@@ -80,10 +80,6 @@ pub fn all_lines() -> impl Iterator<Item = &'static Line> {
     CHAPTERS.iter().flat_map(|chapter| chapter.lines.iter())
 }
 
-pub fn line_by_id(id: &str) -> Option<&'static Line> {
-    all_lines().find(|line| line.id == id)
-}
-
 /// The lines whose moves begin with `played`, for following a game along the repertoire.
 pub fn lines_continuing(played: &[Move]) -> Vec<(&'static Line, Move)> {
     all_lines()
