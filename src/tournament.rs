@@ -11,15 +11,24 @@ use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::Instant;
 
+/// One side of a tournament: the engine binary, the UCI options it is given,
+/// the name it is shown under and its clock.
+pub struct EngineSpec {
+    pub path: String,
+    pub options: Vec<(String, String)>,
+    pub name: String,
+    pub clock: GameClock,
+}
+
+impl EngineSpec {
+    fn start(&self) -> Result<UciEngine, String> {
+        spawn_and_init_pinned(&self.path, &self.options, None)
+    }
+}
+
 pub struct TournamentConfig {
-    pub engine1_path: String,
-    pub engine2_path: String,
-    pub e1_options: Vec<(String, String)>,
-    pub e2_options: Vec<(String, String)>,
-    pub e1_name: String,
-    pub e2_name: String,
-    pub e1_clock: GameClock,
-    pub e2_clock: GameClock,
+    pub engine1: EngineSpec,
+    pub engine2: EngineSpec,
     pub rounds: usize,
     pub concurrency: usize,
     /// Where every game starts when there are no openings.
@@ -45,9 +54,9 @@ const fn e1_plays_white(game_idx: usize) -> bool {
 impl TournamentConfig {
     fn game_config(&self, game_idx: usize) -> GameConfig {
         let (white_clock, black_clock) = if e1_plays_white(game_idx) {
-            (self.e1_clock, self.e2_clock)
+            (self.engine1.clock, self.engine2.clock)
         } else {
-            (self.e2_clock, self.e1_clock)
+            (self.engine2.clock, self.engine1.clock)
         };
         GameConfig {
             white_clock,
@@ -395,7 +404,7 @@ pub fn run_tournament(mut config: TournamentConfig) -> Result<(), String> {
     if config.sprt.is_some() && score.sprt_decision.is_none() {
         score.sprt_decision = Some(SprtDecision::Continue);
     }
-    print_summary(&score, &config.e1_name, &config.e2_name, elapsed);
+    print_summary(&score, &config.engine1.name, &config.engine2.name, elapsed);
     Ok(())
 }
 
@@ -412,8 +421,8 @@ fn round_up_to_pairs(config: &mut TournamentConfig) {
 
 fn check_engine_paths(config: &TournamentConfig) -> Result<(), String> {
     for (engine, path) in [
-        ("engine1", &config.engine1_path),
-        ("engine2", &config.engine2_path),
+        ("engine1", &config.engine1.path),
+        ("engine2", &config.engine2.path),
     ] {
         if !std::path::Path::new(path).exists() {
             return Err(format!("{engine} path '{path}' not found"));
@@ -423,18 +432,17 @@ fn check_engine_paths(config: &TournamentConfig) -> Result<(), String> {
 }
 
 fn print_header(config: &TournamentConfig) {
-    let e1_name = config.e1_name.as_str();
-    let e2_name = config.e2_name.as_str();
-    println!("Tournament: {} vs {}", e1_name, e2_name);
-    if config.e1_clock == config.e2_clock {
-        println!("Time control: {}", format_clock(config.e1_clock));
+    let (e1, e2) = (&config.engine1, &config.engine2);
+    println!("Tournament: {} vs {}", e1.name, e2.name);
+    if e1.clock == e2.clock {
+        println!("Time control: {}", format_clock(e1.clock));
     } else {
         println!(
             "Time control: {} {}, {} {}",
-            e1_name,
-            format_clock(config.e1_clock),
-            e2_name,
-            format_clock(config.e2_clock)
+            e1.name,
+            format_clock(e1.clock),
+            e2.name,
+            format_clock(e2.clock)
         );
     }
     println!(
@@ -535,7 +543,7 @@ fn print_game_line(
     e1_is_white: bool,
     outcome: &GameOutcome,
 ) {
-    let (e1_name, e2_name) = (config.e1_name.as_str(), config.e2_name.as_str());
+    let (e1_name, e2_name) = (config.engine1.name.as_str(), config.engine2.name.as_str());
     let (white_name, black_name) = if e1_is_white {
         (e1_name, e2_name)
     } else {
@@ -601,9 +609,13 @@ fn run_worker(tournament: &Tournament) {
 }
 
 fn start_engines(config: &TournamentConfig) -> Result<(UciEngine, UciEngine), String> {
-    let e1 = spawn_and_init_pinned(&config.engine1_path, &config.e1_options, None)
+    let e1 = config
+        .engine1
+        .start()
         .map_err(|e| format!("Failed to start engine1: {e}"))?;
-    let e2 = spawn_and_init_pinned(&config.engine2_path, &config.e2_options, None)
+    let e2 = config
+        .engine2
+        .start()
         .map_err(|e| format!("Failed to start engine2: {e}"))?;
     Ok((e1, e2))
 }
@@ -619,20 +631,23 @@ mod tests {
         StartPosition::parse(fen).unwrap()
     }
 
+    fn engine(name: &str, clock: GameClock) -> EngineSpec {
+        EngineSpec {
+            path: String::new(),
+            options: Vec::new(),
+            name: name.to_string(),
+            clock,
+        }
+    }
+
     fn config_with(openings: &[&str], start: &str) -> TournamentConfig {
         let clock = GameClock {
             base_ms: 1000,
             increment_ms: 10,
         };
         TournamentConfig {
-            engine1_path: String::new(),
-            engine2_path: String::new(),
-            e1_options: Vec::new(),
-            e2_options: Vec::new(),
-            e1_name: "one".to_string(),
-            e2_name: "two".to_string(),
-            e1_clock: clock,
-            e2_clock: clock,
+            engine1: engine("one", clock),
+            engine2: engine("two", clock),
             rounds: 1,
             concurrency: 1,
             start: position(start),
@@ -841,8 +856,8 @@ done
         let dir = std::env::temp_dir().join(format!("chess-respawn-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut config = config_with(&[], START_FEN);
-        config.engine1_path = write_engine(&dir, "crashing", CRASHES_THEN_WONT_START);
-        config.engine2_path = write_engine(&dir, "e4", PLAYS_E4);
+        config.engine1.path = write_engine(&dir, "crashing", CRASHES_THEN_WONT_START);
+        config.engine2.path = write_engine(&dir, "e4", PLAYS_E4);
         config.rounds = 4;
         let tournament = Tournament::new(config);
 

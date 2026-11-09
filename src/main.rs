@@ -8,7 +8,7 @@ use chess::perft::{divide, perft};
 use chess::search_params::PARAM_SPECS;
 use chess::sprt::SprtConfig;
 use chess::spsa;
-use chess::tournament::{self, TournamentConfig};
+use chess::tournament::{self, EngineSpec, TournamentConfig};
 use chess::tui;
 use chess::types::{Color, START_FEN};
 use chess::uci;
@@ -430,19 +430,23 @@ impl ChallengeArgs {
         let sprt =
             sprt.map(|spec| SprtConfig::parse(&spec).unwrap_or_else(|e| exit_with_error(&e)));
         tournament::run_tournament(TournamentConfig {
-            e1_name: tournament::engine_name(e1_name, &engine1),
-            e2_name: tournament::engine_name(e2_name, &engine2),
-            engine1_path: engine1,
-            engine2_path: engine2,
-            e1_options: parse_options(&e1_options),
-            e2_options: parse_options(&e2_options),
-            e1_clock: GameClock {
-                base_ms: time,
-                increment_ms: inc,
+            engine1: EngineSpec {
+                name: tournament::engine_name(e1_name, &engine1),
+                path: engine1,
+                options: parse_options(&e1_options),
+                clock: GameClock {
+                    base_ms: time,
+                    increment_ms: inc,
+                },
             },
-            e2_clock: GameClock {
-                base_ms: e2_time.unwrap_or(time),
-                increment_ms: e2_inc.unwrap_or(inc),
+            engine2: EngineSpec {
+                name: tournament::engine_name(e2_name, &engine2),
+                path: engine2,
+                options: parse_options(&e2_options),
+                clock: GameClock {
+                    base_ms: e2_time.unwrap_or(time),
+                    increment_ms: e2_inc.unwrap_or(inc),
+                },
             },
             rounds,
             concurrency,
