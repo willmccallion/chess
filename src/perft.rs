@@ -1,5 +1,6 @@
 use crate::board::Board;
 use crate::types::MoveList;
+use crate::uci_io::format_uci;
 
 fn perft_inner(b: &mut Board, depth: usize) -> u64 {
     if depth == 0 {
@@ -36,7 +37,7 @@ pub fn divide(b: &mut Board, depth: usize) {
         b.unmake_move(m, u);
         total += n;
 
-        println!("{}{}: {n}", m.from, m.to);
+        println!("{}: {n}", format_uci(m));
     }
     println!("Total: {total}");
 }
