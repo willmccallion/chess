@@ -72,26 +72,35 @@ The repository ships a Nix flake. With [direnv](https://direnv.net/) and nix-dir
 - Stockfish 18 (`$STOCKFISH`) for matches and comparisons,
 - opening suites: `$CHESS_BOOK_UHO` (UHO Lichess, for engine-vs-engine testing) and `$CHESS_BOOK_BALANCED` (noob 3-moves),
 - the Baron Polyglot book, linked to `moves/book.bin`,
-- `perf` and Python with `python-chess` for the scripts in `tools/`.
+- `perf`, and Python with `python-chess` for `tools/perft_test.py` and `tools/nnue_check.py`.
 
-Build in release mode:
+Build in release mode, inside the dev shell (other Rust toolchains can fail to compile the AVX-VNNI code):
 
 ```bash
 cargo build --release
 ```
 
-The executable is `target/release/chess`. A `profiling` profile (release plus debug info) is available for `perf`:
+The executable is `target/release/chess`. `.cargo/config.toml` builds with `-C target-cpu=native`, so the binary is for the CPU it was built on. A `profiling` profile (release plus debug info) is available for `perf`:
 
 ```bash
 cargo build --profile profiling
 perf record -g target/profiling/chess bench 16
 ```
 
+Run the tests and lints with:
+
+```bash
+cargo test --release
+cargo clippy --all-targets
+```
+
+Clippy's `pedantic` and `nursery` groups are set to deny in `Cargo.toml`.
+
 ---
 
 ## How to Use
 
-All examples below assume you’re running commands from the project root.
+All examples below assume you’re running commands from the project root. `chess <command> --help` lists every option of a command.
 
 ### Playing in the Terminal
 
@@ -139,7 +148,7 @@ This keeps a sample of about 50,000 popular puzzles rated 400 to 2400.
 
 ### Using the Engine with a Chess GUI (UCI)
 
-To use this engine with a graphical interface, start it in `uci` mode:
+To use this engine with a graphical interface, start it in `uci` mode (it is also the mode when no command is given):
 
 ```bash
 cargo run --release -- uci
@@ -152,7 +161,19 @@ Then, in your favorite chess GUI:
 3. When prompted for the engine executable, point to the binary (for example, `target/release/chess`).
 4. Save the configuration and start a game using this engine.
 
-The `CoachLevel` option (1 to 10, 0 for off) makes the engine play like one of the coach's levels in learn mode instead of at full strength.
+The engine's UCI options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `Hash` | 256 | Transposition table size in MB (1 to 4096) |
+| `Threads` | 1 | Search threads (1 to 128) |
+| `Ponder` | false | Tells the GUI it may ponder; `go ponder` and `ponderhit` work either way |
+| `OwnBook` | true | Play from the opening book while it has a move |
+| `CoachLevel` | 0 | 1 to 10 plays like one of the coach's levels in learn mode instead of at full strength; 0 is off |
+| `Move Overhead` | 10 | Milliseconds kept back per move for GUI and network delay (0 to 5000) |
+| `Evaluator`, `EvalFile`, `EvalFileSmall`, `OwnEvalFile` | | See **NNUE** below |
+
+The search parameters listed by `chess params` are also accepted by name. The non-standard `eval` command prints the static evaluation of the current position, as does `chess eval <fen>` from the command line.
 
 ---
 
