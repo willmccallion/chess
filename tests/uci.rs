@@ -147,6 +147,25 @@ fn an_invalid_position_fen_keeps_the_position_before_it() {
     assert_eq!(fen, KINGS_AND_ROOK);
 }
 
+#[test]
+fn the_advertised_ponder_option_is_accepted() {
+    let mut engine = Engine::start();
+    engine.handshake();
+
+    engine.send("setoption name Ponder value true");
+    engine.send("isready");
+    let replies = engine
+        .read_until(|l| l == "readyok", REPLY_TIMEOUT)
+        .expect("readyok");
+
+    assert!(
+        !replies
+            .iter()
+            .any(|l| l.starts_with("info string ignoring")),
+        "replies {replies:?}"
+    );
+}
+
 fn is_bestmove(line: &str) -> bool {
     line.starts_with("bestmove")
 }
