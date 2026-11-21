@@ -4,7 +4,7 @@ use crate::types::{Move, MoveList, Piece, PieceKind, Square};
 use byteorder::{BigEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 // A simple random number generator
@@ -67,7 +67,7 @@ pub struct OpeningBook {
 }
 
 impl OpeningBook {
-    fn new(path: &str) -> Result<Self, std::io::Error> {
+    fn new(path: &Path) -> Result<Self, std::io::Error> {
         let file = File::open(path)?;
         let mut reader = BufReader::new(file);
         let mut entries = Vec::new();
@@ -111,38 +111,37 @@ type LoadedBook = Result<(OpeningBook, PathBuf), Vec<PathBuf>>;
 static BOOK: OnceLock<LoadedBook> = OnceLock::new();
 static LOAD_REPORTED: OnceLock<()> = OnceLock::new();
 
+const BOOK_FILENAME: &str = "moves/book.bin";
+
+/// Where the book is looked for, in order: next to the executable, in the
+/// working directory, and at the project root of an executable under `target/`.
+fn book_paths(exe: Option<&Path>, cwd: Option<&Path>) -> Vec<PathBuf> {
+    let exe_dir = exe.and_then(Path::parent);
+    let project_root = exe
+        .and_then(|e| e.ancestors().find(|a| a.ends_with("target")))
+        .and_then(Path::parent);
+    [exe_dir, cwd, project_root]
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(BOOK_FILENAME))
+        .collect()
+}
+
+/// The first of `paths` that holds a readable book.
+fn load_first_book(paths: Vec<PathBuf>) -> LoadedBook {
+    for path in &paths {
+        if let Ok(book) = OpeningBook::new(path) {
+            return Ok((book, path.clone()));
+        }
+    }
+    Err(paths)
+}
+
 fn load_book() -> &'static LoadedBook {
     BOOK.get_or_init(|| {
-        let book_filename = "moves/book.bin";
-        let mut potential_paths: Vec<PathBuf> = Vec::new();
-
-        if let Ok(mut exe_path) = std::env::current_exe() {
-            exe_path.pop(); // Remove the executable name to get the directory
-            potential_paths.push(exe_path.join(book_filename));
-        }
-
-        if let Ok(cwd) = std::env::current_dir() {
-            potential_paths.push(cwd.join(book_filename));
-        }
-
-        potential_paths.push(PathBuf::from("/home/will/projects/chess/moves/book.bin"));
-
-        if let Ok(exe_path) = std::env::current_exe()
-            && exe_path.to_string_lossy().contains("target")
-            && let Some(target_pos) = exe_path.to_string_lossy().find("target")
-        {
-            let project_root = PathBuf::from(&exe_path.to_string_lossy()[..target_pos]);
-            potential_paths.push(project_root.join(book_filename));
-        }
-
-        for path in &potential_paths {
-            if let Some(book) = path.to_str().and_then(|p| OpeningBook::new(p).ok())
-                && path.exists()
-            {
-                return Ok((book, path.clone()));
-            }
-        }
-        Err(potential_paths)
+        let exe = std::env::current_exe().ok();
+        let cwd = std::env::current_dir().ok();
+        load_first_book(book_paths(exe.as_deref(), cwd.as_deref()))
     })
 }
 
@@ -255,6 +254,43 @@ mod tests {
         let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
         assert_eq!(decoded(fen, 8, 32), None);
+    }
+
+    #[test]
+    fn the_book_is_looked_for_next_to_the_executable_then_in_the_cwd_then_at_the_project_root() {
+        let exe = Path::new("/build/chess/target/release/chess");
+
+        let paths = book_paths(Some(exe), Some(Path::new("/games")));
+
+        assert_eq!(
+            paths,
+            [
+                "/build/chess/target/release/moves/book.bin",
+                "/games/moves/book.bin",
+                "/build/chess/moves/book.bin",
+            ]
+            .map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn the_first_book_found_in_lookup_order_is_loaded() {
+        let dir = std::env::temp_dir().join(format!("chess-book-test-{}", std::process::id()));
+        let root = dir.join("project");
+        let cwd = dir.join("cwd");
+        for book_dir in [&root, &cwd] {
+            std::fs::create_dir_all(book_dir.join("moves")).unwrap();
+            std::fs::write(book_dir.join(BOOK_FILENAME), []).unwrap();
+        }
+        let paths = book_paths(Some(&root.join("target/release/chess")), Some(&cwd));
+
+        let first = load_first_book(paths.clone()).map(|(_, path)| path);
+        std::fs::remove_file(cwd.join(BOOK_FILENAME)).unwrap();
+        let without_cwd_book = load_first_book(paths).map(|(_, path)| path);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(first, Ok(cwd.join(BOOK_FILENAME)));
+        assert_eq!(without_cwd_book, Ok(root.join(BOOK_FILENAME)));
     }
 
     #[test]
