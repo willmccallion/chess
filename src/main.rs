@@ -80,13 +80,12 @@ struct PerftArgs {
 }
 
 impl PerftArgs {
-    fn run(self, cli: &Cli) {
+    fn run(self) {
         let Self {
             depth,
             fen,
             divide: div,
         } = self;
-        require_networks(cli);
         let fen_str = fen.unwrap_or_else(|| START_FEN.to_string());
         let mut b = Board::from_fen(&fen_str)
             .unwrap_or_else(|e| exit_with_error(&format!("FEN parse error: {e}")));
@@ -767,7 +766,7 @@ fn available_threads() -> usize {
 fn main() {
     let mut cli = Cli::parse();
     match cli.cmd.take().unwrap_or(Cmd::Uci) {
-        Cmd::Perft(args) => args.run(&cli),
+        Cmd::Perft(args) => args.run(),
         Cmd::Datagen(args) => args.run(&cli),
         Cmd::Play(args) => args.run(&cli),
         Cmd::ImportPuzzles(args) => args.run(),
