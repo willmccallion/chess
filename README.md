@@ -132,7 +132,7 @@ cargo run --release -- play --mode learn
 - **Play**: a game against the coach's bot, at the level that matches your rating or any of ten levels. The bot plays human-like moves, mistakes included. The optional blunder check stops you before a move that gives away material or allows mate, and says why. You can also have the bot steer into a chapter of your repertoire.
 - **Review**: after each game the engine goes through every move, marks inaccuracies (`?!`), mistakes (`?`) and blunders (`??`), and explains each one: a piece left hanging, a threat ignored, a fork walked into, a mate or free material missed. It shows what happens after the move and what the better move leads to, with the material each line wins or loses, and how the positions differ (castling, pawn cover, pawn weaknesses, development, room for the pieces). Press `t` or `b` to play either line through on the board.
 - **Puzzles**: every mistake and blunder from your games becomes a puzzle, and comes back on a spaced-repetition schedule until you get it right. Puzzles from the Lichess database fill the gaps, picked near your puzzle rating and weighted towards the themes behind your mistakes.
-- **Openings**: a repertoire built on 1.d4 and 2.c4 as White, and 1...e5 and 1...d5 as Black, with a note on every move. A lesson walks through a line; a drill has you play your side from memory, and lines come back for review on a schedule.
+- **Openings**: a repertoire built on 1.d4 and 2.c4 as White, and 1...e5 and 1...d5 as Black with answers to 1.c4 and 1.Nf3, with a note on every move. A lesson walks through a line; a drill has you play your side from memory, and lines come back for review on a schedule.
 - **Endgames**: the basic mates, king-and-pawn endings, and the Lucena and Philidor positions, against the engine's best defence.
 - **Progress**: your rating and puzzle rating, accuracy by phase of the game, mistakes per game by cause with trends, opening habits, and what to work on.
 
@@ -227,10 +227,11 @@ target/release/chess challenge target/release/chess "$STOCKFISH" \
 The search margins and reductions are runtime parameters (`chess params` lists them with their defaults, ranges and steps; UCI `setoption` accepts them by name). `chess tune` adjusts them with SPSA: each game pair perturbs every parameter up or down, plays the two versions against each other with colors swapped, and moves the estimate toward the winner. The current estimate is written to `--output` after every 20 pairs and can be continued with `--resume`.
 
 ```bash
-taskset -c 0-15 chess tune --openings "$CHESS_BOOK_UHO" --pairs 10000 --time 5000 --inc 50 --concurrency 8 --output spsa.txt
+target/release/chess tune --openings "$CHESS_BOOK_UHO" --pairs 10000 --time 5000 --inc 50 \
+  --workers 0-15:8 --output spsa.txt
 ```
 
-Pin the run to one core type: the two engines of a pair should run at the same speed.
+The two engines of a pair should run at the same speed. `--workers` takes groups of `cpus:count` and pins each group's games to those CPUs, both engines of a pair together, so a machine with two core types can use both (`0-15:8,16-27:10`). Without it, `--concurrency` games run unpinned. The engines play with `Hash=16` and without the book.
 
 ### Comparing analysis with Stockfish
 
@@ -243,7 +244,7 @@ cargo run --release -- compare --epd "$CHESS_BOOK_BALANCED" --count 50 --depth 1
 
 ### Perft against Stockfish
 
-`tools/perft_test.py` compares `perft --divide` with Stockfish's `go perft` on a suite of tricky positions:
+`tools/perft_test.py` runs `chess perft` at depths 1 to 5 on a suite of tricky positions, also with the side to move switched and castling rights removed, and compares the node counts with Stockfish's `go perft`:
 
 ```bash
 python3 tools/perft_test.py --stockfish "$STOCKFISH"
@@ -255,13 +256,13 @@ python3 tools/perft_test.py --stockfish "$STOCKFISH"
 
 The evaluation is a port of Stockfish 18's: the big network `nn-c288c895ea92.nnue` (HalfKAv2_hm piece-square plus FullThreats attacker–target inputs, 1024 wide, 8 layer stacks chosen by piece count) and the small network `nn-37f18f62d772.nnue` (piece-square only, 128 wide), combined exactly as Stockfish does: the small net for lopsided material with a big-net recheck near equality, complexity damping, material scaling and 50-move damping. Scores are converted to centipawns with Stockfish's WDL normalisation.
 
-The networks are read at runtime. The default paths come from the dev shell at build time; the UCI options `EvalFile` and `EvalFileSmall` override them before the first `isready`.
+The networks are read at runtime. The default paths come from the dev shell at build time; the UCI options `EvalFile` and `EvalFileSmall` override them. A changed network, like a changed `Evaluator` or `OwnEvalFile`, is loaded at the next `isready`, `go` or `eval`, which also clears the hash and search histories.
 
-Accumulators are updated lazily and incrementally: each move records its piece changes and the attacker–target relations it creates and destroys, king moves refresh from a per-king-square cache, and the dense layers use AVX2 (AVX-VNNI when available) with a sparse first layer.
+Accumulators are updated lazily and incrementally: each move records its piece changes and the attacker–target relations it creates and destroys, king moves refresh from a per-king-square cache, and the dense layers use AVX2 (and AVX-VNNI if the build CPU has it, chosen at compile time, with a scalar fallback) with a sparse first layer.
 
 ### Choosing the evaluator
 
-`--eval stockfish` (the default) uses the networks above; `--eval bootstrap` uses a small hand-written evaluation that plays the first games of our own network's training data; `--eval own` uses our own network (below). All three are also available through the UCI option `Evaluator`. Building with `--no-default-features` leaves the Stockfish code out entirely.
+`--eval stockfish` (the default) uses the networks above; `--eval bootstrap` uses a small hand-written evaluation that plays the first games of our own network's training data; `--eval own` uses our own network (below). All three are also available through the UCI option `Evaluator`. Building with `--no-default-features` leaves the Stockfish code out entirely and makes `bootstrap` the default, which is much weaker unless `--eval own` is given with a network.
 
 `chess eval-trace <fen>` prints the same per-bucket table and final evaluation as Stockfish's `eval` command, and `tools/nnue_check.py` diffs the two over random playout positions:
 
