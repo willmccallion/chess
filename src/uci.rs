@@ -402,6 +402,9 @@ fn apply_option(
         options.threads = parse_in_range(value, 1..=MAX_THREADS)?;
     } else if name.eq_ignore_ascii_case("OwnBook") {
         options.own_book = parse_check_value(value)?;
+    } else if name.eq_ignore_ascii_case("Ponder") {
+        // Ponder only says the GUI may send `go ponder`, which always works.
+        parse_check_value(value)?;
     } else if name.eq_ignore_ascii_case("CoachLevel") {
         // Level 0 is the engine itself, with no coach.
         let number = parse_in_range(value, 0..=Level::STRONGEST.number())?;
@@ -801,12 +804,13 @@ mod tests {
         let refused = [
             ("NoSuchOption", "1"),
             ("OwnBook", "maybe"),
+            ("Ponder", "maybe"),
             ("Move Overhead", "soon"),
             ("Evaluator", "magic"),
         ]
         .map(|(name, value)| apply_option(name, value, &mut options, &mut tt).is_err());
 
-        assert_eq!(refused, [true; 4]);
+        assert_eq!(refused, [true; 5]);
         assert!(options.own_book);
     }
 
