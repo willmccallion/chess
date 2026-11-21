@@ -1,6 +1,6 @@
 # Chess Engine in Rust
 
-This is a chess engine written in Rust. It’s designed to be simple, correct, and reasonably strong, while still being easy to experiment with and extend.
+This is a chess engine written in Rust: a multithreaded alpha–beta search with a port of Stockfish 18's NNUE evaluation, a network of its own trained from self-play, and a coach for learning to play.
 
 You can interact with the engine in several ways:
 
@@ -13,13 +13,13 @@ You can interact with the engine in several ways:
 ## Features
 
 - **Standard Chess Rules**  
-  Implements all standard rules, including castling, pawn promotion, en passant, threefold repetition, and the fifty-move rule.
+  Implements all standard rules, including castling, pawn promotion, en passant, and draws by stalemate, threefold repetition, the fifty-move rule and insufficient material.
 
-- **Smart Move Search**  
-  Uses alpha–beta search (with typical pruning and move-ordering techniques) to look ahead and find strong moves.
+- **Search**  
+  Principal variation search on up to 128 threads (see **Search** below).
 
 - **Opening Book**  
-  Uses a Polyglot opening book to play many common openings confidently from move one.
+  Over UCI, and for the coach's bot, the engine plays from a Polyglot book while it has moves for the position. The book is optional: it is looked up as `moves/book.bin` next to the executable, in the current directory and at the project root, and the UCI option `OwnBook=false` turns it off.
 
 - **Move Generation Testing (`perft`)**  
   Includes a `perft` tool to verify the correctness of move generation by counting all legal move sequences to a given depth.
@@ -28,7 +28,13 @@ You can interact with the engine in several ways:
   Speaks the Universal Chess Interface (UCI) protocol, so it works with most modern chess GUIs.
 
 - **NNUE Evaluation**  
-  Evaluates positions with Stockfish 18's networks (see **NNUE** below).
+  Evaluates positions with Stockfish 18's networks by default, or with the engine's own network or a small hand-written evaluation (see **NNUE** below).
+
+- **Coach**  
+  A terminal mode that reviews your games and sets puzzles, opening drills and endgames.
+
+- **Testing and Tuning Tools**  
+  Engine matches with SPRT, SPSA tuning of the search parameters, analysis compared with Stockfish, and self-play data generation for training the engine's own network.
 
 ---
 
@@ -41,6 +47,19 @@ Roughly **3650–3750 Elo on the CCRL Blitz scale** (single thread). This is an 
 | Carp 3.0.1 (3526) | 143–57, +160 ± 30 | ≈3690 |
 | Sirius 9.0 (3529) | 148.5–51.5, +184 ± 32 | ≈3710 |
 | Stockfish 18, 1 thread (3772) | 76.5–123.5, −83 ± 21 | ≈3690 |
+
+---
+
+## Search
+
+- Principal variation search with iterative deepening and aspiration windows.
+- Lazy SMP on up to 128 threads (UCI `Threads`), sharing a lock-free transposition table with entry aging.
+- Reverse futility pruning, razoring, null-move pruning and ProbCut before the moves are searched; late-move, futility, SEE and history pruning while they are.
+- Singular extensions with double extensions and multi-cut, internal iterative reductions, and late-move reductions from a table adjusted by history.
+- Quiescence search over captures with delta pruning, and over every evasion when in check.
+- Move ordering by killers, counter-moves, butterfly, one- and two-ply continuation and capture histories; a pawn-structure correction history adjusts the static evaluation.
+- Time management that spends less when one move takes most of the nodes and more when the score falls; pondering and `go searchmoves`.
+- 49 parameters tuned with SPSA (see **Tuning search parameters** below).
 
 ---
 
